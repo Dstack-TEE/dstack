@@ -184,7 +184,9 @@ no header within five seconds, and trusts the header as sent, so make it
 reachable only through the proxy (HAProxy `send-proxy-v2`, plus
 `check-send-proxy` for health checks). This is separate from
 `[core.proxy] inbound_pp_enabled`, which covers the app traffic the gateway
-proxies.
+proxies. It works on TCP listeners only: a listener bound to a Unix socket
+(`address = "unix:..."`) fails to start with it, so set `proxy_protocol = false`
+in that listener's section when `[listeners.default]` turns it on.
 
 ## Metrics
 

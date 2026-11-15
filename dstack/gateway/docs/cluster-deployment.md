@@ -69,6 +69,7 @@ enabled = false  # Disable Debug port
 [listeners.admin]
 enabled = true
 address = "unix:/run/dstack/admin.sock"  # Use Unix Domain Socket
+proxy_protocol = false  # PROXY protocol needs TCP; required if [listeners.default] enables it
 ```
 
 ### Resource Sizing
