@@ -111,7 +111,7 @@ impl AccessLog {
             instance = self.instance,
             bytes_in,
             bytes_out,
-            ms = self.started.elapsed().as_millis() as u64,
+            us = self.started.elapsed().as_micros() as u64,
             outcome = outcome(),
         );
     }
