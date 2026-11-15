@@ -31,6 +31,14 @@ fn app_version() -> String {
     dstack_build_info::app_version!()
 }
 
+fn app_version_header() -> AdHoc {
+    AdHoc::on_response("Add app version header", |_req, res| {
+        Box::pin(async move {
+            res.set_raw_header("X-App-Version", app_version());
+        })
+    })
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_version = app_version())]
 struct Args {
@@ -239,11 +247,7 @@ async fn main() -> Result<()> {
         // unchanged - they are now accepted for the attestation they carry rather than
         // for who signed them - and a self-issued certificate would be accepted too.
         .attach(RaTlsClientAuth::fairing())
-        .attach(AdHoc::on_response("Add app version header", |_req, res| {
-            Box::pin(async move {
-                res.set_raw_header("X-App-Version", app_version());
-            })
-        }))
+        .attach(app_version_header())
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
@@ -268,6 +272,7 @@ async fn main() -> Result<()> {
         info!("serving the read-only RPCs on the readonly listener");
         servers.push(
             rocket::custom(readonly_figment)
+                .attach(app_version_header())
                 .mount("/", rocket::routes![health])
                 .mount(
                     "/prpc",
