@@ -315,13 +315,14 @@ fn conn_task(
     proxy: Proxy,
     slot: Option<balance::CoreSlot>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
-    let span = debug_span!("conn", id = next_connection_id());
+    let id = next_connection_id();
+    let span = debug_span!("conn", id);
     let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
     async move {
         let _conn_entered = conn_entered;
         let _slot = slot;
         debug!(%from, "new connection");
-        let mut log = AccessLog::new(&inbound);
+        let mut log = AccessLog::new(&inbound, id);
         let timeouts = &proxy.config.proxy.timeouts;
         let result = timeout(timeouts.total, handle_connection(inbound, proxy, &mut log)).await;
         match &result {
