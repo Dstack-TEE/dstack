@@ -2867,8 +2867,8 @@ impl GatewayRpc for RpcHandler {
             Ok(response) => info!(
                 target: "dstack_gateway::audit",
                 operation = "register_cvm",
-                app_id,
-                instance_id,
+                app_id = %app_id,
+                instance_id = %instance_id,
                 client_ip = response.wg.as_ref().map_or("", |wg| wg.client_ip.as_str()),
                 remote = ?self.remote_endpoint,
                 "cvm registered"
@@ -2876,8 +2876,8 @@ impl GatewayRpc for RpcHandler {
             Err(err) => warn!(
                 target: "dstack_gateway::audit",
                 operation = "register_cvm",
-                app_id,
-                instance_id,
+                app_id = %app_id,
+                instance_id = %instance_id,
                 remote = ?self.remote_endpoint,
                 error = %ra_rpc::log_text(&format_args!("{err:#}")),
                 "cvm registration refused"
