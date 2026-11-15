@@ -5,6 +5,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use config::KmsConfig;
+use futures::FutureExt;
 use main_service::{KmsState, RpcHandler};
 use ra_rpc::ratls_client_verifier::RaTlsClientAuth;
 use ra_rpc::rocket_helper::QuoteVerifier;
@@ -24,6 +25,7 @@ mod config;
 mod crypto;
 mod main_service;
 mod onboard_service;
+mod readonly_service;
 
 fn app_version() -> String {
     dstack_build_info::app_version!()
@@ -181,6 +183,14 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let readonly_figment = if config.readonly.enabled {
+        let value = figment
+            .find_value("core.readonly")
+            .context("core.readonly section not found")?;
+        Some(Figment::from(rocket::Config::default()).merge(Serialized::defaults(value)))
+    } else {
+        None
+    };
 
     if config.onboard.enabled && !config.keys_exists() {
         info!("Onboarding");
@@ -253,22 +263,35 @@ async fn main() -> Result<()> {
 
     rocket = rocket.manage(quote_verifier);
 
-    let main_srv = rocket.launch();
-    // Refresh the TLS listener when the authorized root CA changes.
-    let restart = {
-        let state = state.clone();
-        async move { state.restart_requested().await }
-    };
-    match admin_setup {
-        Some((admin_figment, admin_fairing)) => {
-            if admin_config.insecure_no_auth {
-                warn!(
-                    "admin API is served with insecure_no_auth = true; the admin RPCs are exposed without authentication"
-                );
-            } else {
-                info!("admin API authentication enabled");
-            }
-            let admin_srv = rocket::custom(admin_figment)
+    let mut servers = vec![rocket.launch().boxed()];
+    if let Some(readonly_figment) = readonly_figment {
+        info!("serving the read-only RPCs on the readonly listener");
+        servers.push(
+            rocket::custom(readonly_figment)
+                .mount("/", rocket::routes![health])
+                .mount(
+                    "/prpc",
+                    ra_rpc::prpc_routes!(
+                        KmsState,
+                        readonly_service::ReadOnlyRpcHandler,
+                        trim: "ReadOnly."
+                    ),
+                )
+                .manage(state.clone())
+                .launch()
+                .boxed(),
+        );
+    }
+    if let Some((admin_figment, admin_fairing)) = admin_setup {
+        if admin_config.insecure_no_auth {
+            warn!(
+                "admin API is served with insecure_no_auth = true; the admin RPCs are exposed without authentication"
+            );
+        } else {
+            info!("admin API authentication enabled");
+        }
+        servers.push(
+            rocket::custom(admin_figment)
                 .attach(admin_fairing)
                 .attach(RaTlsClientAuth::fairing())
                 .mount("/", admin_auth::routes())
@@ -276,25 +299,20 @@ async fn main() -> Result<()> {
                     "/prpc",
                     ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
                 )
-                .manage(state)
+                .manage(state.clone())
                 .manage(admin_quote_verifier)
-                .launch();
-            let servers = async {
-                tokio::try_join!(
-                    async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
-                    async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
-                )
-                .map(drop)
-            };
-            tokio::select! {
-                result = servers => result?,
-                () = restart => bail!("the RPC root CA changed; restarting to refresh the TLS certificate"),
-            }
+                .launch()
+                .boxed(),
+        );
+    }
+    // Refresh the TLS listeners when the authorized root CA changes.
+    tokio::select! {
+        result = futures::future::try_join_all(servers) => {
+            result.map_err(|err| anyhow!(err.to_string()))?;
         }
-        None => tokio::select! {
-            result = main_srv => result.map(drop).map_err(|err| anyhow!(err.to_string()))?,
-            () = restart => bail!("the RPC root CA changed; restarting to refresh the TLS certificate"),
-        },
+        () = state.restart_requested() => {
+            bail!("the RPC root CA changed; restarting to refresh the TLS certificate")
+        }
     }
     Ok(())
 }

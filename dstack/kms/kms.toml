@@ -117,6 +117,18 @@ insecure_no_auth = false
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
 
+# Optional listener serving only the read-only RPCs (GetMeta,
+# GetAppEnvEncryptPubKey, GetSealedEnvPubKey) at the same paths, so the RPC
+# listener, which releases keys, can be restricted to the CVMs on its own.
+[core.readonly]
+enabled = false
+address = "0.0.0.0"
+port = 8002
+
+[core.readonly.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+
 [core.metrics]
 # Expose unauthenticated Prometheus metrics on /metrics.
 # Disable this if the KMS RPC listener is not protected by network policy

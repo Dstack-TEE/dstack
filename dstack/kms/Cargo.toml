@@ -13,6 +13,7 @@ license.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 fs-err.workspace = true
+futures.workspace = true
 dstack-build-info.workspace = true
 hex.workspace = true
 hex_fmt.workspace = true
