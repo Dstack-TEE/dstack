@@ -2228,7 +2228,12 @@ fn make_vm_config(
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
-    let is_tdx = platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee;
+    // A simulated TDX guest gets the vm_config of a TDX guest, so the simulator
+    // can derive its measurements from the same lite measurement document. The
+    // lite ACPI measurement does not cover swtpm, so a simulated guest with one
+    // keeps the placeholder measurements.
+    let is_tdx = (platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee)
+        || (manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackTdx) && !manifest.swtpm);
     let is_gcp_tdx = manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackGcpTdx);
     let is_aws_nitro_tpm =
         manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAwsNitroTpm);
@@ -3894,6 +3899,32 @@ mod tests {
         )?;
 
         assert_eq!(vm_config["swtpm"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn simulated_tdx_gets_the_vm_config_of_a_tdx_guest() -> Result<()> {
+        let mut config = test_tdx_config()?;
+        let mut manifest = test_manifest(2048);
+        manifest.no_tee = true;
+        manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackTdx);
+        for platform in [CvmPlatform::Tdx, CvmPlatform::AmdSevSnp] {
+            config.cvm.platform = Some(platform);
+            let vm_config =
+                make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+            assert_eq!(vm_config["tdx_attestation_variant"], "lite");
+            assert!(vm_config.get("tdx_measurement").is_some());
+        }
+
+        config.cvm.platform = Some(CvmPlatform::Tdx);
+        manifest.swtpm = true;
+        let vm_config = make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+        assert!(vm_config.get("tdx_measurement").is_none());
+
+        manifest.swtpm = false;
+        manifest.simulated_tee = None;
+        let vm_config = make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+        assert!(vm_config.get("tdx_measurement").is_none());
         Ok(())
     }
 
