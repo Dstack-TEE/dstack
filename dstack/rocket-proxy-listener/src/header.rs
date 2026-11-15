@@ -26,7 +26,7 @@ const V2_MAX_LENGTH: usize = 2048;
 /// `version2::parse` checks `buf.remaining()` against the *fixed* size of the
 /// address family and then does `buf.advance(length - that)` using the
 /// attacker-declared `length` -- an unchecked advance that panics inside
-/// `bytes`, which with `panic = "abort"` would be the whole gateway. Handing it
+/// `bytes`, which with `panic = "abort"` would be the whole process. Handing it
 /// a 228-byte AF_UNIX header declaring `length = 65535` produces
 /// `advance out of bounds: the len is 0 but advancing by 65319`.
 ///
@@ -225,7 +225,6 @@ mod tests {
     #[tokio::test]
     async fn rejects_v1_without_terminator() {
         // PROXY prefix matched but no \r\n terminator within V1_MAX_LENGTH bytes.
-        let bytes = vec![b'P'; V1_MAX_LENGTH + 8]; // all 'P' — never closes
         let mut head = b"PROXY".to_vec();
         head.extend(std::iter::repeat_n(b'A', V1_MAX_LENGTH));
         let err = read_proxy_header(&head[..]).await.unwrap_err();
@@ -234,8 +233,6 @@ mod tests {
             msg.contains("v1 terminator not found") || msg.contains("no valid proxy"),
             "unexpected error: {msg}"
         );
-        // Sanity: the longer no-terminator buffer would also fail (read past)
-        let _ = bytes;
     }
 
     #[tokio::test]

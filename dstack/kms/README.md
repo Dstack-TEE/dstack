@@ -140,7 +140,9 @@ than the client's. Set `proxy_protocol = true` in `[rpc]`, `[core.admin]` or
 header instead. The request logs then carry it as `remote`. A listener with
 `proxy_protocol = true` drops connections that send no header within five
 seconds, so only enable it behind a proxy that sends one, such as HAProxy with
-`send-proxy-v2` (and `check-send-proxy` for health checks).
+`send-proxy-v2` (and `check-send-proxy` for health checks). The header is
+trusted as sent: make the listener reachable only through the proxy, or any
+client can choose the `remote` that the logs and the key release audit record.
 
 ## KMS Implementation
 
