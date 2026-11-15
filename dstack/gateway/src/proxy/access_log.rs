@@ -27,7 +27,6 @@ pub(crate) struct AccessLog {
     /// A duplicate of the inbound socket, held so its counters can still be
     /// read once the relay has dropped the original. `None` when the log is off.
     socket: Option<OwnedFd>,
-    id: usize,
     started: Instant,
     client: Option<ProxyHeader>,
     sni: String,
@@ -38,13 +37,12 @@ pub(crate) struct AccessLog {
 }
 
 impl AccessLog {
-    pub(crate) fn new(inbound: &TcpStream, id: usize) -> Self {
+    pub(crate) fn new(inbound: &TcpStream) -> Self {
         let enabled = tracing::enabled!(target: TARGET, tracing::Level::INFO);
         Self {
             socket: enabled
                 .then(|| inbound.as_fd().try_clone_to_owned().ok())
                 .flatten(),
-            id,
             started: Instant::now(),
             client: None,
             sni: String::new(),
@@ -104,7 +102,6 @@ impl AccessLog {
         let client = self.client.as_ref().map(|h| DisplayAddr(h).to_string());
         info!(
             target: TARGET,
-            conn_id = self.id,
             client = client.as_deref().unwrap_or("-"),
             peer = %from,
             sni = self.sni,
