@@ -165,23 +165,19 @@ cat > /etc/kms/kms.toml << 'EOF'
 # dstack KMS Configuration
 # See: https://github.com/Dstack-TEE/dstack
 
-[default]
-workers = 8
-max_blocking = 64
-ident = "DStack KMS"
-temp_dir = "/tmp"
-keep_alive = 10
+# Settings shared by all listeners
+[listeners.default]
 log_level = "info"
 
-# RPC Server Configuration
-[rpc]
-address = "0.0.0.0"
-port = 9100
-
-# TLS Certificate Configuration for RPC
-[rpc.tls]
+# TLS certificate for the listeners (not the plain-HTTP onboard page)
+[listeners.default.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
+
+# KMS RPCs for CVMs
+[listeners.guest]
+address = "0.0.0.0"
+port = 9100
 
 # No mutual-TLS section: client certificates are verified by the attestation they
 # carry, not by an issuer CA, so there is nothing to pin. Connections without a
@@ -207,22 +203,21 @@ url = "http://127.0.0.1:9200"
 # Admin listener, which serves the key handover to other KMS nodes; a serving
 # KMS requires it. ADMIN_TOKEN_HASH is the token's SHA-256, filled in by the
 # KMS CVM deployment tutorial.
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "0.0.0.0"
 port = 9101
 auth_token_hash = "ADMIN_TOKEN_HASH"
 
-[core.admin.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+# Onboarding page, served over plain HTTP before the KMS has keys
+[listeners.onboard]
+address = "0.0.0.0"
+port = 9100
 
 # Onboarding Configuration
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""
-address = "0.0.0.0"
-port = 9100
 EOF
 ```
 
@@ -230,14 +225,14 @@ EOF
 
 | Section | Key | Description |
 |---------|-----|-------------|
-| `[default]` | `workers` | Number of worker threads (default: 8) |
-| `[default]` | `log_level` | Logging level: debug, info, warn, error |
-| `[rpc]` | `address` | RPC server bind address |
-| `[rpc]` | `port` | RPC server port (9100) |
+| `[listeners.default]` | `log_level` | Logging level: debug, info, warn, error |
+| `[listeners.default.tls]` | `key`, `certs` | TLS certificate for the guest and admin listeners |
+| `[listeners.guest]` | `address`, `port` | KMS RPC bind address and port (9100) |
+| `[listeners.admin]` | `address`, `port`, `auth_token_hash` | Admin listener (9101), which serves the key handover; the SHA-256 of the admin token. A serving KMS requires it with TLS |
+| `[listeners.onboard]` | `address`, `port` | Plain-HTTP onboarding page (9100, before the KMS has keys) |
 | `[core]` | `cert_dir` | Directory for certificates |
 | `[core]` | `pccs_url` | PCCS endpoint for quote verification |
 | `[core.auth_api]` | `url` | auth-eth webhook service URL |
-| `[core.admin]` | `auth_token_hash` | SHA-256 of the admin token; the admin listener with `[core.admin.tls]` is required to serve |
 | `[core.onboard]` | `enabled` | Enable bootstrap/onboard mode |
 
 ## Step 5: Prepare the auth-eth Service
@@ -416,23 +411,19 @@ The KMS config for CVM deployment enables TDX attestation:
 cat > kms.toml << 'EOF'
 # dstack KMS Configuration (CVM Deployment)
 
-[default]
-workers = 8
-max_blocking = 64
-ident = "DStack KMS"
-temp_dir = "/tmp"
-keep_alive = 10
+# Settings shared by all listeners
+[listeners.default]
 log_level = "info"
 
-# RPC Server Configuration
-[rpc]
-address = "0.0.0.0"
-port = 9100
-
-# TLS Certificate Configuration for RPC
-[rpc.tls]
+# TLS certificate for the listeners (not the plain-HTTP onboard page)
+[listeners.default.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
+
+# KMS RPCs for CVMs
+[listeners.guest]
+address = "0.0.0.0"
+port = 9100
 
 # No mutual-TLS section: client certificates are verified by the attestation they
 # carry, not by an issuer CA, so there is nothing to pin. Connections without a
@@ -460,14 +451,16 @@ type = "webhook"
 [core.auth_api.webhook]
 url = "http://127.0.0.1:9200"
 
+# Onboarding page, served over plain HTTP before the KMS has keys
+[listeners.onboard]
+address = "0.0.0.0"
+port = 9100
+
 # Onboarding Configuration
 [core.onboard]
 enabled = true
 # Empty domain = manual bootstrap mode (ensures bootstrap-info.json is written)
 auto_bootstrap_domain = ""
-# Enable TDX quotes - works because KMS runs in CVM
-address = "0.0.0.0"
-port = 9100
 EOF
 ```
 

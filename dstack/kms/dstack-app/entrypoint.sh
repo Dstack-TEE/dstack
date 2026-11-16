@@ -13,7 +13,7 @@ cache_dir = "./images"
 download_url = "${IMAGE_DOWNLOAD_URL}"
 download_timeout = "2m"
 
-[core.admin]
+[listeners.admin]
 auth_token_hash = "${ADMIN_TOKEN_HASH}"
 EOF
 

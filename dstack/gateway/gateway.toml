@@ -2,13 +2,49 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Listeners. `[listeners.default]` applies to every listener unless the
+# listener's own section overrides it. The gateway refuses the older locations
+# of these settings (the top level of this file, `[core.admin]`, `[core.debug]`).
+[listeners.default]
 workers = 8
 max_blocking = 64
 ident = "dstack Gateway"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
+# Require a PROXY protocol (v1 or v2) header on every connection and log its
+# source address as the client. Enable only behind a proxy that sends one, such
+# as HAProxy with `send-proxy-v2`, and make the listener reachable only through
+# it: the header is trusted as sent. Unrelated to [core.proxy]
+# inbound_pp_enabled, which covers the app traffic the gateway proxies. TCP
+# only: a listener on a Unix socket must override it with `false`.
+proxy_protocol = false
+
+# For CVMs, which register here, and for the other gateway nodes, which sync
+# over it with mutual TLS. Its `tls` section, with `mutual`, is required.
+[listeners.guest]
 address = "127.0.0.1:8010"
+
+# Operator RPCs and the dashboard.
+[listeners.admin]
+enabled = false
+address = "127.0.0.1:8011"
+# Shared secret required by every admin endpoint (RPC + dashboard). Can also
+# be supplied via the `DSTACK_GATEWAY_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env
+# vars. Clients send it as `Authorization: Bearer <token>`, `X-Admin-Token`,
+# or (GET only, for dashboard links) `?token=...`. Required unless
+# `insecure_no_auth = true`. (The legacy key `admin_token` is still accepted.)
+auth_token = ""
+# Optional Apache htpasswd file for HTTP Basic authentication.
+htpasswd_file = ""
+# Development/testing escape hatch only. Never enable this on an admin
+# interface that is reachable from the network.
+insecure_no_auth = false
+
+# Debug RPCs, unauthenticated: development only.
+[listeners.debug]
+enabled = false
+address = "127.0.0.1:8012"
 
 [core]
 # auto set soft ulimit to hard ulimit
@@ -41,30 +77,6 @@ enabled = false
 url = "http://localhost/app-auth"
 timeout = "5s"
 
-[core.admin]
-enabled = false
-address = "127.0.0.1:8011"
-# Shared secret required by every admin endpoint (RPC + dashboard). Can also
-# be supplied via the `DSTACK_GATEWAY_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env
-# vars. Clients send it as `Authorization: Bearer <token>`, `X-Admin-Token`,
-# or (GET only, for dashboard links) `?token=...`. Required unless
-# `insecure_no_auth = true`. (The legacy key `admin_token` is still accepted.)
-auth_token = ""
-# Optional Apache htpasswd file for HTTP Basic authentication.
-htpasswd_file = ""
-# Development/testing escape hatch only. Never enable this on an admin
-# interface that is reachable from the network.
-insecure_no_auth = false
-
-[core.debug]
-insecure_enable_debug_rpc = false
-# Route the app address "localhost" to 127.0.0.1 on the gateway host. Off by
-# default: the app address also comes from the _dstack-app-address TXT record of
-# arbitrary custom domains, so enabling this lets any DNS zone owner reach the
-# gateway's own loopback on a port of their choosing, bypassing port_policy.
-insecure_localhost_backend = false
-address = "127.0.0.1:8012"
-
 [core.wg]
 public_key = ""
 private_key = ""
@@ -87,6 +99,11 @@ buffer_size = 65536
 connect_top_n = 3
 app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
+# Route the app address "localhost" to 127.0.0.1 on the gateway host. Off by
+# default: the app address also comes from the _dstack-app-address TXT record of
+# arbitrary custom domains, so enabling this lets any DNS zone owner reach the
+# gateway's own loopback on a port of their choosing, bypassing port_policy.
+insecure_localhost_backend = false
 workers = 32
 # One runtime + SO_REUSEPORT listener per worker (thread-per-core). Linux only.
 thread_per_core = true

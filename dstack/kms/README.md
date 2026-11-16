@@ -30,28 +30,49 @@ CVMs running in dstack support three boot modes:
 - `key-provider` in RTMR: `{"type": "kms", "id": "<kms-root-pubkey>"}`
 - `app-id` is equal to the address of the deployed App Smart Contract.
 
+## Listeners
+
+The KMS serves on up to four listeners, each configured in its own
+`[listeners.<name>]` section of `kms.toml` with `address` and `port`:
+
+| Listener | For | Serves | On |
+|---|---|---|---|
+| `[listeners.guest]` | CVMs | All KMS RPCs, including those that release keys | Always |
+| `[listeners.admin]` | Operators, other KMS nodes | Admin RPCs and the key handover, behind its admin credential | `enabled = true` (default) |
+| `[listeners.public]` | Deployers, verifiers | Only the read-only RPCs | `enabled = true` |
+| `[listeners.onboard]` | Operators | The setup page, before the KMS has keys | `[core.onboard] enabled = true` |
+
+`[listeners.default]` holds what they share, which a listener's own section
+overrides: `tls`, `proxy_protocol` (see below) and Rocket settings such as
+`workers`. The onboard listener serves plain HTTP and does not inherit the
+default `tls`, nor support `proxy_protocol`.
+
+KMS 0.6.4 and earlier read these settings from `[rpc]` (now `guest`),
+`[core.admin]` (now `admin`, credentials included), `[core.onboard]`
+(`address`, `port`, `tls`), and Rocket settings at the top level of the file
+(now in `[listeners.default]`). The KMS refuses to
+start on a config that still sets any of them, naming where each moved, so
+update the config together with the KMS image.
+
 ## Admin API authentication
 
 The KMS public RPCs authenticate callers by RA-TLS attestation. Operator-facing
 admin RPCs are instead served on a **separate admin
-listener** (`[core.admin]` in `kms.toml`) behind the same shared HTTP
+listener** (`[listeners.admin]`) behind the same shared HTTP
 authenticator used by the VMM and gateway, configured identically to the gateway
 admin API, so the credential travels in the `Authorization: Bearer <token>` or
 `X-Admin-Token: <token>` header:
 
 ```toml
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "127.0.0.1"
 port = 8001
+# TLS from [listeners.default.tls], unless set in [listeners.admin.tls].
 # generate with: openssl rand -hex 32
 auth_token = "<token>"
 # htpasswd_file = "/etc/kms/admin.htpasswd"   # bcrypt (htpasswd -B), optional
 insecure_no_auth = false
-
-[core.admin.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
 ```
 
 The token can also be supplied via the `DSTACK_KMS_ADMIN_TOKEN` or
@@ -61,7 +82,7 @@ config that is not secret, such as a KMS app compose. The hash is then public,
 so the token must be high-entropy random, such as `openssl rand -hex 32`: a
 weak token can be brute-forced offline from its hash. The admin
 listener fails closed: enabled with neither `auth_token` nor `htpasswd_file`
-(and `insecure_no_auth = false`) refuses to start. With `[core.admin.tls]` the
+(and `insecure_no_auth = false`) refuses to start. With TLS the
 listener serves HTTPS (use `http://` without it). Call it with, for example:
 
 ```bash
@@ -76,14 +97,14 @@ below, which decides whether a CVM may boot and receive keys.
 
 KMS-to-KMS onboarding calls `Admin.GetKmsKey` with a self-issued RA-TLS client
 certificate plus the source's admin bearer token, so it requires
-`[core.admin.tls]` and an admin address the new KMS can reach; other admin RPCs
+TLS on the admin listener and an admin address the new KMS can reach; other admin RPCs
 need no client certificate. `core.onboard.public_key_handover` is off by default; set it to
 `true` only to also serve `KMS.GetKmsKey` on the public listener for older
 clients.
 
 A KMS refuses to start serving without a handover path, so that other nodes can
 always onboard from it: unless `public_key_handover = true`, it requires
-`[core.admin] enabled = true` and `[core.admin.tls]` with `key` and `certs`, and
+`[listeners.admin] enabled = true` with a TLS `key` and `certs`, and
 the error names the missing setting. The check runs at startup, before
 onboarding or bootstrap, so a misconfigured node fails before it gets or
 generates root keys. There is no opt-out, `auth_api = "dev"` included. The default `kms.toml`
@@ -111,6 +132,34 @@ repeated requests for one app reach the backend once. Requests for random app
 IDs still pass through and, on an Ethereum backend, cost chain RPC calls; rate
 limit them per source in the reverse proxy or gateway in front of the KMS.
 
+## Public listener
+
+The guest listener serves the key-releasing RPCs (`GetAppKey`, `SignCert`,
+`GetTempCaCert`, `GetKmsKey`) next to the read-only ones. To restrict it to
+the CVMs, enable `[listeners.public]`: a second listener serving only
+`GetMeta`, `GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, at the same
+`/prpc/<Method>` paths, so deployers, verifiers and `vmm-cli.py` can point at
+it unchanged. The guest listener keeps serving all of them.
+
+```toml
+[listeners.public]
+enabled = true
+address = "0.0.0.0"
+port = 8002
+```
+
+## PROXY protocol
+
+A proxy in front of the KMS must pass TLS through, since the KMS verifies the
+client's RA-TLS certificate itself, so the KMS sees the proxy's address rather
+than the client's. Set `proxy_protocol = true` in `[listeners.default]`, or in
+one listener's section, to read the client address from a PROXY protocol (v1
+or v2) header instead. The request logs then carry it as `remote`. A listener with
+`proxy_protocol = true` drops connections that send no header within five
+seconds, so only enable it behind a proxy that sends one, such as HAProxy with
+`send-proxy-v2` (and `check-send-proxy` for health checks). The header is
+trusted as sent: make the listener reachable only through the proxy, or any
+client can choose the `remote` that the logs and the key release audit record.
 
 ## KMS Implementation
 

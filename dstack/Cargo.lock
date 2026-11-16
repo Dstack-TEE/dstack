@@ -2065,6 +2065,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "rocket",
+ "rocket-proxy-listener",
  "rustls",
  "safe-write",
  "serde",
@@ -2210,6 +2211,7 @@ dependencies = [
  "dstack-types",
  "dstack-verifier",
  "fs-err",
+ "futures",
  "hex",
  "hex_fmt",
  "http-client",
@@ -2225,6 +2227,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rocket",
+ "rocket-proxy-listener",
  "safe-write",
  "serde",
  "serde-duration",
@@ -4433,9 +4436,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.186"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libloading"
@@ -4495,6 +4498,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 name = "load_config"
 version = "0.6.4"
 dependencies = [
+ "anyhow",
  "figment",
  "rocket",
  "tempfile",
@@ -6584,6 +6588,19 @@ dependencies = [
  "version_check",
  "x509-parser 0.16.0",
  "yansi",
+]
+
+[[package]]
+name = "rocket-proxy-listener"
+version = "0.6.4"
+dependencies = [
+ "anyhow",
+ "pin-project",
+ "proxy-protocol",
+ "rocket",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
