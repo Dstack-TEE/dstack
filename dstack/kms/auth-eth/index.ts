@@ -38,9 +38,12 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  teeVariant: z.string().min(1).max(64),
   operation: z.enum(['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys', 'app_get_key', 'app_get_cert']),
   requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+  // The hash of the launch ticket the attested subject presented; absent when none.
+  launchTicketHash: boundedHex(32, 'launch ticket hash').optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
@@ -103,6 +106,8 @@ const AUTHORIZATION_ABI = {
     { name: 'requestedRootEpoch', type: 'tuple', components: [
       { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
     ] },
+    { name: 'teeVariant', type: 'string' },
+    { name: 'launchTicketHash', type: 'bytes32' },
   ] }],
   outputs: [{
     name: 'result',
@@ -185,6 +190,18 @@ const DSTACK_KMS_ABI = [
     inputs: [],
     outputs: [
       { name: 'epoch', type: 'uint256' },
+      { name: 'chainHash', type: 'bytes32' }
+    ]
+  },
+  {
+    name: 'rootEpoch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'epoch', type: 'uint256' }],
+    outputs: [
+      { name: 'caPubkey', type: 'bytes' },
+      { name: 'k256Pubkey', type: 'bytes' },
+      { name: 'evidenceUrl', type: 'string' },
       { name: 'chainHash', type: 'bytes32' }
     ]
   }
@@ -288,6 +305,8 @@ export class EthereumBackend {
         operation: keccak256(toBytes(appInfo.operation)),
         requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
         requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
+        teeVariant: appInfo.teeVariant,
+        launchTicketHash: this.decodeHex(appInfo.launchTicketHash ?? '', 32),
       }],
       blockNumber,
     });
@@ -359,6 +378,17 @@ export class EthereumBackend {
       blockNumber
     });
     return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
+  }
+
+  // The root CA public key (P-256 SPKI DER) of the current root epoch, which
+  // signs the RPC certificate of every KMS serving it.
+  async getRootCaPubkey(blockNumber: bigint, current: RootEpochInfo): Promise<Hex | undefined> {
+    if (current.rootEpoch === undefined) return undefined;
+    const [caPubkey] = await this.client.readContract({
+      address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'rootEpoch',
+      args: [BigInt(current.rootEpoch)], blockNumber,
+    });
+    return caPubkey;
   }
 
   async getAppEpoch(appId: string): Promise<number> {
@@ -465,6 +495,7 @@ app.get('/', async (c) => {
       ethereum.getAppImplementation(block),
       ethereum.getRootEpoch(block),
     ]);
+    const rootCaPubkey = await ethereum.getRootCaPubkey(block, batch[3]);
 
     return c.json({
       status: 'ok',
@@ -475,6 +506,7 @@ app.get('/', async (c) => {
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
       ...batch[3],
+      ...(rootCaPubkey && { rootCaPubkey }),
     });
   } catch {
     console.error('authorization backend health check failed');

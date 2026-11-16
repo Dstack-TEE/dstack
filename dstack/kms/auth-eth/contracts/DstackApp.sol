@@ -9,11 +9,13 @@ pragma solidity ^0.8.24;
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
+import "./TeeVariantPolicy.sol";
 import "./IAppEpochManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DstackApp is
     Initializable,
@@ -24,6 +26,8 @@ contract DstackApp is
     IAppEpochAuth,
     IAppEpochManagement
 {
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
     /// @notice Allowed compose hashes for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
     /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedComposeHashes;
@@ -31,8 +35,7 @@ contract DstackApp is
     // State variable to track if upgrades are disabled
     bool private _upgradesDisabled;
 
-    /// @notice Whether any device may boot this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
-    /// EpochPolicyChanged.
+    /// @notice Whether any device may boot this app, at every app epoch.
     bool public allowAnyDevice;
 
     /// @notice Allowed device IDs for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
@@ -48,7 +51,14 @@ contract DstackApp is
     // Epoch zero continues to use the original fields above after an upgrade.
     mapping(uint256 => mapping(bytes32 => bool)) private _composeHashesByEpoch;
     mapping(uint256 => mapping(bytes32 => bool)) private _deviceIdsByEpoch;
-    mapping(uint256 => bool) private _allowAnyDeviceByEpoch;
+
+    // The TEE platforms this app may run on.
+    TeeVariantPolicy.Policy private _teeVariants;
+
+    /// @notice Whether a boot must present an allowed launch ticket, at every app epoch.
+    bool public requireLaunchTicket;
+    // Allowed launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket), at every app epoch.
+    EnumerableSet.Bytes32Set private _launchTickets;
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
@@ -58,9 +68,14 @@ contract DstackApp is
     event DeviceAdded(bytes32 deviceId);
     event DeviceRemoved(bytes32 deviceId);
     event UpgradesDisabled();
-    /// @notice Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
+    /// @notice Covers every app epoch; there is no EpochPolicyChanged counterpart.
     event AllowAnyDeviceSet(bool allowAny);
+    event AllowAnyTeeVariantSet(bool allowAny);
+    event AllowedTeeVariantsSet(string[] teeVariants);
     event RequireTcbUpToDateSet(bool requireUpToDate);
+    event RequireLaunchTicketSet(bool required);
+    event LaunchTicketAdded(bytes32 indexed ticketHash, string label);
+    event LaunchTicketRemoved(bytes32 indexed ticketHash);
     /// @notice Additive audit event for reconstructing authorization policy.
     event PolicyChanged(address indexed actor, bytes32 indexed policy, bytes32 indexed value, bool enabled);
 
@@ -172,10 +187,6 @@ contract DstackApp is
         return epoch == 0 ? allowedDeviceIds[deviceId] : _deviceIdsByEpoch[epoch][deviceId];
     }
 
-    function allowAnyDeviceAtEpoch(uint256 epoch) public view returns (bool) {
-        return epoch == 0 ? allowAnyDevice : _allowAnyDeviceByEpoch[epoch];
-    }
-
     // A request may select any app epoch up to the current one and is decided
     // on that epoch's row, so revoking a value takes every row that allows it:
     // 0 through currentAppEpoch.
@@ -229,24 +240,36 @@ contract DstackApp is
         emit EpochPolicyChanged(keccak256("compose-hash"), composeHash, epoch, allowed);
     }
 
-    function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) public onlyOwner {
-        _setAllowAnyDevice(epoch, bytes32(0), allowed);
+    // Covers every app epoch: restricting devices is a decision about hosts, not
+    // key generations, and must not leave an older epoch open to any host.
+    function setAllowAnyDevice(bool allowed) external onlyOwner {
+        allowAnyDevice = allowed;
+        emit AllowAnyDeviceSet(allowed);
+        _emitPolicy("allow-any-device", bytes32(0), allowed);
     }
 
-    function setAllowAnyDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bool allowed) external onlyOwner {
-        _setAtEpochs(_setAllowAnyDevice, fromEpoch, toEpoch, bytes32(0), allowed);
+    /// @notice Whether this app may run on any TEE platform, rather than only on
+    /// {allowedTeeVariants}. Covers every app epoch.
+    function allowAnyTeeVariant() public view returns (bool) {
+        return !_teeVariants.restricted;
     }
 
-    function _setAllowAnyDevice(uint256 epoch, bytes32, bool allowed) private {
-        _requireWritableEpoch(epoch);
-        if (epoch == 0) {
-            allowAnyDevice = allowed;
-            emit AllowAnyDeviceSet(allowed);
-            _emitPolicy("allow-any-device", bytes32(0), allowed);
-        } else {
-            _allowAnyDeviceByEpoch[epoch] = allowed;
-        }
-        emit EpochPolicyChanged(keccak256("allow-any-device"), bytes32(0), epoch, allowed);
+    /// @notice The TEE platforms, named as the KMS reports them, this app may run on
+    /// unless {allowAnyTeeVariant}.
+    function allowedTeeVariants() external view returns (string[] memory) {
+        return TeeVariantPolicy.allowedNames(_teeVariants);
+    }
+
+    function setAllowAnyTeeVariant(bool allowed) external onlyOwner {
+        _teeVariants.restricted = !allowed;
+        emit AllowAnyTeeVariantSet(allowed);
+        _emitPolicy("allow-any-tee-variant", bytes32(0), allowed);
+    }
+
+    function setAllowedTeeVariants(string[] calldata teeVariants) external onlyOwner {
+        uint64 mask = TeeVariantPolicy.setAllowed(_teeVariants, teeVariants);
+        emit AllowedTeeVariantsSet(teeVariants);
+        _emitPolicy("allowed-tee-variants", bytes32(uint256(mask)), true);
     }
 
     // Set whether TCB status must be UpToDate to boot this app
@@ -254,6 +277,31 @@ contract DstackApp is
         requireTcbUpToDate = _requireUpToDate;
         emit RequireTcbUpToDateSet(_requireUpToDate);
         _emitPolicy("require-tcb-up-to-date", bytes32(0), _requireUpToDate);
+    }
+
+    function setRequireLaunchTicket(bool required) external onlyOwner {
+        requireLaunchTicket = required;
+        emit RequireLaunchTicketSet(required);
+        _emitPolicy("require-launch-ticket", bytes32(0), required);
+    }
+
+    /// @notice Allow a launch ticket. The label is public and only logged.
+    function addLaunchTicket(bytes32 ticketHash, string calldata label) external onlyOwner {
+        require(ticketHash != bytes32(0), "invalid launch ticket hash");
+        _launchTickets.add(ticketHash);
+        emit LaunchTicketAdded(ticketHash, label);
+        _emitPolicy("launch-ticket", ticketHash, true);
+    }
+
+    function removeLaunchTicket(bytes32 ticketHash) external onlyOwner {
+        _launchTickets.remove(ticketHash);
+        emit LaunchTicketRemoved(ticketHash);
+        _emitPolicy("launch-ticket", ticketHash, false);
+    }
+
+    /// @notice The allowed launch tickets; their labels are in {LaunchTicketAdded}.
+    function launchTickets() external view returns (bytes32[] memory) {
+        return _launchTickets.values();
     }
 
     function addDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
@@ -296,7 +344,9 @@ contract DstackApp is
         returns (bool isAllowed, string memory reason)
     {
         if (currentAppEpoch != 0) return (false, "App epoch requires epoch-aware authorization");
-        return _authorizeApp(bootInfo, 0);
+        // Legacy callers report no platform and no launch ticket, so only a policy
+        // restricting neither admits them.
+        return _authorizeApp(bootInfo, allowAnyTeeVariant(), 0, bytes32(0));
     }
 
     /// Decide the request at the selected app epoch; the KMS fills gateway and root fields.
@@ -312,17 +362,27 @@ contract DstackApp is
             return result;
         }
         uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : currentAppEpoch;
-        (result.authorized, result.rejectionReason) = _authorizeApp(request.appInfo, appEpoch);
+        (result.authorized, result.rejectionReason) = _authorizeApp(
+            request.appInfo,
+            TeeVariantPolicy.admits(_teeVariants, request.teeVariant),
+            appEpoch,
+            request.launchTicketHash
+        );
     }
 
     function _authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
-        uint256 appEpoch
+        bool teeVariantAllowed,
+        uint256 appEpoch,
+        bytes32 launchTicketHash
     )
         private
         view
         returns (bool, string memory)
     {
+        if (requireLaunchTicket && !_launchTickets.contains(launchTicketHash)) {
+            return (false, "Invalid launch ticket");
+        }
         if (appEpoch > currentAppEpoch) return (false, "Requested app epoch is not active");
         // Optionally require TCB status to be up to date
         if (
@@ -338,8 +398,12 @@ contract DstackApp is
         }
 
         // Check if device is allowed (when device restriction is enabled)
-        if (!allowAnyDeviceAtEpoch(appEpoch) && !allowedDeviceIdsAtEpoch(appEpoch, bootInfo.deviceId)) {
+        if (!allowAnyDevice && !allowedDeviceIdsAtEpoch(appEpoch, bootInfo.deviceId)) {
             return (false, "Device not allowed");
+        }
+
+        if (!teeVariantAllowed) {
+            return (false, "TEE variant not allowed");
         }
 
         return (true, "");
@@ -362,5 +426,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[45] private __gap;
+    uint256[42] private __gap;
 }

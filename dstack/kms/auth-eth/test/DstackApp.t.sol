@@ -126,14 +126,14 @@ contract DstackAppTest is Test {
         vm.expectEmit(true, true, true, true);
         emit AllowAnyDeviceSet(true);
 
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.setAllowAnyDevice(true);
         assertTrue(app.allowAnyDevice());
 
         vm.prank(owner);
         vm.expectEmit(true, true, true, true);
         emit AllowAnyDeviceSet(false);
 
-        app.setAllowAnyDeviceAtEpoch(0, false);
+        app.setAllowAnyDevice(false);
         assertFalse(app.allowAnyDevice());
     }
 
@@ -156,7 +156,7 @@ contract DstackAppTest is Test {
         app.removeDeviceAtEpoch(0, deviceId);
 
         vm.expectRevert();
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.setAllowAnyDevice(true);
 
         vm.stopPrank();
     }
@@ -195,7 +195,7 @@ contract DstackAppTest is Test {
 
         // Test with allowAnyDevice = true
         vm.prank(owner);
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.setAllowAnyDevice(true);
 
         (allowed, reason) = app.isAppAllowed(bootInfo);
         assertTrue(allowed);
@@ -426,7 +426,7 @@ contract DstackAppTest is Test {
         pure
         returns (AuthorizationRequest memory)
     {
-        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0));
+        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0), "dstack-tdx", bytes32(0));
     }
 
     function authorizeAt(
@@ -440,6 +440,112 @@ contract DstackAppTest is Test {
     {
         AuthorizationResult memory result = app.authorizeApp(appRequest(info, OptionalUint256(true, epoch), operation));
         return (result.authorized, result.rejectionReason);
+    }
+
+    function test_TeeVariantsAreUnrestrictedUntilRestrictedAndCoverEveryEpoch() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHashAtEpochs(0, 1, info.composeHash);
+        app.addDeviceAtEpochs(0, 1, info.deviceId);
+        vm.stopPrank();
+        AuthorizationRequest memory request = appRequest(info, OptionalUint256(true, 0), keccak256("app_get_key"));
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertTrue(app.allowAnyTeeVariant());
+        assertTrue(app.authorizeApp(request).authorized);
+
+        string[] memory tdx = new string[](1);
+        tdx[0] = "dstack-tdx";
+        vm.startPrank(owner);
+        app.setAllowedTeeVariants(tdx);
+        // The list applies only once the policy is restricted.
+        assertTrue(app.authorizeApp(request).authorized);
+        app.setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+        assertEq(app.allowedTeeVariants()[0], "dstack-tdx");
+        assertEq(app.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+        (bool allowed, string memory reason) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "TEE variant not allowed");
+        request.teeVariant = "dstack-tdx";
+        assertTrue(app.authorizeApp(request).authorized);
+
+        // The policy covers every app epoch.
+        vm.prank(owner);
+        app.advanceAppEpoch(0);
+        request.requestedAppEpoch = OptionalUint256(true, 1);
+        assertTrue(app.authorizeApp(request).authorized);
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertEq(app.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+
+        // Only known platforms can be listed, and an empty list admits none.
+        string[] memory unknown = new string[](1);
+        unknown[0] = "dstack-unknown";
+        vm.startPrank(owner);
+        vm.expectRevert("unknown TEE variant");
+        app.setAllowedTeeVariants(unknown);
+        app.setAllowedTeeVariants(new string[](0));
+        vm.stopPrank();
+        assertEq(app.allowedTeeVariants().length, 0);
+        request.teeVariant = "dstack-tdx";
+        assertEq(app.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+
+        vm.startPrank(user);
+        bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
+        vm.expectRevert(unauthorized);
+        app.setAllowAnyTeeVariant(true);
+        vm.expectRevert(unauthorized);
+        app.setAllowedTeeVariants(tdx);
+        vm.stopPrank();
+    }
+
+    function test_LaunchTicketGatesEveryEpochOnceRequired() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        bytes32 ticket = sha256("dstack-launch-ticket/v1:prod");
+        vm.startPrank(owner);
+        app.addComposeHashAtEpochs(0, 1, info.composeHash);
+        app.addDeviceAtEpochs(0, 1, info.deviceId);
+        vm.stopPrank();
+        AuthorizationRequest memory request = appRequest(info, OptionalUint256(true, 0), keccak256("app_get_key"));
+        // Not required: any ticket, or none, is admitted.
+        assertTrue(app.authorizeApp(request).authorized);
+
+        vm.startPrank(owner);
+        app.setRequireLaunchTicket(true);
+        vm.expectRevert("invalid launch ticket hash");
+        app.addLaunchTicket(bytes32(0), "zero");
+        app.addLaunchTicket(ticket, "prod");
+        vm.stopPrank();
+        assertEq(app.launchTickets().length, 1);
+        assertEq(app.launchTickets()[0], ticket);
+        assertEq(app.authorizeApp(request).rejectionReason, "Invalid launch ticket");
+        (bool allowed, string memory reason) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "Invalid launch ticket");
+
+        request.launchTicketHash = ticket;
+        assertTrue(app.authorizeApp(request).authorized);
+        request.operation = keccak256("app_get_cert");
+        assertTrue(app.authorizeApp(request).authorized);
+        // The allowlist covers every app epoch.
+        vm.prank(owner);
+        app.advanceAppEpoch(0);
+        request.requestedAppEpoch = OptionalUint256(true, 1);
+        assertTrue(app.authorizeApp(request).authorized);
+
+        vm.prank(owner);
+        app.removeLaunchTicket(ticket);
+        assertEq(app.launchTickets().length, 0);
+        assertEq(app.authorizeApp(request).rejectionReason, "Invalid launch ticket");
+
+        vm.startPrank(user);
+        bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
+        vm.expectRevert(unauthorized);
+        app.setRequireLaunchTicket(false);
+        vm.expectRevert(unauthorized);
+        app.addLaunchTicket(ticket, "prod");
+        vm.expectRevert(unauthorized);
+        app.removeLaunchTicket(ticket);
+        vm.stopPrank();
     }
 
     function test_AuthorizeAppOwnsOperationScopeAndAppEpoch() public {
@@ -551,30 +657,23 @@ contract DstackAppTest is Test {
         vm.stopPrank();
     }
 
-    function test_AllowAnyDeviceIsScopedToExactlyOneEpoch() public {
+    function test_AllowAnyDeviceCoversEveryAppEpoch() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
-        app.addComposeHashAtEpoch(0, info.composeHash);
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.addComposeHashAtEpochs(0, 1, info.composeHash);
         app.advanceAppEpoch(0);
-        app.addComposeHashAtEpoch(1, info.composeHash);
-        bool allowed = authorizeCurrent(info);
-        assertFalse(allowed);
+        assertFalse(authorizeCurrent(info));
+        app.setAllowAnyDevice(true);
+        (bool allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+        assertTrue(authorizeCurrent(info));
+
+        // Clearing it leaves every epoch to its own device row at once.
         app.addDeviceAtEpoch(1, info.deviceId);
-        allowed = authorizeCurrent(info);
-        assertTrue(allowed, "explicit device can replace wildcard in a newer row");
-        app.removeDeviceAtEpoch(1, info.deviceId);
-        app.setAllowAnyDeviceAtEpoch(1, true);
-        app.setAllowAnyDeviceAtEpoch(0, false);
-        assertFalse(app.allowAnyDevice());
-        assertTrue(app.allowAnyDeviceAtEpoch(1));
+        app.setAllowAnyDevice(false);
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
-        allowed = authorizeCurrent(info);
-        assertTrue(allowed);
-        app.setAllowAnyDeviceAtEpoch(1, false);
-        allowed = authorizeCurrent(info);
-        assertFalse(allowed);
+        assertTrue(authorizeCurrent(info));
         vm.stopPrank();
     }
 
@@ -616,7 +715,6 @@ contract DstackAppTest is Test {
         app.addDeviceAtEpoch(0, info.deviceId);
         app.addComposeHashAtEpoch(1, next.composeHash);
         app.addDeviceAtEpoch(1, next.deviceId);
-        app.setAllowAnyDeviceAtEpoch(1, true);
         // Preparing the next row leaves the current one as it was.
         bool allowed = authorizeCurrent(info);
         assertTrue(allowed);
@@ -644,11 +742,9 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         app.addComposeHashAtEpochs(0, 2, info.composeHash);
         app.addDeviceAtEpochs(0, 2, info.deviceId);
-        app.setAllowAnyDeviceAtEpochs(0, 2, true);
         for (uint256 epoch = 0; epoch <= 2; ++epoch) {
             assertTrue(app.allowedComposeHashesAtEpoch(epoch, info.composeHash));
             assertTrue(app.allowedDeviceIdsAtEpoch(epoch, info.deviceId));
-            assertTrue(app.allowAnyDeviceAtEpoch(epoch));
         }
         (bool allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
@@ -656,11 +752,9 @@ contract DstackAppTest is Test {
         // Removing from every row revokes at every selectable epoch.
         app.removeComposeHashAtEpochs(0, 2, info.composeHash);
         app.removeDeviceAtEpochs(0, 2, info.deviceId);
-        app.setAllowAnyDeviceAtEpochs(0, 2, false);
         for (uint256 epoch = 0; epoch <= 2; ++epoch) {
             assertFalse(app.allowedComposeHashesAtEpoch(epoch, info.composeHash));
             assertFalse(app.allowedDeviceIdsAtEpoch(epoch, info.deviceId));
-            assertFalse(app.allowAnyDeviceAtEpoch(epoch));
         }
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
@@ -686,8 +780,6 @@ contract DstackAppTest is Test {
         app.addDeviceAtEpoch(2, bytes32(uint256(1)));
         vm.expectRevert("Unknown app epoch");
         app.removeDeviceAtEpoch(2, bytes32(uint256(1)));
-        vm.expectRevert("Unknown app epoch");
-        app.setAllowAnyDeviceAtEpoch(2, true);
         vm.stopPrank();
         bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
         vm.startPrank(user);
@@ -700,7 +792,7 @@ contract DstackAppTest is Test {
         vm.expectRevert(unauthorized);
         app.removeDeviceAtEpoch(0, bytes32(uint256(1)));
         vm.expectRevert(unauthorized);
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.setAllowAnyDevice(true);
         vm.stopPrank();
     }
 

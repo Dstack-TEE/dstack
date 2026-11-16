@@ -26,7 +26,13 @@ before using nonzero epochs. Once the app epoch is nonzero, the legacy
 derive epoch-zero keys, so the KMS contract calling the app policy must support
 epochs before the app epoch advances. The ERC-165 `IAppEpochAuth` capability combines
 `currentAppEpoch()` and `authorizeApp(AuthorizationRequest)` in one interface; the
-policy returns the same `AuthorizationResult` struct as `DstackKms`. Legacy policies
+policy returns the same `AuthorizationResult` struct as `DstackKms`. The request
+also carries `teeVariant`, the platform name the KMS reports, which
+`allowAnyTeeVariant` and `allowedTeeVariants` in `DstackApp` and `DstackKms`
+restrict to the platforms listed in `TeeVariantPolicy.sol`; listing a new
+platform takes a contract upgrade. Like `allowAnyDevice`, the policy covers every
+epoch: which platforms may hold an app's keys is a trust decision, not a property
+of a key generation. Legacy policies
 without this capability remain at zero; failures of an advertised getter propagate.
 
 The Ethereum auth backends query the policy through the KMS contract. The simple
@@ -43,8 +49,11 @@ Authorization checks only the selected row, with O(1) add, removal and lookup:
 
 - `DstackKms`: OS images, KMS aggregated measurements and KMS device IDs are
   indexed by **root epoch**. OS image limits also apply to app key requests.
-- `DstackApp`: compose hashes, device IDs and `allowAnyDevice` are indexed by
-  **app epoch**. Each required material must be allowed in the selected row.
+- `DstackApp`: compose hashes and device IDs are indexed by **app epoch**. Each
+  required material must be allowed in the selected row. `allowAnyDevice` is a
+  single switch over every app epoch: which hosts may run the app is not a
+  property of a key generation, and a per-epoch switch could leave an older
+  epoch open to any host after the current one is restricted.
 
 There is no implicit access in either direction. Rotating keys starts an empty
 row; approving a new row neither copies old approvals nor grants historical keys.
@@ -55,13 +64,14 @@ the old row after the handover. The old image never needs access to the new row.
 
 A request may select any epoch up to the current one and is decided on that
 epoch's row, so a value is revoked only once every row allowing it is cleared.
-Neither contract has epoch-less material setters: `*AtEpoch(epoch, material)`
-changes one row and `*AtEpochs(fromEpoch, toEpoch, material)` every row in the
-range, so one transaction revokes a value from all rows, with
+Neither contract has epoch-less material setters:
+`*AtEpochs(fromEpoch, toEpoch, material)` changes every row in the range, and in
+`DstackApp` `*AtEpoch(epoch, material)` one row (in `DstackKms`, pass the epoch
+twice). One transaction revokes a value from all rows, with
 `remove*AtEpochs(0, latest, …)` in `DstackKms` and
 `remove*AtEpochs(0, currentAppEpoch, …)` in `DstackApp`. `DstackKms` writes
 registered root epochs (before any is registered, only epoch zero); `DstackApp`
-writes app epochs up to the next one, as do `setAllowAnyDeviceAtEpoch(s)`.
+writes app epochs up to the next one.
 `DstackApp` reports these setters as the ERC-165 interface
 `IAppEpochManagement` and no longer reports `IAppAuthBasicManagement`
 (`0x8fd37527`), whose epoch-less setters it removed. The scripts in
@@ -85,7 +95,9 @@ it could not get keys for.
 The `*AtEpoch` getters read the selected row, including legacy epoch zero.
 `EpochPolicyChanged` events include the row and the resulting permission. Legacy
 bool getters and events describe **epoch zero only**; changing a nonzero row does
-not change its legacy bool or emit a misleading legacy material event.
+not change its legacy bool or emit a misleading legacy material event. The
+exception is `allowAnyDevice` and its `AllowAnyDeviceSet` event, which cover every
+app epoch.
 Root policy rows from epoch 1 belong to the epoch's registration, so a row can
 be written only once the epoch is registered (register, prepare the row, then
 activate). A popped epoch's rows do not carry over: the next registration of the
@@ -108,10 +120,11 @@ This permits staged key distribution without changing which epoch the KMS serves
 
 The original bool mappings and `allowAnyDevice` retain their storage locations and
 are used directly as row zero. New storage consumes storage-gap slots in each
-contract (four in `DstackKms`, three in `DstackApp`); no entries are copied and no reinitializer is required. Existing
+contract (seven in `DstackKms`, four in `DstackApp`); no entries are copied and no reinitializer is required. Existing
 owners, pending owners, policy flags, root registries and app epoch counters are
-preserved. Even if the pre-upgrade counter is nonzero, old global approvals grant
-only row zero after upgrading: explicitly populate the intended nonzero rows.
+preserved. Even if the pre-upgrade counter is nonzero, old global material
+approvals grant only row zero after upgrading: explicitly populate the intended
+nonzero rows. `allowAnyDevice` keeps covering every app epoch.
 
 Upgrade the KMS policy before app policies, then approve the intended rows before
 restarting guests or activating a new root. `DstackApp` advertises the optional

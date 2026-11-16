@@ -24,6 +24,7 @@ use crate::{
 };
 
 use super::{
+    access_log::AccessLog,
     io_bridge::bridge_tcp,
     parse_canonical_port,
     port_policy::{filter_allowed_addresses, should_send_pp},
@@ -178,6 +179,7 @@ pub(crate) async fn proxy_with_sni(
     pp_header: ProxyHeader,
     buffer: Vec<u8>,
     sni: &str,
+    log: &mut AccessLog,
 ) -> Result<()> {
     let dns_timeout = state.config.proxy.timeouts.dns_resolve;
     let addr = timeout(dns_timeout, state.app_address_resolver.resolve(sni))
@@ -185,7 +187,17 @@ pub(crate) async fn proxy_with_sni(
         .with_context(|| format!("DNS TXT resolve timeout for {sni}"))?
         .with_context(|| format!("failed to resolve app address for {sni}"))?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
-    proxy_to_app(state, inbound, pp_header, buffer, &addr.app_id, addr.port).await
+    log.app(&addr.app_id, addr.port);
+    proxy_to_app(
+        state,
+        inbound,
+        pp_header,
+        buffer,
+        &addr.app_id,
+        addr.port,
+        log,
+    )
+    .await
 }
 
 /// Count a connection on `counter` if the app is under its limit. The check and
@@ -297,6 +309,7 @@ pub(crate) async fn proxy_to_app(
     buffer: Vec<u8>,
     app_id: &str,
     port: u16,
+    log: &mut AccessLog,
 ) -> Result<()> {
     let addresses = state.lock().select_top_n_hosts(app_id)?;
     let addresses = filter_allowed_addresses(&state, addresses, app_id, port)?;
@@ -308,6 +321,7 @@ pub(crate) async fn proxy_to_app(
     .await
     .with_context(|| format!("connecting timeout to app {app_id}: {addresses:?}:{port}"))?
     .with_context(|| format!("failed to connect to app {app_id}: {addresses:?}:{port}"))?;
+    log.instance(&instance_id);
     if should_send_pp(&state, &instance_id, port) {
         let pp_header_bin =
             proxy_protocol::encode(pp_header).context("failed to encode pp header")?;

@@ -188,9 +188,10 @@ this implementation keeps the API of the removed fastify + ethers server that us
 #### dstack-kms 0.6
 
 dstack-kms 0.6 posts `dstack_verifier::PolicyBootInfo`: bytes as unprefixed
-hex, plus `teeVariant` and `keyProviderInfo`, which the contract does not take
-and this backend drops. the KMS checks `appId`, `composeHash` and `instanceId`
-widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
+hex, plus `teeVariant` and `keyProviderInfo`. the legacy `/bootAuth/*` routes
+drop both; `/authorizeKms` and `/authorizeApp` require `teeVariant` and pass it
+to the contract unchanged, and always drop `keyProviderInfo`. the KMS checks
+`appId`, `composeHash` and `instanceId` widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
 tests pin this contract.
 
 #### OpenAPI specification
@@ -219,7 +220,9 @@ The selected endpoint determines the policy; the backend checks that the verifie
 omission uses the current app epoch, explicit zero selects epoch zero, and future
 values are denied. The optional
 `requestedRootEpoch` selects historical keys; omission uses the returned current
-epoch, and an explicit `0` selects epoch 0. See the
+epoch, and an explicit `0` selects epoch 0. The optional `launchTicketHash` is the
+hash of the launch ticket the CVM presented and is passed to the contract as
+`bytes32`, zero when absent. See the
 [KMS authorization protocol](../README.md#authorization-protocol) for registration,
 bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
 remain available.
@@ -331,8 +334,9 @@ See `script/README.md` for complete documentation of all available scripts.
 #### Epoch-scoped material approvals
 
 Material approvals use exact root/app epoch rows; neither older nor newer rows
-are implicitly authorized. Material setters name their rows: `*AtEpoch` one
-row, `*AtEpochs` a range; `DstackApp` reports them as `IAppEpochManagement`.
+are implicitly authorized. Material setters name their rows: `*AtEpochs` a
+range, and in `DstackApp` `*AtEpoch` one row; `DstackApp` reports them as
+`IAppEpochManagement`.
 The management scripts take `ROOT_EPOCH`/`APP_EPOCH`, or
 `FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` and `FROM_APP_EPOCH`/`TO_APP_EPOCH`, and use
 the epoch-less setters of app policies predating app epochs. Original bool mappings and events remain epoch-zero views after

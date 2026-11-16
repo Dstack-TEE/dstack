@@ -4,6 +4,8 @@
 
 //! Minimal AMD SEV-SNP guest report support.
 
+pub mod sealing;
+
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};

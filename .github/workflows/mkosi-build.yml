@@ -64,6 +64,9 @@ jobs:
       bare_sha256: ${{ steps.hashes.outputs.bare_sha256 }}
       uki_sha256: ${{ steps.hashes.outputs.uki_sha256 }}
       kernel_devel_sha256: ${{ steps.hashes.outputs.kernel_devel_sha256 }}
+      mrtd: ${{ steps.hashes.outputs.mrtd }}
+      uki_auth: ${{ steps.hashes.outputs.uki_auth }}
+      aws_pcr: ${{ steps.hashes.outputs.aws_pcr }}
 
     steps:
       # GitHub-hosted runners have enough CPU and memory for this build, but
@@ -222,6 +225,9 @@ jobs:
             echo "bare_sha256=$bare_sha256"
             echo "uki_sha256=$uki_sha256"
             echo "kernel_devel_sha256=$kernel_devel_sha256"
+            echo "mrtd=$mrtd"
+            echo "uki_auth=$uki_auth"
+            echo "aws_pcr=$aws_pcr"
           } >> "$GITHUB_OUTPUT"
 
           # os_image_hash is the value operators need most, so surface it in the
@@ -258,24 +264,11 @@ jobs:
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          {
-            echo "os_image_hash    $os_image_hash"
-            echo "git_revision     $git_revision"
-            echo "tdx_mrtd         $mrtd"
-            echo "gcp_uki_auth     $uki_auth"
-            echo "aws_boot_pcr     $aws_pcr"
-            echo "$bare_sha256  dstack-$version.tar.gz"
-            echo "$uki_sha256  dstack-$version-uki.tar.gz"
-            echo "$kernel_devel_sha256  dstack-$version-kernel-devel.tar.gz"
-          } | tee "$DIST_DIR/image-hashes.txt"
-
       - name: Upload guest images
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mkosi-guest-images
-          path: |
-            ${{ steps.build.outputs.dist_dir }}/dstack-*.tar.gz
-            ${{ steps.build.outputs.dist_dir }}/image-hashes.txt
+          path: ${{ steps.build.outputs.dist_dir }}/dstack-*.tar.gz
           retention-days: 30
           if-no-files-found: error
 
@@ -388,6 +381,9 @@ jobs:
           BARE_SHA256: ${{ needs.build.outputs.bare_sha256 }}
           UKI_SHA256: ${{ needs.build.outputs.uki_sha256 }}
           KERNEL_DEVEL_SHA256: ${{ needs.build.outputs.kernel_devel_sha256 }}
+          MRTD: ${{ needs.build.outputs.mrtd }}
+          UKI_AUTH: ${{ needs.build.outputs.uki_auth }}
+          AWS_PCR: ${{ needs.build.outputs.aws_pcr }}
         run: |
           set -euo pipefail
           {
@@ -400,12 +396,12 @@ jobs:
             echo '| --- | --- |'
             echo "| \`os_image_hash\` | \`$OS_IMAGE_HASH\` |"
             echo "| Git revision | \`$GITHUB_SHA\` |"
+            echo "| TDX \`MRTD\` | \`$MRTD\` |"
+            echo "| GCP \`uki_auth\` | \`$UKI_AUTH\` |"
+            echo "| AWS \`boot_pcr_digest\` | \`$AWS_PCR\` |"
             echo "| \`dstack-$VERSION.tar.gz\` | \`$BARE_SHA256\` |"
             echo "| \`dstack-$VERSION-uki.tar.gz\` | \`$UKI_SHA256\` |"
             echo "| \`dstack-$VERSION-kernel-devel.tar.gz\` | \`$KERNEL_DEVEL_SHA256\` |"
-            echo
-            echo "\`image-hashes.txt\` additionally records the TDX \`MRTD\`, the GCP"
-            echo "\`uki_auth\` hash and the AWS \`boot_pcr_digest\` for this image."
             echo
             echo "To build out-of-tree kernel modules, use"
             echo "\`ghcr.io/dstack-tee/dstack-kernel-builder:$VERSION\`; see"
@@ -426,7 +422,6 @@ jobs:
             "dist/dstack-$VERSION.tar.gz" \
             "dist/dstack-$VERSION-uki.tar.gz" \
             "dist/dstack-$VERSION-kernel-devel.tar.gz" \
-            dist/image-hashes.txt \
             --title "dstack OS v$VERSION" \
             --notes-file release-notes.md \
             --verify-tag \

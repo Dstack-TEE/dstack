@@ -52,6 +52,8 @@ Because `launch_token_hash` is public, a guessable token can be recovered offlin
 
 Also understand the protection boundary of this mechanism: the guest verifies the token before any keys are provisioned, which means the token must reach the guest through `user_config` — a channel the host can read. The requirement therefore stops parties who only know the public app-compose.json from launching the app, but once a host has hosted a deployment it learns the token and can later relaunch instances of that compose with substituted encrypted envs. Mitigations: generate a fresh token per deployment and remove stale compose hashes from the on-chain whitelist; if the token must stay secret from the host, use the app-layer `APP_LAUNCH_TOKEN` encrypted-env pattern above instead (its check necessarily runs after key provisioning).
 
+A KMS-level launch ticket closes that gap for apps governed by `DstackApp`: the contract owner requires a ticket (`setRequireLaunchTicket`) and allows the hashes of the tickets they issue (`addLaunchTicket`), and the KMS refuses keys and certificates to a CVM without an allowed ticket. The check runs in the KMS, so it does not depend on the guest OS, and a ticket is revoked on chain without changing the compose hash. It is orthogonal to `requirements.launch_token_hash`. The host still holds the ticket, so issue one per deployment and remove it when the host stops serving the app. See [launch tickets](../../dstack/kms/README.md#launch-tickets) and [vmm-cli](../vmm-cli-user-guide.md#launch-tickets).
+
 If you use dstack-vmm's built-in UI, the prelaunch script has already been automatically filled in for you:
 
 ![Prelaunch Script](../assets/prelaunch-script.png)
@@ -111,7 +113,7 @@ Development settings are intentionally easy to audit, but they are not productio
 - The KMS contract pins a concrete gateway app id. Do not use `gateway_app_id = "any"` for production traffic.
 - TEE quotes are evaluated by deployment policy, including TCB status and expected OS/application measurements.
 
-The KMS TLS listener verifies client certificates by the attestation they carry rather than by an issuer CA, so it needs no `rpc.tls.mutual` section. It still accepts connections without a client certificate, because bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. Guests and onboarding clients use self-issued certificates. The temporary-CA RPC remains available for old OS images and tokenless legacy onboarding; its public key material authenticates no caller.
+The KMS TLS listener verifies client certificates by the attestation they carry rather than by an issuer CA, so it needs no `listeners.default.tls.mutual` section. It still accepts connections without a client certificate, because bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. Guests and onboarding clients use self-issued certificates. The temporary-CA RPC remains available for old OS images and tokenless legacy onboarding; its public key material authenticates no caller.
 
 App key release and KMS key handover still require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and embedded attestation before signing.
 
@@ -120,8 +122,8 @@ App key release and KMS key handover still require verified caller attestation f
 The VMM, gateway, and KMS management surfaces must have authentication enabled in production:
 
 - VMM: set `[auth] enabled = true` with `tokens` (or `htpasswd_file`) — this guards the entire VMM HTTP/pRPC/UI surface. Never bind to a non-localhost address without it. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
-- Gateway: set `[core.admin] admin_token` (or `htpasswd_file`) and keep `insecure_no_auth = false`. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
-- KMS: enable `[core.admin]` with an `auth_token` (or `htpasswd_file`); the admin RPCs are served on a dedicated listener and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with no credential denies all admin RPCs (fail-closed).
+- Gateway: set `[listeners.admin] auth_token` (or `htpasswd_file`) and keep `insecure_no_auth = false`. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
+- KMS: enable `[listeners.admin]` with an `auth_token` (or `htpasswd_file`); the admin RPCs are served on that dedicated listener and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with no credential denies all admin RPCs (fail-closed).
 
 All three share the same HTTP authenticator: bcrypt-only htpasswd (via `htpasswd -B`), constant-time token comparison, and fail-closed behavior.
 

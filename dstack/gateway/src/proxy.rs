@@ -23,7 +23,7 @@ use tokio::{
     runtime::Runtime,
     time::timeout,
 };
-use tracing::{debug, debug_span, error, info, warn, Instrument};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use crate::{
     config::ProxyConfig,
@@ -31,6 +31,7 @@ use crate::{
     models::EnteredCounter,
     pp::{get_inbound_pp_header, DisplayAddr},
 };
+use access_log::AccessLog;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AddressInfo {
@@ -43,6 +44,7 @@ pub(crate) struct AddressInfo {
 
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
+mod access_log;
 mod adaptive_ktls;
 mod balance;
 /// Largest response the gateway will read from a guest agent.
@@ -196,7 +198,7 @@ fn parse_dst_info(subdomain: &str) -> Result<DstInfo> {
 
 pub static NUM_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
-async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
+async fn handle_connection(inbound: TcpStream, state: Proxy, log: &mut AccessLog) -> Result<()> {
     let timeouts = &state.config.proxy.timeouts;
 
     let pp_fut = get_inbound_pp_header(inbound, &state.config.proxy);
@@ -205,6 +207,7 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
         .context("proxy protocol header timeout")?
         .context("failed to read proxy protocol header")?;
     debug!("client address: {}", DisplayAddr(&pp_header));
+    log.client(&pp_header);
 
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
         .await
@@ -213,21 +216,29 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
     let Some(sni) = sni else {
         bail!("no sni found");
     };
+    log.sni(&sni);
 
     let (subdomain, base_domain) = sni.split_once('.').context("invalid sni")?;
     if state.cert_resolver.get().contains_wildcard(base_domain) {
         let dst = parse_dst_info(subdomain)?;
         debug!("dst: {dst:?}");
+        log.dst(&dst);
         if dst.is_tls {
-            tls_passthough::proxy_to_app(state, inbound, pp_header, buffer, &dst.app_id, dst.port)
-                .await
+            tls_passthough::proxy_to_app(
+                state,
+                inbound,
+                pp_header,
+                buffer,
+                &dst.app_id,
+                dst.port,
+                log,
+            )
+            .await
         } else {
-            state
-                .proxy(inbound, pp_header, buffer, &dst.app_id, dst.port, dst.is_h2)
-                .await
+            state.proxy(inbound, pp_header, buffer, &dst, log).await
         }
     } else {
-        tls_passthough::proxy_with_sni(state, inbound, pp_header, buffer, &sni).await
+        tls_passthough::proxy_with_sni(state, inbound, pp_header, buffer, &sni, log).await
     }
 }
 
@@ -304,19 +315,26 @@ fn conn_task(
     proxy: Proxy,
     slot: Option<balance::CoreSlot>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
-    let span = debug_span!("conn", id = next_connection_id());
+    let span = info_span!("conn", id = next_connection_id());
     let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
     async move {
         let _conn_entered = conn_entered;
         let _slot = slot;
         debug!(%from, "new connection");
+        let mut log = AccessLog::new(&inbound);
         let timeouts = &proxy.config.proxy.timeouts;
-        match timeout(timeouts.total, handle_connection(inbound, proxy)).await {
+        let result = timeout(timeouts.total, handle_connection(inbound, proxy, &mut log)).await;
+        match &result {
             Ok(Ok(_)) => debug!("connection closed"),
-            Ok(Err(e)) if is_peer_disconnect(&e) => debug!("peer disconnected: {e:#}"),
+            Ok(Err(e)) if is_peer_disconnect(e) => debug!("peer disconnected: {e:#}"),
             Ok(Err(e)) => error!("connection error: {e:#}"),
             Err(_) => error!("connection kept too long, force closing"),
         }
+        log.finish(from, || match &result {
+            Ok(Ok(_)) => "closed".into(),
+            Ok(Err(e)) => format!("{e:#}"),
+            Err(_) => "timed out".into(),
+        });
     }
     .instrument(span)
 }

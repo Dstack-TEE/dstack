@@ -18,7 +18,6 @@ interface ILegacyAppManagement {
     function removeComposeHash(bytes32 composeHash) external;
     function addDevice(bytes32 deviceId) external;
     function removeDevice(bytes32 deviceId) external;
-    function setAllowAnyDevice(bool allowed) external;
 }
 
 // Base contract with common functionality
@@ -55,6 +54,14 @@ abstract contract BaseScript is Script {
         }
         require(vm.envExists(from) && vm.envExists(to), string.concat("set ", single, ", or ", from, " and ", to));
         return (vm.envUint(from), vm.envUint(to));
+    }
+
+    // TEE_VARIANTS: `any`, or the comma-separated platform names, as the KMS
+    // reports them, that alone are allowed.
+    function teeVariants() internal view returns (bool any, string[] memory names) {
+        names = vm.envString("TEE_VARIANTS", ",");
+        require(names.length > 0 && bytes(names[0]).length > 0, "set TEE_VARIANTS to any or platform names");
+        any = names.length == 1 && keccak256(bytes(names[0])) == keccak256("any");
     }
 
     function rootEpochs() internal view returns (uint256, uint256) {
@@ -130,6 +137,47 @@ contract AddKmsDevice is BaseScript {
         vm.stopBroadcast();
 
         console.log("Added KMS device:", vm.toString(deviceId));
+    }
+}
+
+contract SetKmsTeeVariants is BaseScript {
+    function run() external {
+        (bool any, string[] memory names) = teeVariants();
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        // Write the list before restricting, so the restriction never applies to a stale one.
+        if (!any) kms.setAllowedTeeVariants(names);
+        kms.setAllowAnyTeeVariant(any);
+        vm.stopBroadcast();
+
+        console.log("Set KMS TEE variants to:", vm.envString("TEE_VARIANTS"));
+    }
+}
+
+contract RequireKmsLaunchTicket is BaseScript {
+    function run() external {
+        bool required = vm.envBool("REQUIRE_LAUNCH_TICKET");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        kms.setRequireKmsLaunchTicket(required);
+        console.log("Set requireKmsLaunchTicket to:", required);
+    }
+}
+
+contract AddKmsLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        kms.addKmsLaunchTicket(ticketHash, vm.envString("LAUNCH_TICKET_LABEL"));
+        console.log("Added KMS launch ticket:", vm.toString(ticketHash));
+    }
+}
+
+contract RemoveKmsLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        kms.removeKmsLaunchTicket(ticketHash);
+        console.log("Removed KMS launch ticket:", vm.toString(ticketHash));
     }
 }
 
@@ -238,18 +286,62 @@ contract AddDevice is BaseScript {
 contract SetAllowAnyDevice is BaseScript {
     function run() external {
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        require(
+            !vm.envExists("APP_EPOCH") && !vm.envExists("FROM_APP_EPOCH") && !vm.envExists("TO_APP_EPOCH"),
+            "allowAnyDevice covers every app epoch: unset APP_EPOCH, FROM_APP_EPOCH and TO_APP_EPOCH"
+        );
 
-        ILegacyAppManagement legacy = legacyApp();
-        if (address(legacy) != address(0)) {
-            vm.broadcast(vm.envUint("PRIVATE_KEY"));
-            legacy.setAllowAnyDevice(allow);
-        } else {
-            (uint256 from, uint256 to) = appEpochs();
-            vm.broadcast(vm.envUint("PRIVATE_KEY"));
-            app.setAllowAnyDeviceAtEpochs(from, to, allow);
-        }
+        // Apps with and without app epochs share this setter.
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.setAllowAnyDevice(allow);
 
         console.log("Set allowAnyDevice to:", allow);
+    }
+}
+
+contract SetTeeVariants is BaseScript {
+    function run() external {
+        (bool any, string[] memory names) = teeVariants();
+        require(address(legacyApp()) == address(0), "this app predates TEE variant policies");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        // Write the list before restricting, so the restriction never applies to a stale one.
+        if (!any) app.setAllowedTeeVariants(names);
+        app.setAllowAnyTeeVariant(any);
+        vm.stopBroadcast();
+
+        console.log("Set TEE variants to:", vm.envString("TEE_VARIANTS"));
+    }
+}
+
+contract RequireLaunchTicket is BaseScript {
+    function run() external {
+        bool required = vm.envBool("REQUIRE_LAUNCH_TICKET");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.setRequireLaunchTicket(required);
+        console.log("Set requireLaunchTicket to:", required);
+    }
+}
+
+contract AddLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.addLaunchTicket(ticketHash, vm.envString("LAUNCH_TICKET_LABEL"));
+        console.log("Added launch ticket:", vm.toString(ticketHash));
+    }
+}
+
+contract RemoveLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.removeLaunchTicket(ticketHash);
+        console.log("Removed launch ticket:", vm.toString(ticketHash));
     }
 }
 

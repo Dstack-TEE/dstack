@@ -359,6 +359,13 @@ pub fn create_manifest_from_vm_config(
         bail!("tee simulator credentials are not configured on this VMM");
     }
     let key_provider = key_provider_from_compose(&request.compose_file)?;
+    if key_provider == dstack_types::KeyProviderKind::SevSnp
+        && (cvm_config.resolved_platform() != crate::config::CvmPlatform::AmdSevSnp
+            || simulated_tee.is_some()
+            || request.no_tee)
+    {
+        bail!("the SEV-SNP key provider requires a real AMD SEV-SNP platform");
+    }
     let swtpm = needs_swtpm(key_provider, simulated_tee);
     let disk_prealloc = disk_prealloc_from_vm_config(&request, cvm_config)?;
     validate_disk_prealloc_against_compose(disk_prealloc, &request.compose_file)?;
@@ -385,7 +392,18 @@ pub fn create_manifest_from_vm_config(
         volumes,
         disk_prealloc,
         annotations: annotations_from_proto(&request.annotations)?,
+        launch_ticket: launch_ticket_from_proto(&request.launch_ticket)?,
     })
+}
+
+/// Refuse a ticket the KMS would refuse, so the mistake surfaces here rather
+/// than at boot. Empty means none.
+fn launch_ticket_from_proto(ticket: &str) -> Result<Option<String>> {
+    if ticket.is_empty() {
+        return Ok(None);
+    }
+    dstack_types::authorization::check_launch_ticket(ticket).map_err(anyhow::Error::msg)?;
+    Ok(Some(ticket.to_string()))
 }
 
 fn annotations_from_proto(
@@ -1178,6 +1196,9 @@ impl VmmRpc for RpcHandler {
         if request.update_gateway_urls {
             manifest.gateway_urls = request.gateway_urls.clone();
         }
+        if let Some(ticket) = &request.launch_ticket {
+            manifest.launch_ticket = launch_ticket_from_proto(ticket)?;
+        }
         if request.update_annotations {
             manifest.annotations = annotations_from_proto(&request.annotations)?;
         }
@@ -1565,6 +1586,7 @@ mod tests {
             networks: vec![],
             disk_prealloc: None,
             annotations: Default::default(),
+            launch_ticket: String::new(),
         }
     }
 
@@ -1820,6 +1842,35 @@ mod tests {
 
             assert_eq!(manifest.swtpm, expected);
         }
+    }
+
+    #[test]
+    fn snp_provider_requires_real_snp_hardware() {
+        let mut request = test_vm_configuration();
+        request.compose_file = serde_json::json!({ "key_provider": "sev-snp" }).to_string();
+        let mut config = test_cvm_config();
+        config.platform = Some(crate::config::CvmPlatform::Tdx);
+        assert!(create_manifest_from_vm_config(request.clone(), &config)
+            .unwrap_err()
+            .to_string()
+            .contains("requires a real AMD SEV-SNP platform"));
+        config.platform = Some(crate::config::CvmPlatform::AmdSevSnp);
+        assert!(create_manifest_from_vm_config(request.clone(), &config).is_ok());
+        request.no_tee = true;
+        assert!(create_manifest_from_vm_config(request.clone(), &config)
+            .unwrap_err()
+            .to_string()
+            .contains("requires a real AMD SEV-SNP platform"));
+        request.no_tee = false;
+        config.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
+            mock_attestation_seed: Some("11".repeat(32)),
+            ..Default::default()
+        });
+        request.simulated_tee = Some("dstack-amd-sev-snp".into());
+        assert!(create_manifest_from_vm_config(request, &config)
+            .unwrap_err()
+            .to_string()
+            .contains("requires a real AMD SEV-SNP platform"));
     }
 
     #[test]

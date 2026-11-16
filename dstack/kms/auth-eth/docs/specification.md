@@ -55,9 +55,9 @@ return-value spoofing are still possible — see §6.
 | 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `registerRootEpoch` (epoch 0), `activateRootEpoch` (owner) | Preserved for proxy upgrades and legacy readers; quote and event log are cleared on activation |
 | 4 | `gatewayAppId` | `string` | `setGatewayAppId` (owner) | Renamed from `tproxyAppId`; carries `@custom:oz-renamed-from` |
 | 5 | `registeredApps` | `mapping(address => bool)` | `registerApp` (anyone), `deployAndRegisterApp` (anyone) | Permissionless — see §6.1 |
-| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMrAtEpoch(s)`, `removeKmsAggregatedMrAtEpoch(s)` at epoch 0 (owner) | |
-| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDeviceAtEpoch(s)`, `removeKmsDeviceAtEpoch(s)` at epoch 0 (owner) | |
-| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHashAtEpoch(s)`, `removeOsImageHashAtEpoch(s)` at epoch 0 (owner) | |
+| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMrAtEpochs`, `removeKmsAggregatedMrAtEpochs` at epoch 0 (owner) | |
+| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDeviceAtEpochs`, `removeKmsDeviceAtEpochs` at epoch 0 (owner) | |
+| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHashAtEpochs`, `removeOsImageHashAtEpochs` at epoch 0 (owner) | |
 | 9 | `appImplementation` | `address` | `setAppImplementation` (owner) | Used by `deployAndRegisterApp` |
 | 10 | `__gap[50]` | `uint256[50]` | (none — must always read zero) | Reserved |
 
@@ -70,7 +70,7 @@ Plus inherited storage in ERC-7201 namespaces: `OwnableUpgradeable`,
 | Slot | Name | Type | Writable by |
 |---|---|---|---|
 | 0 | `allowedComposeHashes` | `mapping(bytes32 => bool)` | `addComposeHashAtEpoch(s)`, `removeComposeHashAtEpoch(s)` at epoch 0 (owner); 5/6-arg initializer |
-| 1 | `_upgradesDisabled` + `allowAnyDevice` (packed) | `bool` + `bool` | `disableUpgrades` (owner, monotonic); `setAllowAnyDeviceAtEpoch(s)` at epoch 0 (owner); initializer |
+| 1 | `_upgradesDisabled` + `allowAnyDevice` (packed) | `bool` + `bool` | `disableUpgrades` (owner, monotonic); `setAllowAnyDevice` (owner, every app epoch); initializer |
 | 2 | `allowedDeviceIds` | `mapping(bytes32 => bool)` | `addDeviceAtEpoch(s)`, `removeDeviceAtEpoch(s)` at epoch 0 (owner); initializer |
 | 3 | `requireTcbUpToDate` | `bool` | `setRequireTcbUpToDate` (owner); 6-arg initializer only |
 | 4 | `__gap[49]` | `uint256[49]` | (none) |
@@ -173,7 +173,7 @@ setup uses `registerRootEpoch`. On an upgraded proxy with existing legacy roots,
 epoch 0 must match the stored `kmsInfo` keys; the upgrade preserves that storage.
 
 For each of `setGatewayAppId`,
-`setAppImplementation`, and the `*AtEpoch` and `*AtEpochs` forms of
+`setAppImplementation`, and the `*AtEpochs` forms of
 `addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice`, `removeKmsDevice`,
 `addOsImageHash`, `removeOsImageHash`:
 
@@ -238,8 +238,8 @@ byte sequence — no case variations, no trailing nulls, no whitespace.
 ### 3.11 Owner-only App mutations
 
 For each of the `*AtEpoch` and `*AtEpochs` forms of `addComposeHash`,
-`removeComposeHash`, `addDevice`, `removeDevice` and `setAllowAnyDevice`, and
-`setRequireTcbUpToDate`, `disableUpgrades`:
+`removeComposeHash`, `addDevice` and `removeDevice`, and for `setAllowAnyDevice`,
+`setRequireTcbUpToDate` and `disableUpgrades`:
 
 - **pre**: `msg.sender == owner()`.
 - **frame**: every storage cell except the one mapped to the operation.

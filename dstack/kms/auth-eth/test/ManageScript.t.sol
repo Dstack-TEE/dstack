@@ -51,5 +51,31 @@ contract ManageScriptTest is Test {
         script = addComposeHash(legacy);
         vm.expectRevert(bytes("this app predates app epochs: only APP_EPOCH=0 applies"));
         script.run();
+
+        // TEE variant policies take `any` or names, and exist only in current apps.
+        vm.setEnv("APP_EPOCH", "0");
+        vm.setEnv("APP_CONTRACT_ADDR", vm.toString(current));
+        vm.setEnv("TEE_VARIANTS", "dstack-tdx,dstack-gcp-tdx");
+        SetTeeVariants teeScript = new SetTeeVariants();
+        teeScript.setUp();
+        teeScript.run();
+        assertFalse(DstackApp(current).allowAnyTeeVariant());
+        string[] memory names = DstackApp(current).allowedTeeVariants();
+        assertEq(names.length, 2);
+        assertEq(names[1], "dstack-gcp-tdx");
+        vm.setEnv("TEE_VARIANTS", "any");
+        teeScript.run();
+        assertTrue(DstackApp(current).allowAnyTeeVariant());
+        // An unset or empty TEE_VARIANTS must not lock everything out.
+        vm.setEnv("TEE_VARIANTS", "");
+        vm.expectRevert(bytes("set TEE_VARIANTS to any or platform names"));
+        teeScript.run();
+        assertTrue(DstackApp(current).allowAnyTeeVariant());
+        vm.setEnv("TEE_VARIANTS", "any");
+        vm.setEnv("APP_CONTRACT_ADDR", vm.toString(legacy));
+        teeScript = new SetTeeVariants();
+        teeScript.setUp();
+        vm.expectRevert(bytes("this app predates TEE variant policies"));
+        teeScript.run();
     }
 }

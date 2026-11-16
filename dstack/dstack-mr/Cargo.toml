@@ -35,9 +35,11 @@ bon.workspace = true
 log.workspace = true
 scale.workspace = true
 dstack-types.workspace = true
+cc-eventlog.workspace = true
 qemu-acpi.workspace = true
 
 [dev-dependencies]
+dcap-qvl.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 flate2.workspace = true
 tar.workspace = true

@@ -147,6 +147,9 @@ pub struct Manifest {
     /// Opaque metadata for host-side tooling; see `VmConfiguration.annotations`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
+    /// Written to the guest's sys-config, never returned by the RPCs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ticket: Option<String>,
 }
 
 impl Manifest {
@@ -2152,6 +2155,9 @@ pub(crate) fn make_sys_config(
     if cfg.cvm.guest_agent_api != Default::default() {
         sys_config["guest_agent_api"] = serde_json::to_value(&cfg.cvm.guest_agent_api)?;
     }
+    if let Some(ticket) = &manifest.launch_ticket {
+        sys_config["launch_ticket"] = ticket.as_str().into();
+    }
     // No attestation trust anchor is ever written here. Simulated deployments
     // receive only the development seed through `.tee-simulator.json`; the
     // in-guest simulator derives the matching roots itself and publishes them
@@ -2222,7 +2228,12 @@ fn make_vm_config(
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
-    let is_tdx = platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee;
+    // A simulated TDX guest gets the vm_config of a TDX guest, so the simulator
+    // can derive its measurements from the same lite measurement document. The
+    // lite ACPI measurement does not cover swtpm, so a simulated guest with one
+    // keeps the placeholder measurements.
+    let is_tdx = (platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee)
+        || (manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackTdx) && !manifest.swtpm);
     let is_gcp_tdx = manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackGcpTdx);
     let is_aws_nitro_tpm =
         manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAwsNitroTpm);
@@ -3675,6 +3686,7 @@ mod tests {
             volumes: vec![],
             disk_prealloc: DiskPrealloc::Off,
             annotations: Default::default(),
+            launch_ticket: None,
         }
     }
 
@@ -3890,6 +3902,32 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn simulated_tdx_gets_the_vm_config_of_a_tdx_guest() -> Result<()> {
+        let mut config = test_tdx_config()?;
+        let mut manifest = test_manifest(2048);
+        manifest.no_tee = true;
+        manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackTdx);
+        for platform in [CvmPlatform::Tdx, CvmPlatform::AmdSevSnp] {
+            config.cvm.platform = Some(platform);
+            let vm_config =
+                make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+            assert_eq!(vm_config["tdx_attestation_variant"], "lite");
+            assert!(vm_config.get("tdx_measurement").is_some());
+        }
+
+        config.cvm.platform = Some(CvmPlatform::Tdx);
+        manifest.swtpm = true;
+        let vm_config = make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+        assert!(vm_config.get("tdx_measurement").is_none());
+
+        manifest.swtpm = false;
+        manifest.simulated_tee = None;
+        let vm_config = make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+        assert!(vm_config.get("tdx_measurement").is_none());
+        Ok(())
+    }
+
     /// 1 GiB used to fall back to legacy: it is below 3 GiB and not the 2 GiB
     /// exemption. That heuristic existed for images whose OVMF leaves the setup
     /// header for QEMU to rewrite, which the build system no longer produces.
@@ -4052,6 +4090,7 @@ mod tests {
             volumes: vec![],
             disk_prealloc: DiskPrealloc::Off,
             annotations: Default::default(),
+            launch_ticket: Some("t".repeat(32)),
         };
 
         let mr_config = MrConfigV3::new(
@@ -4113,6 +4152,12 @@ mod tests {
                 .as_str()
                 .context("vm_config must be a string")?,
         )?;
+        // The ticket reaches the guest, but never vm_config, which attestations embed.
+        assert_eq!(sys_config["launch_ticket"], "t".repeat(32));
+        assert!(!sys_config["vm_config"]
+            .as_str()
+            .unwrap()
+            .contains(&"t".repeat(32)));
         let measurement_document = vm_config["sev_snp_measurement"]
             .as_str()
             .context("sev_snp_measurement must be a string")?;

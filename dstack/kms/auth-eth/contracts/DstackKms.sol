@@ -9,14 +9,18 @@ pragma solidity ^0.8.24;
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
+import "./TeeVariantPolicy.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -89,7 +93,34 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     mapping(uint256 => mapping(bytes32 => bool)) private _kmsDeviceIdsByRoot;
     mapping(uint256 => mapping(bytes32 => bool)) private _osImagesByRoot;
 
+    // The TEE platforms KMS instances and apps may run on.
+    TeeVariantPolicy.Policy private _teeVariants;
+
+    /// @notice Whether a KMS instance must present an allowed launch ticket to
+    /// receive the root keys, at every root epoch.
+    bool public requireKmsLaunchTicket;
+    // Allowed KMS launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket).
+    EnumerableSet.Bytes32Set private _kmsLaunchTickets;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
+
+    error InvalidEpochCaPubkey();
+    error InvalidEpochK256Pubkey();
+    error EmptyEpochEvidenceUrl();
+    error Epoch0KeysDifferFromKmsInfo();
+    error InvalidRootEpochActivation();
+    error RootEpochChainHashMismatch();
+    error NotPendingRootEpoch();
+    error NoRootEpochRegistered();
+    error UnknownRootEpoch();
+    error InvalidAppId();
+    error InvalidImplementationAddress();
+    error AppImplementationNotSet();
+    error InvalidOwnerAddress();
+    error InvalidRootEpochRange();
+    error AppNotRegistered();
+    error AppNotDeployed();
+    error InvalidLaunchTicketHash();
 
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
@@ -104,6 +135,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event OsImageHashAdded(bytes32 osImageHash);
     event OsImageHashRemoved(bytes32 osImageHash);
     event GatewayAppIdSet(string gatewayAppId);
+    event AllowAnyTeeVariantSet(bool allowAny);
+    event AllowedTeeVariantsSet(string[] teeVariants);
+    event RequireKmsLaunchTicketSet(bool required);
+    event KmsLaunchTicketAdded(bytes32 indexed ticketHash, string label);
+    event KmsLaunchTicketRemoved(bytes32 indexed ticketHash);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
     event RootEpochRegistered(
@@ -132,7 +168,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (_appImplementation != address(0)) {
             appImplementation = _appImplementation;
             emit AppImplementationSet(_appImplementation);
-            _emitPolicy("app-implementation", bytes32(uint256(uint160(_appImplementation))), true);
+            _emitPolicy(keccak256("app-implementation"), bytes32(uint256(uint160(_appImplementation))), true);
         }
     }
 
@@ -155,11 +191,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
-        _emitPolicy("implementation-upgrade", bytes32(uint256(uint160(newImplementation))), true);
+        _emitPolicy(keccak256("implementation-upgrade"), bytes32(uint256(uint160(newImplementation))), true);
     }
 
-    function _emitPolicy(string memory policy, bytes32 value, bool enabled) internal {
-        emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
+    function _emitPolicy(bytes32 policy, bytes32 value, bool enabled) internal {
+        emit PolicyChanged(msg.sender, policy, value, enabled);
     }
 
     // Register the root public keys of the next KMS root epoch, with where to
@@ -177,24 +213,23 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         onlyOwner
         returns (uint256 epoch)
     {
-        require(caPubkey.length == 91 && bytes27(caPubkey[:27]) == P256_SPKI_PREFIX, "Invalid epoch CA public key");
-        require(
-            k256Pubkey.length == 33 && (k256Pubkey[0] == 0x02 || k256Pubkey[0] == 0x03), "Invalid epoch k256 public key"
-        );
-        require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
+        if (caPubkey.length != 91 || bytes27(caPubkey[:27]) != P256_SPKI_PREFIX) revert InvalidEpochCaPubkey();
+        if (k256Pubkey.length != 33 || (k256Pubkey[0] != 0x02 && k256Pubkey[0] != 0x03)) {
+            revert InvalidEpochK256Pubkey();
+        }
+        if (bytes(evidenceUrl).length == 0) revert EmptyEpochEvidenceUrl();
         epoch = _rootEpochs.length;
         if (epoch == 0 && kmsInfo.k256Pubkey.length > 0) {
-            require(
-                keccak256(caPubkey) == keccak256(kmsInfo.caPubkey)
-                    && keccak256(k256Pubkey) == keccak256(kmsInfo.k256Pubkey),
-                "Epoch 0 keys differ from kmsInfo"
-            );
+            if (
+                keccak256(caPubkey) != keccak256(kmsInfo.caPubkey)
+                    || keccak256(k256Pubkey) != keccak256(kmsInfo.k256Pubkey)
+            ) revert Epoch0KeysDifferFromKmsInfo();
         }
         bytes32 previous = epoch == 0 ? bytes32(0) : _rootEpochs[epoch - 1].chainHash;
         bytes32 chainHash = keccak256(abi.encodePacked(previous, keccak256(caPubkey), keccak256(k256Pubkey)));
         _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, evidenceUrl, chainHash, _rootEpochRegistrations++));
         emit RootEpochRegistered(epoch, chainHash, caPubkey, k256Pubkey, evidenceUrl);
-        _emitPolicy("root-epoch", chainHash, true);
+        _emitPolicy(keccak256("root-epoch"), chainHash, true);
         if (epoch == 0) {
             _useRootEpoch(0);
         }
@@ -203,11 +238,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Make the next registered root epoch the one KMS instances serve. Bind
     // activation to its chain hash in case a pending epoch has been replaced.
     function activateRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
-        require(epoch == _currentRootEpoch + 1 && epoch < _rootEpochs.length, "Invalid root epoch activation");
-        require(_rootEpochs[epoch].chainHash == chainHash, "root epoch chain hash mismatch");
+        if (epoch != _currentRootEpoch + 1 || epoch >= _rootEpochs.length) revert InvalidRootEpochActivation();
+        if (_rootEpochs[epoch].chainHash != chainHash) revert RootEpochChainHashMismatch();
         _currentRootEpoch = epoch;
         _useRootEpoch(epoch);
-        _emitPolicy("root-epoch-activated", bytes32(epoch), true);
+        _emitPolicy(keccak256("root-epoch-activated"), bytes32(epoch), true);
     }
 
     // Point kmsInfo at the keys of the now current epoch, for readers of the
@@ -226,8 +261,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Point an epoch at a new copy of its evidence, for when the old location
     // goes away. The evidence proves itself, so only its location changes.
     function setRootEpochEvidenceUrl(uint256 epoch, string calldata evidenceUrl) external onlyOwner {
-        require(epoch < _rootEpochs.length, "Unknown root epoch");
-        require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
+        if (epoch >= _rootEpochs.length) revert UnknownRootEpoch();
+        if (bytes(evidenceUrl).length == 0) revert EmptyEpochEvidenceUrl();
         _rootEpochs[epoch].evidenceUrl = evidenceUrl;
         emit RootEpochEvidenceUrlSet(epoch, evidenceUrl);
     }
@@ -239,11 +274,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // next registration of the number starts with empty rows, whatever its keys,
     // which must be prepared again before activation.
     function popRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
-        require(epoch + 1 == _rootEpochs.length && epoch > _currentRootEpoch, "Not the pending root epoch");
-        require(_rootEpochs[epoch].chainHash == chainHash, "Root epoch chain hash mismatch");
+        if (epoch + 1 != _rootEpochs.length || epoch <= _currentRootEpoch) revert NotPendingRootEpoch();
+        if (_rootEpochs[epoch].chainHash != chainHash) revert RootEpochChainHashMismatch();
         _rootEpochs.pop();
         emit RootEpochPopped(epoch, chainHash);
-        _emitPolicy("root-epoch", chainHash, false);
+        _emitPolicy(keccak256("root-epoch"), chainHash, false);
     }
 
     function rootEpochCount() external view returns (uint256) {
@@ -252,7 +287,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     // The root epoch KMS instances serve and its chain hash
     function currentRootEpoch() external view returns (uint256 epoch, bytes32 chainHash) {
-        require(_rootEpochs.length > 0, "No root epoch registered");
+        if (_rootEpochs.length == 0) revert NoRootEpochRegistered();
         epoch = _currentRootEpoch;
         chainHash = _rootEpochs[epoch].chainHash;
     }
@@ -262,16 +297,65 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         view
         returns (bytes memory caPubkey, bytes memory k256Pubkey, string memory evidenceUrl, bytes32 chainHash)
     {
-        require(epoch < _rootEpochs.length, "Unknown root epoch");
+        if (epoch >= _rootEpochs.length) revert UnknownRootEpoch();
         RootEpoch storage keys = _rootEpochs[epoch];
         return (keys.caPubkey, keys.k256Pubkey, keys.evidenceUrl, keys.chainHash);
+    }
+
+    /// @notice Whether KMS instances and apps may run on any TEE platform, rather than only on
+    /// {allowedTeeVariants}. Covers every root epoch.
+    function allowAnyTeeVariant() public view returns (bool) {
+        return !_teeVariants.restricted;
+    }
+
+    /// @notice The TEE platforms, named as the KMS reports them, KMS instances and apps may run on
+    /// unless {allowAnyTeeVariant}.
+    function allowedTeeVariants() external view returns (string[] memory) {
+        return TeeVariantPolicy.allowedNames(_teeVariants);
+    }
+
+    function setAllowAnyTeeVariant(bool allowed) external onlyOwner {
+        _teeVariants.restricted = !allowed;
+        emit AllowAnyTeeVariantSet(allowed);
+        _emitPolicy(keccak256("allow-any-tee-variant"), bytes32(0), allowed);
+    }
+
+    function setAllowedTeeVariants(string[] calldata teeVariants) external onlyOwner {
+        uint64 mask = TeeVariantPolicy.setAllowed(_teeVariants, teeVariants);
+        emit AllowedTeeVariantsSet(teeVariants);
+        _emitPolicy(keccak256("allowed-tee-variants"), bytes32(uint256(mask)), true);
+    }
+
+    function setRequireKmsLaunchTicket(bool required) external onlyOwner {
+        requireKmsLaunchTicket = required;
+        emit RequireKmsLaunchTicketSet(required);
+        _emitPolicy(keccak256("require-kms-launch-ticket"), bytes32(0), required);
+    }
+
+    /// @notice Allow a KMS launch ticket. The label is public and only logged.
+    function addKmsLaunchTicket(bytes32 ticketHash, string calldata label) external onlyOwner {
+        if (ticketHash == bytes32(0)) revert InvalidLaunchTicketHash();
+        _kmsLaunchTickets.add(ticketHash);
+        emit KmsLaunchTicketAdded(ticketHash, label);
+        _emitPolicy(keccak256("kms-launch-ticket"), ticketHash, true);
+    }
+
+    function removeKmsLaunchTicket(bytes32 ticketHash) external onlyOwner {
+        _kmsLaunchTickets.remove(ticketHash);
+        emit KmsLaunchTicketRemoved(ticketHash);
+        _emitPolicy(keccak256("kms-launch-ticket"), ticketHash, false);
+    }
+
+    /// @notice The allowed KMS launch tickets; their labels are in {KmsLaunchTicketAdded}.
+    function kmsLaunchTickets() external view returns (bytes32[] memory) {
+        return _kmsLaunchTickets.values();
     }
 
     // Function to set trusted Gateway App ID
     function setGatewayAppId(string memory appId) external onlyOwner {
         gatewayAppId = appId;
         emit GatewayAppIdSet(appId);
-        _emitPolicy("gateway-app-id", keccak256(bytes(appId)), true);
+        _emitPolicy(keccak256("gateway-app-id"), keccak256(bytes(appId)), true);
     }
 
     /// @notice Register an app address as known to this KMS.
@@ -284,18 +368,18 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     ///      and by the registered app's own {IAppAuth-isAppAllowed}, so
     ///      registration alone confers no privilege.
     function registerApp(address appId) public {
-        require(appId != address(0), "Invalid app ID");
+        if (appId == address(0)) revert InvalidAppId();
         registeredApps[appId] = true;
         emit AppRegistered(appId);
-        _emitPolicy("registered-app", bytes32(uint256(uint160(appId))), true);
+        _emitPolicy(keccak256("registered-app"), bytes32(uint256(uint160(appId))), true);
     }
 
     // Function to set DstackApp implementation contract address
     function setAppImplementation(address _implementation) external onlyOwner {
-        require(_implementation != address(0), "Invalid implementation address");
+        if (_implementation == address(0)) revert InvalidImplementationAddress();
         appImplementation = _implementation;
         emit AppImplementationSet(_implementation);
-        _emitPolicy("app-implementation", bytes32(uint256(uint160(_implementation))), true);
+        _emitPolicy(keccak256("app-implementation"), bytes32(uint256(uint160(_implementation))), true);
     }
 
     // Factory method: Deploy and register DstackApp in single transaction
@@ -310,8 +394,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         public
         returns (address appId)
     {
-        require(appImplementation != address(0), "DstackApp implementation not set");
-        require(initialOwner != address(0), "Invalid owner address");
+        if (appImplementation == address(0)) revert AppImplementationNotSet();
+        if (initialOwner == address(0)) revert InvalidOwnerAddress();
 
         bytes memory initData = abi.encodeWithSelector(
             bytes4(keccak256("initialize(address,bool,bool,bool,bytes32,bytes32)")),
@@ -357,16 +441,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return epoch < _rootEpochs.length && _kmsAggregatedMrsByRoot[_rootEpochs[epoch].registration][mrAggregated];
     }
 
-    function addKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
-        _setKmsAggregatedMr(epoch, mrAggregated, true);
-    }
-
     function addKmsAggregatedMrAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 mrAggregated) external onlyOwner {
         _setAtEpochs(_setKmsAggregatedMr, fromEpoch, toEpoch, mrAggregated, true);
-    }
-
-    function removeKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
-        _setKmsAggregatedMr(epoch, mrAggregated, false);
     }
 
     function removeKmsAggregatedMrAtEpochs(
@@ -381,12 +457,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     function _setKmsAggregatedMr(uint256 epoch, bytes32 mrAggregated, bool allowed) private {
-        require(epoch <= _latestRootEpoch(), "Unknown root epoch");
+        if (epoch > _latestRootEpoch()) revert UnknownRootEpoch();
         if (epoch == 0) {
             kmsAllowedAggregatedMrs[mrAggregated] = allowed;
             if (allowed) emit KmsAggregatedMrAdded(mrAggregated);
             else emit KmsAggregatedMrRemoved(mrAggregated);
-            _emitPolicy("kms-aggregated-mr", mrAggregated, allowed);
+            _emitPolicy(keccak256("kms-aggregated-mr"), mrAggregated, allowed);
         } else {
             _kmsAggregatedMrsByRoot[_rootEpochs[epoch].registration][mrAggregated] = allowed;
         }
@@ -398,16 +474,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return epoch < _rootEpochs.length && _kmsDeviceIdsByRoot[_rootEpochs[epoch].registration][deviceId];
     }
 
-    function addKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
-        _setKmsDevice(epoch, deviceId, true);
-    }
-
     function addKmsDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
         _setAtEpochs(_setKmsDevice, fromEpoch, toEpoch, deviceId, true);
-    }
-
-    function removeKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
-        _setKmsDevice(epoch, deviceId, false);
     }
 
     function removeKmsDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
@@ -415,12 +483,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     function _setKmsDevice(uint256 epoch, bytes32 deviceId, bool allowed) private {
-        require(epoch <= _latestRootEpoch(), "Unknown root epoch");
+        if (epoch > _latestRootEpoch()) revert UnknownRootEpoch();
         if (epoch == 0) {
             kmsAllowedDeviceIds[deviceId] = allowed;
             if (allowed) emit KmsDeviceAdded(deviceId);
             else emit KmsDeviceRemoved(deviceId);
-            _emitPolicy("kms-device", deviceId, allowed);
+            _emitPolicy(keccak256("kms-device"), deviceId, allowed);
         } else {
             _kmsDeviceIdsByRoot[_rootEpochs[epoch].registration][deviceId] = allowed;
         }
@@ -432,16 +500,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return epoch < _rootEpochs.length && _osImagesByRoot[_rootEpochs[epoch].registration][osImageHash];
     }
 
-    function addOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
-        _setOsImageHash(epoch, osImageHash, true);
-    }
-
     function addOsImageHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 osImageHash) external onlyOwner {
         _setAtEpochs(_setOsImageHash, fromEpoch, toEpoch, osImageHash, true);
-    }
-
-    function removeOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
-        _setOsImageHash(epoch, osImageHash, false);
     }
 
     function removeOsImageHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 osImageHash) external onlyOwner {
@@ -449,12 +509,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     function _setOsImageHash(uint256 epoch, bytes32 osImageHash, bool allowed) private {
-        require(epoch <= _latestRootEpoch(), "Unknown root epoch");
+        if (epoch > _latestRootEpoch()) revert UnknownRootEpoch();
         if (epoch == 0) {
             allowedOsImages[osImageHash] = allowed;
             if (allowed) emit OsImageHashAdded(osImageHash);
             else emit OsImageHashRemoved(osImageHash);
-            _emitPolicy("os-image", osImageHash, allowed);
+            _emitPolicy(keccak256("os-image"), osImageHash, allowed);
         } else {
             _osImagesByRoot[_rootEpochs[epoch].registration][osImageHash] = allowed;
         }
@@ -473,7 +533,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     )
         private
     {
-        require(fromEpoch <= toEpoch, "Invalid root epoch range");
+        if (fromEpoch > toEpoch) revert InvalidRootEpochRange();
         for (uint256 epoch = fromEpoch; epoch <= toEpoch; ++epoch) {
             setter(epoch, value, allowed);
         }
@@ -486,8 +546,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     /// Reverts for an unregistered or undeployed app rather than reporting epoch
     /// zero for it. Legacy policies have epoch zero; an advertised getter must succeed.
     function currentAppEpoch(address appId) external view returns (uint256) {
-        require(registeredApps[appId], "App not registered");
-        require(appId.code.length != 0, "App not deployed or invalid address");
+        if (!registeredApps[appId]) revert AppNotRegistered();
+        if (appId.code.length == 0) revert AppNotDeployed();
         return _appEpoch(appId);
     }
 
@@ -550,11 +610,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        return _checkAppDeployment(request.appInfo, selectedRootEpoch);
+        return _checkAppDeployment(
+            request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), selectedRootEpoch
+        );
     }
 
     function _checkAppDeployment(
         AppInfo calldata bootInfo,
+        bool teeVariantAllowed,
         uint256 selectedRootEpoch
     )
         private
@@ -564,6 +627,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (!registeredApps[bootInfo.appId]) return "App not registered";
         if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) return "OS image is not allowed";
         if (!isContract(bootInfo.appId)) return "App not deployed or invalid address";
+        if (!teeVariantAllowed) return "TEE variant not allowed";
         return "";
     }
 
@@ -575,6 +639,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         _fillRootEpochs(result);
         if (!AuthorizationOperation.isKms(request.operation)) {
             result.rejectionReason = "Invalid authorization operation";
+            return result;
+        }
+        // The source KMS checks the joining instance's ticket before handing it
+        // the root keys. Only this import hands them out; an instance that
+        // bootstraps or serves without them holds no registered root.
+        if (
+            request.operation == AuthorizationOperation.KMS_IMPORT_KEYS && requireKmsLaunchTicket
+                && !_kmsLaunchTickets.contains(request.launchTicketHash)
+        ) {
+            result.rejectionReason = "Invalid launch ticket";
             return result;
         }
         if (_rootEpochs.length == 0 && request.operation != AuthorizationOperation.KMS_BOOTSTRAP) {
@@ -600,19 +674,31 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        (result.authorized, result.rejectionReason) = _kmsPolicy(request.appInfo, selectedRootEpoch);
+        (result.authorized, result.rejectionReason) =
+            _kmsPolicy(request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), selectedRootEpoch);
     }
 
     // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
     // once a later root epoch is current.
     function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+        // Legacy callers present no launch ticket and cannot say which operation they authorize.
+        if (requireKmsLaunchTicket) return (false, "Invalid launch ticket");
         if (_currentRootEpoch != 0) {
             return (false, "Root epoch requires epoch-aware authorization");
         }
-        return _kmsPolicy(bootInfo, 0);
+        // Legacy callers report no platform, so only an unrestricted policy admits them.
+        return _kmsPolicy(bootInfo, allowAnyTeeVariant(), 0);
     }
 
-    function _kmsPolicy(AppInfo memory bootInfo, uint256 selectedRootEpoch) private view returns (bool, string memory) {
+    function _kmsPolicy(
+        AppInfo memory bootInfo,
+        bool teeVariantAllowed,
+        uint256 selectedRootEpoch
+    )
+        private
+        view
+        returns (bool, string memory)
+    {
         // Check if the TCB status is up to date
         if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
@@ -633,6 +719,10 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return (false, "KMS is not allowed to boot on this device");
         }
 
+        if (!teeVariantAllowed) {
+            return (false, "TEE variant not allowed");
+        }
+
         return (true, "");
     }
 
@@ -650,7 +740,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (_appEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
-        string memory rejection = _checkAppDeployment(bootInfo, 0);
+        // Legacy callers report no platform, so only an unrestricted policy admits them.
+        string memory rejection = _checkAppDeployment(bootInfo, allowAnyTeeVariant(), 0);
         if (bytes(rejection).length != 0) return (false, rejection);
         // Call the app's isAppAllowed function. The tuple is forwarded as the
         // function's return value; the slither detector trips on the named
@@ -660,7 +751,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[44] private __gap;
+    uint256[40] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

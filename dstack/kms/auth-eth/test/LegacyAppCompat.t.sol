@@ -37,7 +37,7 @@ contract LegacyAppCompatTest is Test {
             Upgrades.deployUUPSProxy("DstackKms.sol", abi.encodeCall(DstackKms.initialize, (owner, address(0))))
         );
         kms.registerRootEpoch(key(91, 0xa0), key(33, 0xb0), "ipfs://0");
-        kms.addOsImageHashAtEpoch(0, IMAGE);
+        kms.addOsImageHashAtEpochs(0, 0, IMAGE);
         vm.stopPrank();
     }
 
@@ -76,14 +76,19 @@ contract LegacyAppCompatTest is Test {
         info.tcbStatus = "UpToDate";
         info.advisoryIds = new string[](0);
         return AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(appSet, appEpoch), OptionalUint256(false, 0)
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(appSet, appEpoch),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
         );
     }
 
     function rotateRoot() internal {
         vm.startPrank(owner);
         kms.registerRootEpoch(key(91, 0xa1), key(33, 0xb1), "ipfs://1");
-        kms.addOsImageHashAtEpoch(1, IMAGE);
+        kms.addOsImageHashAtEpochs(1, 1, IMAGE);
         (,,, bytes32 hash) = kms.rootEpoch(1);
         kms.activateRootEpoch(1, hash);
         vm.stopPrank();
@@ -115,6 +120,22 @@ contract LegacyAppCompatTest is Test {
             assertEq(result.currentRootEpoch, 1);
             assertEq(result.currentAppEpoch, 0);
             assertFalse(kms.authorizeApp(request(app, true, 1)).authorized);
+        }
+    }
+
+    function test_RestrictedKmsGatesLegacyAppsByTeeVariant() public {
+        string[] memory tdx = new string[](1);
+        tdx[0] = "dstack-tdx";
+        vm.startPrank(owner);
+        kms.setAllowedTeeVariants(tdx);
+        kms.setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+        for (uint256 release; release < appReleases.length; ++release) {
+            address app = deployLegacyApp(release);
+            assertTrue(kms.authorizeApp(request(app, false, 0)).authorized);
+            AuthorizationRequest memory snp = request(app, false, 0);
+            snp.teeVariant = "dstack-amd-sev-snp";
+            assertEq(kms.authorizeApp(snp).rejectionReason, "TEE variant not allowed");
         }
     }
 
@@ -171,7 +192,13 @@ contract LegacyAppCompatTest is Test {
         assertEq(upgraded.currentAppEpoch(), 0);
         assertTrue(upgraded.allowedComposeHashesAtEpoch(0, COMPOSE));
         assertTrue(upgraded.allowedDeviceIdsAtEpoch(0, DEVICE));
-        assertEq(upgraded.allowAnyDeviceAtEpoch(0), anyDevice);
+        assertEq(upgraded.allowAnyDevice(), anyDevice);
+        // Upgraded policies allow any TEE platform.
+        assertTrue(upgraded.allowAnyTeeVariant());
+        assertEq(upgraded.allowedTeeVariants().length, 0);
+        AuthorizationRequest memory snp = request(app, true, 0);
+        snp.teeVariant = "dstack-amd-sev-snp";
+        assertTrue(kms.authorizeApp(snp).authorized);
         assertFalse(upgraded.allowedComposeHashesAtEpoch(1, COMPOSE));
         assertTrue(kms.authorizeApp(request(app, true, 0)).authorized);
 
@@ -179,6 +206,13 @@ contract LegacyAppCompatTest is Test {
         vm.prank(appOwner);
         vm.expectRevert();
         ILegacyApp(app).addComposeHash(bytes32(uint256(0xc1)));
+        // The upgraded allowAnyDevice covers later epochs too: row 1 lists no device.
+        vm.startPrank(appOwner);
+        upgraded.advanceAppEpoch(0);
+        upgraded.addComposeHashAtEpoch(1, COMPOSE);
+        vm.stopPrank();
+        assertEq(kms.authorizeApp(request(app, true, 1)).authorized, anyDevice);
+
         vm.prank(appOwner);
         upgraded.removeComposeHashAtEpochs(0, 1, COMPOSE);
         assertFalse(kms.authorizeApp(request(app, true, 0)).authorized);

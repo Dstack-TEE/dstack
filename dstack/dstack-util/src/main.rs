@@ -388,6 +388,10 @@ struct GetKeysArgs {
     /// If not provided, TLS certificate verification is skipped for the initial connection.
     #[arg(long)]
     root_ca: Option<PathBuf>,
+
+    /// File holding the launch ticket to present, for apps that require one
+    #[arg(long)]
+    launch_ticket_file: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -668,6 +672,13 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
     };
 
     let app_id = decode_app_id(args.app_id.as_deref())?;
+    let launch_ticket = match &args.launch_ticket_file {
+        Some(path) => fs::read_to_string(path)
+            .context("failed to read the launch ticket")?
+            .trim()
+            .to_string(),
+        None => String::new(),
+    };
     let cert_pair = generate_self_signed_ra_cert(app_id).context("Failed to generate RA cert")?;
     let response = cert_client::request_app_keys(
         kms_url.clone(),
@@ -676,6 +687,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             api_version: 1,
             vm_config: String::new(),
             root_epoch: None,
+            launch_ticket,
         },
         cert_pair,
         get_keys_verifier()?,
@@ -1177,6 +1189,9 @@ fn gen_app_keys_from_seed(
         KeyProviderKind::Tpm => KeyProvider::Tpm {
             key: key.serialize_pem(),
             pubkey: key.public_key_der(),
+        },
+        KeyProviderKind::SevSnp => KeyProvider::SevSnp {
+            key: key.serialize_pem(),
         },
         KeyProviderKind::Kms => {
             anyhow::bail!("KMS keys must be fetched from the KMS server")

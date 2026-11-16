@@ -33,7 +33,7 @@ For multi-node production, Gateway TLS, custom domains, or on-chain governance, 
 - Source and build cache under `/var/cache/dstack`.
 - Runtime sockets and process state under `/run/dstack`.
 - A localhost-only VMM dashboard on port `9080`.
-- A local `dstack-auth` webhook and `dstack-vmm` systemd unit.
+- A local `dstack-auth` webhook (development, testing and evaluation only) and `dstack-vmm` systemd unit.
 - A single KMS CVM unless you pass `--no-kms`.
 - A direct host port mapping for your app.
 

@@ -46,20 +46,21 @@ def main():
     o = dict(a.split("=", 1) for a in sys.argv[2:] if "=" in a)
 
     cert, key = f"{d}/certs/cert.pem", f"{d}/certs/key.pem"
-    cfg = f"""workers = 2
+    cfg = f"""[listeners.default]
+workers = 2
+[listeners.guest]
 address = "127.0.0.1:{o["rpc_port"]}"
-[tls]
+[listeners.guest.tls]
 key = "{key}"
 certs = "{cert}"
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "{cert}"
 [core]
 rpc_domain = ""
 set_ulimit = false
-[core.debug]
-insecure_localhost_backend = true
-insecure_enable_debug_rpc = false
-[core.admin]
+[listeners.debug]
+enabled = false
+[listeners.admin]
 enabled = true
 address = "127.0.0.1:{o["admin_port"]}"
 auth_token = "{o["admin_token"]}"
@@ -78,6 +79,7 @@ config_path = "{d}/wg.conf"
 interface = "{o["wg_iface"]}"
 endpoint = "10.90.0.1:{o["wg_port"]}"
 [core.proxy]
+insecure_localhost_backend = true
 listen_addr = "127.0.0.1"
 listen_port = {o["proxy_port"]}
 workers = {o.get("workers", "2")}

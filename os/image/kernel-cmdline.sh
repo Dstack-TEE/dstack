@@ -30,6 +30,20 @@
 # Intel's confidential-computing guest hardening names early PCI code as
 # something to disable, so it stays off.
 
+# `systemd.gpt_auto=0` disables systemd-gpt-auto-generator, which reads the root
+# disk's GPT and mounts or activates partitions found there. That table is
+# host-controlled and unmeasured, so without this a partition the host appends
+# (swap, /var, /home, ...) is acted on inside the guest. The rootfs is located
+# by PARTLABEL and verified by dm-verity in the initramfs, so nothing we rely on
+# depends on the generator. Every systemd since v252 parses the flag the same
+# way, unlike `systemd.image_policy=` which older versions ignore and v254/v255
+# mishandle.
+#
+# `systemd.import_credentials=no` stops PID1 importing system credentials from
+# SMBIOS and qemu fw_cfg, both host-controlled and unmeasured. Many units
+# consume such credentials (sysusers, tmpfiles, udev rules, networkd, ...), so
+# this closes that injection path at the source instead of masking each consumer.
+
 # Emit the guest kernel command line.
 #   $1 dm-verity root hash
 #   $2 rootfs data size in bytes
@@ -39,5 +53,6 @@ dstack_kernel_cmdline() {
     echo "console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0" \
          "mce=off oops=panic pci=noearly random.trust_cpu=y" \
          "random.trust_bootloader=n tsc=reliable no-kvmclock" \
+         "systemd.gpt_auto=0 systemd.import_credentials=no" \
          "dstack.rootfs_hash=$root_hash dstack.rootfs_size=$data_size"
 }

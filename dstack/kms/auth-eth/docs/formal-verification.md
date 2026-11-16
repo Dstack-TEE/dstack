@@ -140,20 +140,24 @@ and admits one app per epoch, then one symbolic owner write where noted):
 - [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — a write never
       changes an authorization decision at an epoch outside the rows it names
       (one epoch, or a symbolic range), including epoch 0's legacy fields.
+- [x] `check_TeeVariantPolicy_NarrowsDecision` — once the TEE platform
+      policy is restricted, `authorizeApp` allows exactly when it would
+      unrestricted and the request names a listed platform.
 - [x] `check_AuthorizeApp_MatchesPolicy` — for both app operations,
       `authorizeApp` allows exactly when the epoch is active, the TCB
-      requirement holds, and that epoch admits the compose hash and device.
+      requirement holds, that epoch admits the compose hash, and the device
+      is allowed by `allowAnyDevice` or that epoch's device row.
 - [x] `check_PolicyWrite_TakesEffect` — each `*AtEpoch` setter on an epoch
       up to the next one, and each `*AtEpochs` setter on every row of a range
       ending at most there, either sets the value it was given or reverts on
       a zero ID.
 - [x] `check_FullRangeRemoval_RevokesAtEveryAppEpoch` — after removing a
-      compose hash, or a device and the any-device flag, from rows 0 through
-      the next epoch, no app epoch authorizes it, for either app operation.
+      compose hash from rows 0 through the next epoch, or a device from those
+      rows and clearing `allowAnyDevice`, no app epoch authorizes it, for
+      either app operation.
 
 Mutation-tested: requiring both the any-device flag and a listed device,
-ignoring the value of a per-epoch `allowAnyDevice` write, dropping a setter's
-epoch bound or widening it past the next epoch, aliasing epoch 1 onto the
+dropping a setter's epoch bound or widening it past the next epoch, aliasing epoch 1 onto the
 legacy fields, letting `isAppAllowed` decide at a nonzero epoch or read the
 prepared next row, a permissionless
 `advanceAppEpoch` and dropping its stale-transaction guard each produce a

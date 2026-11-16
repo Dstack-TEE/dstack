@@ -51,6 +51,37 @@ KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:AddKmsDevice --broadcast --rpc-url $RPC_URL
 ```
 
+#### Set KMS TEE Variants
+`TEE_VARIANTS` is `any`, or the comma-separated platform names, as the KMS reports
+them, that alone are allowed: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`,
+`dstack-amd-sev-snp` or `dstack-aws-nitro-tpm` (see `contracts/TeeVariantPolicy.sol`).
+It applies to KMS instances and every app at every root epoch. A restricted policy
+refuses the legacy `isKmsAllowed`/`isAppAllowed`, whose callers report no platform.
+```bash
+KMS_CONTRACT_ADDR=0x... TEE_VARIANTS=dstack-tdx \
+forge script script/Manage.s.sol:SetKmsTeeVariants --broadcast --rpc-url $RPC_URL
+```
+
+#### Require KMS Launch Tickets
+A KMS instance must then present an allowed launch ticket to import the root keys.
+Upgrade every KMS instance to 0.6.4 first: older ones authorize serving through
+`isKmsAllowed`, which then refuses, so they stop serving every app.
+```bash
+KMS_CONTRACT_ADDR=0x... REQUIRE_LAUNCH_TICKET=true \
+forge script script/Manage.s.sol:RequireKmsLaunchTicket --broadcast --rpc-url $RPC_URL
+```
+
+#### Add or Remove a KMS Launch Ticket
+`LAUNCH_TICKET_HASH` is `sha256("dstack-launch-ticket/v1:" || ticket)`; the
+label is public. Remove the ticket once the instance has joined.
+```bash
+LAUNCH_TICKET_HASH=0x$(printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum | cut -d' ' -f1)
+KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH LAUNCH_TICKET_LABEL=kms-node-2 \
+forge script script/Manage.s.sol:AddKmsLaunchTicket --broadcast --rpc-url $RPC_URL
+KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH \
+forge script script/Manage.s.sol:RemoveKmsLaunchTicket --broadcast --rpc-url $RPC_URL
+```
+
 #### Set Gateway App ID
 ```bash
 KMS_CONTRACT_ADDR=0x... GATEWAY_APP_ID="my-gateway" \
@@ -166,8 +197,35 @@ forge script script/Manage.s.sol:AddDevice --broadcast --rpc-url $RPC_URL
 
 #### Set Allow Any Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 ALLOW_ANY_DEVICE=true \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... ALLOW_ANY_DEVICE=true \
 forge script script/Manage.s.sol:SetAllowAnyDevice --broadcast --rpc-url $RPC_URL
+```
+
+#### Set TEE Variants
+Same `TEE_VARIANTS` values as for the KMS; applies to every app epoch.
+```bash
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... TEE_VARIANTS=dstack-tdx,dstack-gcp-tdx \
+forge script script/Manage.s.sol:SetTeeVariants --broadcast --rpc-url $RPC_URL
+```
+
+#### Require Launch Tickets
+The app must then present an allowed launch ticket, at every app epoch. For a new
+app, deploy it without `INITIAL_COMPOSE_HASH`, require the ticket and add it, then
+add the compose hash: a key released in between cannot be taken back.
+```bash
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... REQUIRE_LAUNCH_TICKET=true \
+forge script script/Manage.s.sol:RequireLaunchTicket --broadcast --rpc-url $RPC_URL
+```
+
+#### Add or Remove a Launch Ticket
+`LAUNCH_TICKET_HASH` is `sha256("dstack-launch-ticket/v1:" || ticket)`; the label
+is public.
+```bash
+LAUNCH_TICKET_HASH=0x$(printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum | cut -d' ' -f1)
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH LAUNCH_TICKET_LABEL=prod \
+forge script script/Manage.s.sol:AddLaunchTicket --broadcast --rpc-url $RPC_URL
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH \
+forge script script/Manage.s.sol:RemoveLaunchTicket --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Compose Hash

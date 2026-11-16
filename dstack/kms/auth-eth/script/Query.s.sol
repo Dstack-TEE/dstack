@@ -21,6 +21,13 @@ abstract contract BaseQueryScript is Script {
     DstackKms public kms;
     DstackApp public app;
 
+    function logTeeVariants(bool any, string[] memory names) internal pure {
+        console.log("Allow Any TEE Variant:", any);
+        for (uint256 i = 0; i < names.length; ++i) {
+            console.log("  Allowed TEE variant:", names[i]);
+        }
+    }
+
     function setUp() public virtual {
         address kmsAddr = vm.envOr("KMS_CONTRACT_ADDR", address(0));
         if (kmsAddr != address(0)) {
@@ -202,6 +209,7 @@ contract GetKmsSettings is BaseQueryScript {
         console.log("Owner:", kms.owner());
         console.log("Gateway App ID:", kms.gatewayAppId());
         console.log("App Implementation:", kms.appImplementation());
+        logTeeVariants(kms.allowAnyTeeVariant(), kms.allowedTeeVariants());
 
         // Get KMS info
         (bytes memory k256Pubkey, bytes memory caPubkey, bytes memory quote, bytes memory eventlog) = kms.kmsInfo();
@@ -243,6 +251,7 @@ contract GetAppSettings is BaseQueryScript {
         console.log("Contract Address:", address(app));
         console.log("Owner:", app.owner());
         console.log("Allow Any Device:", app.allowAnyDevice());
+        logTeeVariants(app.allowAnyTeeVariant(), app.allowedTeeVariants());
 
         // Check implementation via storage
         bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;

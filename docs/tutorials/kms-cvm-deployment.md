@@ -156,13 +156,25 @@ volumes:
 configs:
   kms_config:
     content: |
-      [rpc]
+      [listeners.default.tls]
+      key = "/etc/kms/certs/rpc.key"
+      certs = "/etc/kms/certs/rpc.crt"
+
+      [listeners.guest]
       address = "0.0.0.0"
       port = 9100
 
-      [rpc.tls]
-      key = "/etc/kms/certs/rpc.key"
-      certs = "/etc/kms/certs/rpc.crt"
+      # Admin listener: serves the key handover to other KMS nodes, so a
+      # KMS requires it. Only the token's SHA-256 goes into the compose.
+      [listeners.admin]
+      enabled = true
+      address = "0.0.0.0"
+      port = 9101
+      auth_token_hash = "ADMIN_TOKEN_HASH"
+
+      [listeners.onboard]
+      address = "0.0.0.0"
+      port = 9100
 
       # No mutual-TLS section: client certificates are verified by the attestation
       # they carry, not by an issuer CA. Connections without a certificate are still
@@ -185,23 +197,9 @@ configs:
       [core.auth_api.webhook]
       url = "http://127.0.0.1:9200"
 
-      # Admin listener: serves the key handover to other KMS nodes, so a
-      # KMS requires it. Only the token's SHA-256 goes into the compose.
-      [core.admin]
-      enabled = true
-      address = "0.0.0.0"
-      port = 9101
-      auth_token_hash = "ADMIN_TOKEN_HASH"
-
-      [core.admin.tls]
-      key = "/etc/kms/certs/rpc.key"
-      certs = "/etc/kms/certs/rpc.crt"
-
       [core.onboard]
       enabled = true
       auto_bootstrap_domain = ""
-      address = "0.0.0.0"
-      port = 9100
 EOF
 ```
 
@@ -228,11 +226,12 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 
 | Section | Purpose |
 |---------|---------|
-| `[rpc]` | RPC server address and port (9100) |
-| `[rpc.tls]` | TLS certificate paths for HTTPS |
+| `[listeners.default.tls]` | TLS certificate paths for HTTPS, shared by the listeners |
+| `[listeners.guest]` | KMS RPC address and port (9100) |
+| `[listeners.admin]` | Admin listener on port 9101 with TLS; other KMS nodes onboard through it with the admin token. Without it (or `core.onboard.public_key_handover = true`) the KMS does not start |
+| `[listeners.onboard]` | Plain-HTTP onboarding page on port 9100, before the KMS has keys |
 | `[core.image]` | OS image verification — downloads images from `download.dstack.org` to compute expected TDX measurements |
 | `[core.auth_api]` | Authentication via auth-eth webhook on localhost:9200 |
-| `[core.admin]` | Admin listener on port 9101 with TLS; other KMS nodes onboard through it with the admin token. Without it (or `core.onboard.public_key_handover = true`) the KMS does not start |
 | `[core.onboard]` | Bootstrap settings — `auto_bootstrap_domain` is empty so KMS enters onboard mode for manual bootstrap |
 
 > **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. This ensures `bootstrap-info.json` (containing the TDX attestation quote and public keys) is written to disk. You'll need this file later to register the KMS on-chain.

@@ -7,7 +7,7 @@
 (* on the selected rows.                                                   *)
 (*                                                                         *)
 (* Root side (DstackKms): one row of allowed values (OS images; KMS MRs   *)
-(* and devices alike) per root epoch, written by *AtEpoch(s) over a range *)
+(* and devices alike) per root epoch, written by *AtEpochs over a range   *)
 (* of registered rows. A pending epoch can be popped and registered again, *)
 (* with the same or other keys. Rows are keyed by registration            *)
 (* (RootEpoch.registration); KeyByChainHash = TRUE models the earlier     *)
@@ -77,7 +77,7 @@ Pop ==
     /\ regs' = SubSeq(regs, 1, Latest)
     /\ UNCHANGED <<nextReg, cur, rows, revoked, appVars, ghostVars>>
 
-\* add*AtEpochs / remove*AtEpochs(from, to, v); *AtEpoch is from = to.
+\* add*AtEpochs / remove*AtEpochs(from, to, v); one row is from = to.
 Write(from, to, v, allowed) ==
     /\ from <= to /\ to <= Latest
     /\ LET written == {<<RowKey(keys, regs, e), v>>: e \in from..to}

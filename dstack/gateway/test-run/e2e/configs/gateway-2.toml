@@ -1,29 +1,32 @@
 # Gateway Node 2 configuration for E2E testing
+[listeners.default]
 log_level = "debug"
+
+[listeners.guest]
 address = "0.0.0.0"
 port = 9012
 
-[tls]
+[listeners.guest.tls]
 key = "/var/lib/gateway/certs/gateway-rpc.key"
 certs = "/var/lib/gateway/certs/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
 rpc_domain = "gateway-2"
 
-[core.admin]
+[listeners.admin]
 enabled = true
 port = 9016
 address = "0.0.0.0"
 # TEST ONLY - do not use in production; weak/hardcoded credential
 auth_token = "e2e-admin-token"
 
-[core.debug]
+[listeners.debug]
 # TEST ONLY - do not use in production; enables debug RPC
-insecure_enable_debug_rpc = true
+enabled = true
 port = 9015
 address = "0.0.0.0"
 

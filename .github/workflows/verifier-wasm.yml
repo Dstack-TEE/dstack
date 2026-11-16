@@ -1,0 +1,195 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: TDX lite verifier wasm
+
+on:
+  push:
+    branches: [ next, 'release/**' ]
+    tags: ['verifier-wasm-v*']
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [ next, 'release/**' ]
+  workflow_dispatch:
+    inputs:
+      runtimes:
+        description: Run Electron and browser jobs
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+      runtimes: ${{ steps.changes.outputs.runtimes }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'verifier-wasm-runtimes') }}
+          DISPATCH_RUNTIMES: ${{ github.event_name == 'workflow_dispatch' && inputs.runtimes }}
+        run: |
+          relevant=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF" == refs/tags/* ]]; then
+            relevant=true
+            echo "dispatch or tag: running"
+          else
+            if [ -n "$BASE_SHA" ]; then
+              changed=$(git diff --name-only "$BASE_SHA...HEAD")
+            elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              changed=$(git diff --name-only "$BEFORE_SHA...HEAD")
+            else
+              changed=$(git diff --name-only HEAD~1...HEAD)
+            fi
+            echo "$changed"
+            # Keep in sync with the workspace crates dstack-verifier-wasm depends on
+            # (`cargo metadata --filter-platform wasm32-unknown-unknown`).
+            if echo "$changed" | grep -qE '^(sdk/verifier-wasm/|dstack/crates/dstack-verifier-wasm/|dstack/dstack-mr/|dstack/crates/qemu-acpi/|dstack/dstack-types/|dstack/cc-eventlog/|dstack/size-parser/|dstack/verifier/fixtures/|dstack/Cargo\.(toml|lock)|\.github/workflows/verifier-wasm\.yml)'; then
+              relevant=true
+            else
+              echo "nothing this job covers changed"
+            fi
+          fi
+
+          runtimes=false
+          if [ "$relevant" = true ]; then
+            if [ "$DISPATCH_RUNTIMES" = "true" ]; then
+              runtimes=true
+            elif [ "$EVENT_NAME" = "push" ] && { [ "$REF" = "refs/heads/next" ] || [[ "$REF" == refs/tags/* ]]; }; then
+              runtimes=true
+            elif [ "$HAS_LABEL" = "true" ]; then
+              runtimes=true
+            fi
+          fi
+
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "runtimes=$runtimes" >> "$GITHUB_OUTPUT"
+          echo "relevant=$relevant runtimes=$runtimes"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Build wasm in pinned container
+        env:
+          # The release workflow always checks reproducibility; PRs build once.
+          REPRO_CHECK: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+        run: bash sdk/verifier-wasm/scripts/build-in-container.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src/wasm-bytes.js
+          if-no-files-found: error
+
+  node:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.19.0', '22', '24']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Run cases
+        working-directory: sdk/verifier-wasm
+        run: npm test
+
+  bun:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+      - name: Run cases
+        working-directory: sdk/verifier-wasm
+        run: bun test/run-cases.mjs
+
+  electron:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        electron: ['31', 'latest']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+      - name: Install Electron
+        run: |
+          mkdir -p "$RUNNER_TEMP/electron"
+          cd "$RUNNER_TEMP/electron"
+          npm init -y >/dev/null
+          npm install "electron@${{ matrix.electron }}"
+          echo "ELECTRON_BIN=$RUNNER_TEMP/electron/node_modules/.bin/electron" >> "$GITHUB_ENV"
+          ELECTRON_RUN_AS_NODE=1 "$RUNNER_TEMP/electron/node_modules/.bin/electron" -e 'console.log(process.versions.electron)'
+      - name: Run cases as Node
+        working-directory: sdk/verifier-wasm
+        run: ELECTRON_RUN_AS_NODE=1 "$ELECTRON_BIN" test/run-cases.mjs
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Run cases in Electron main
+        working-directory: sdk/verifier-wasm
+        run: xvfb-run -a "$ELECTRON_BIN" --no-sandbox test/electron-main.mjs
+
+  browser:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '20'
+      - name: Install Playwright and run cases
+        working-directory: sdk/verifier-wasm
+        run: |
+          npm install --no-save --no-package-lock playwright@1.65.0
+          npx playwright install --with-deps ${{ matrix.browser }}
+          node test/browser/playwright.mjs ${{ matrix.browser }}

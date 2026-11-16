@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- **KMS refuses its old listener settings.** Move `[rpc]`, `[core.admin]`,
+  `[core.onboard]` `address`/`port`/`tls`, `[default]` and top-level Rocket
+  settings to `[listeners.*]` (see Changed) when upgrading the KMS image.
+- **Gateway refuses its old listener settings.** A hand-written `gateway.toml`
+  must move its top-level listener settings, `[tls]`, `[core.admin]` and
+  `[core.debug]` (see Changed) when upgrading the gateway.
+
+### Added
+
+- KMS: an optional `[listeners.public]` listener, off by default, serving only
+  `GetMeta`, `GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, so the guest
+  listener, which releases keys, can be restricted to CVMs (#1580).
+- KMS, gateway: `proxy_protocol = true` on a listener requires a PROXY v1/v2
+  header on every connection and logs its source address as the client. The
+  header is trusted as sent, so the listener must be reachable only through the
+  proxy. prpc request logs now carry the client address as `remote` (#1582).
+
+### Changed
+
+- **Breaking:** KMS: listener settings move to `[listeners.*]`:
+  `[listeners.default]` (`tls`, `proxy_protocol`, Rocket settings, inherited
+  by every listener), `[listeners.guest]` (was `[rpc]`), `[listeners.admin]`
+  (was `[core.admin]`, credentials included), `[listeners.public]` and
+  `[listeners.onboard]` (`address`/`port`, was in `[core.onboard]`). The KMS
+  refuses a config that still sets an old location, naming the new one. The
+  old `[default]` section was never read; only `ident` moves, so responses now
+  carry `Server: DStack KMS` (#1585).
+- **Breaking:** gateway: listener settings move to `[listeners.*]`:
+  `[listeners.default]` (Rocket settings and `proxy_protocol`, was the top
+  level, now inherited by the admin and debug listeners too),
+  `[listeners.guest]` (`address`, `tls`, was the top level), `[listeners.admin]`
+  (was `[core.admin]`) and `[listeners.debug]` (`enabled`, was `[core.debug]
+  insecure_enable_debug_rpc`). `insecure_localhost_backend` moves to
+  `[core.proxy]`. The gateway refuses a config that still sets an old location,
+  naming the new one; the gateway image's entrypoint writes the new one (#1587).
+
+## [0.6.4] - 2026-11-12
+
+### Upgrade notes
+
 - **Deployment order for key epochs:** upgrade the `DstackKms` and `DstackApp`
   proxies and the auth backend, register the existing roots as root epoch 0
   (`registerRootEpoch`), then roll out the KMS nodes, then guests. Keep root and
@@ -18,9 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app epoch. The KMS reads it for `GetAppEnvEncryptPubKey` and
   `GetSealedEnvPubKey`. `auth-eth` and `dstack-auth` serve it; custom webhook
   backends must add it.
+- **Upgrade KMS before guests.** 0.6.4 guests mint self-issued RA-TLS client
+  certificates for KMS calls and need a 0.6.4 KMS that accepts them.
+- **KMS needs a key handover path to start:** configure the admin listener
+  with TLS and an admin token, or set `core.onboard.public_key_handover = true`
+  (see Changed).
 
 ### Added
 
+- DstackKms, DstackApp: TEE platform allowlists. `AuthorizationRequest` of
+  `IAppEpochAuth` (the epoch-aware policy interface) carries `teeVariant`, the
+  platform name the KMS reports (`dstack-tdx`, `dstack-amd-sev-snp`, ...),
+  passed through unchanged by auth-eth. Each contract allows any platform until
+  its owner calls `setAllowAnyTeeVariant(false)`; it then allows only the names
+  set by `setAllowedTeeVariants`, from the platforms `TeeVariantPolicy` knows
+  (setting an unknown one reverts). The policy covers every epoch, and a
+  restricted one refuses unknown platforms and the legacy `isAppAllowed` and
+  `isKmsAllowed`, whose callers report no platform. auth-eth requires
+  `teeVariant` on `/authorizeKms` and `/authorizeApp`.
 - KMS root and application key epochs, epoch-scoped authorization, SealedEnv
   HPKE encryption, automatic environment migration, and epoch-aware SDK key
   selection.
@@ -30,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when absent, neither is checked. `GET /` reports the configured `chainId` and
   `appImplementation`, and each decision is logged with the device ID,
   measurements and TCB status.
+- guest: `key_provider: sev-snp` derives a hardware-bound seed inside an AMD
+  SEV-SNP guest, so a KMS CVM on an AMD host can recover its disk and stored
+  root keys after restart without SGX (#1526).
 
 ### Changed
 
@@ -72,17 +130,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DstackKms, DstackApp: material approvals are per epoch. A request is decided
   on the row of the epoch it selects, so a value is revoked only once every row
   allowing it is cleared. Material setters name their rows:
-  `*AtEpoch(epoch, value)` writes one epoch, `*AtEpochs(from, to, value)` a
-  range; `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
+  `*AtEpochs(from, to, value)` writes a range, and in `DstackApp`
+  `*AtEpoch(epoch, value)` one epoch (in `DstackKms`, pass the epoch twice);
+  `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
   `remove*AtEpochs(0, currentAppEpoch, value)` in `DstackApp` revoke a value
   everywhere. `DstackApp` reports its setters as the new ERC-165 interface
-  `IAppEpochManagement` (`0x853d2b79`). The `Manage.s.sol` scripts require
-  `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range.
+  `IAppEpochManagement` (`0x8c0524c4`). The `Manage.s.sol` scripts require
+  `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range. `DstackApp`'s
+  `allowAnyDevice` stays a single switch: `setAllowAnyDevice(bool)` covers every
+  app epoch, so dropping the device restriction cannot leave an older epoch
+  open to any host.
 - App contracts deployed before app epochs (v0.5.x, v0.6.0) keep working with
   the upgraded `DstackKms` and KMS, which authorize them for app epoch 0 only.
   `Manage.s.sol` detects them by interface ID and calls their epoch-less
-  setters. Upgrading one to the current `DstackApp` keeps its compose hashes,
-  devices and `allowAnyDevice` as app epoch 0.
+  setters. Upgrading one to the current `DstackApp` keeps its compose hashes and
+  devices as app epoch 0, and its `allowAnyDevice` for every app epoch.
 - DstackKms, DstackApp: ownership transfers take two steps for proxies upgraded
   from v0.5.9: `transferOwnership` nominates, and the new owner must call
   `acceptOwnership`.
@@ -92,7 +154,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operations stay limited to the current epoch.
 - KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
   KMS nodes can be upgraded before existing OS images.
-
 - dstack-util, cert-client: guests mint self-issued RA-TLS client
   certificates for KMS calls instead of fetching the temp CA and minting from
   it; the KMS authenticates the quote inside the certificate, not its issuer.
@@ -102,23 +163,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The new flow requires an attested KMS that accepts self-issued certificates.
 - dstack-types: `KeyProvider::Kms` drops `tmp_ca_key` and `tmp_ca_cert`, so
   `.appkeys.json` no longer carries them. Files written by older images still
-  parse, but out-of-tree readers that require those fields fail on new files
-
+  parse, but out-of-tree readers that require those fields fail on new files.
 - KMS: `auth-eth-bun` is renamed to `auth-eth`. The Bun webhook server moves
   from `dstack/kms/auth-eth-bun` into `dstack/kms/auth-eth`, next to the
   contracts. New releases are tagged `kms-auth-eth-v*` and published as
   `ghcr.io/dstack-tee/dstack-kms-auth-eth`; images already published as
   `ghcr.io/dstack-tee/dstack-kms-auth-eth-bun` remain available. Update image
   references and source paths in deployments.
+- **Breaking:** DstackKms: reverts with custom errors such as
+  `UnknownRootEpoch()` instead of revert strings, to stay under the EIP-170
+  size limit. This includes `registerApp`, `setAppImplementation` and
+  `deployAndRegisterApp`, whose v0.6.0 strings (`Invalid app ID`, `Invalid
+  implementation address`, `DstackApp implementation not set`, `Invalid owner
+  address`) become `InvalidAppId()`, `InvalidImplementationAddress()`,
+  `AppImplementationNotSet()` and `InvalidOwnerAddress()`; tooling that
+  matches the strings must decode the errors. Authorization rejection reasons
+  are unchanged.
 
 ### Removed
 
 - DstackKms: the epoch-less `addOsImageHash`, `removeOsImageHash`,
   `addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice` and
-  `removeKmsDevice`. Use the `*AtEpoch` or `*AtEpochs` forms; before any
-  rotation, `addOsImageHashAtEpoch(0, hash)` is the old call.
+  `removeKmsDevice`. Use the `*AtEpochs` forms; before any rotation,
+  `addOsImageHashAtEpochs(0, 0, hash)` is the old call.
 - **Breaking:** DstackApp: the epoch-less `addComposeHash`, `removeComposeHash`,
-  `addDevice`, `removeDevice` and `setAllowAnyDevice`, and with them
+  `addDevice` and `removeDevice`, and with them
   `IAppAuthBasicManagement`: an upgraded app no longer reports interface ID
   `0x8fd37527`, and calls to those functions revert. Use the `*AtEpoch` or
   `*AtEpochs` forms (`IAppEpochManagement`); at app epoch 0,
@@ -151,6 +220,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attestation on the connection that returns the root keys and checks local
   policy before using them. Legacy sources requiring temp-CA-issued clients
   must be upgraded.
+- ra-rpc: check the TLS handshake signature when CA verification is skipped;
+  `tls_no_check` is renamed to `tls_skip_ca_verification` (#1522).
+- vmm: write `.instance_info` atomically, so a failed write or power loss can no
+  longer drop the instance ID seed and lose the VM's disk key (#1553).
+- KMS, Gateway, Verifier, auth-eth images: set explicit file modes and
+  normalize timestamps so image digests no longer depend on the clone-time
+  umask (#1512).
 
 ## [0.6.3] - 2026-11-01
 
@@ -168,6 +244,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- guest OS: disable automatic GPT partition discovery and host-supplied system
+  credentials on the measured kernel command line. Remove production systemd
+  generators that act on host-controlled, unmeasured input; pin the allowed
+  generator set and assert the hardening configuration during builds. Includes
+  the unreleased 0.6.2 fixes for GHSA-c79w-3x5w-gmm5.
 - guest-agent: gate every external API route by scopes granted through signed
   Ed25519 JWTs or `[cvm.guest_agent_api].anonymous_scopes`. No scopes are
   anonymous by default; app SDKs keep using the internal Unix socket. The

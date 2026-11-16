@@ -174,11 +174,17 @@
     "usr/bin/login",
     "usr/bin/loginctl",
     "usr/sbin/agetty",
-    "usr/lib/systemd/system-generators/systemd-getty-generator",
     "usr/lib/systemd/system/getty@.service",
     "usr/lib/systemd/system/serial-getty@.service",
     "usr/lib/systemd/system/debug-shell.service",
     "usr/lib/systemd/system/systemd-logind.service"
+  ],
+  "prod_allowed_generators": [
+    "systemd-debug-generator",
+    "systemd-fstab-generator",
+    "systemd-run-generator",
+    "systemd-tpm2-generator",
+    "zfs-mount-generator"
   ],
   "required_ldconfig_entries": [
     "libnvidia-ml.so.1",

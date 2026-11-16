@@ -120,7 +120,7 @@ contract DstackAppSymbolicTest is Test {
         } else if (which == 3) {
             data = abi.encodeWithSelector(DstackApp.removeDeviceAtEpoch.selector, uint256(0), word);
         } else if (which == 4) {
-            data = abi.encodeWithSelector(DstackApp.setAllowAnyDeviceAtEpoch.selector, uint256(0), flag);
+            data = abi.encodeWithSelector(DstackApp.setAllowAnyDevice.selector, flag);
         } else if (which == 5) {
             data = abi.encodeWithSelector(DstackApp.setRequireTcbUpToDate.selector, flag);
         } else if (which == 6) {
@@ -133,6 +133,12 @@ contract DstackAppSymbolicTest is Test {
             data = abi.encodeWithSelector(Ownable2StepUpgradeable.acceptOwnership.selector);
         } else if (which == 10) {
             data = abi.encodeWithSelector(OwnableUpgradeable.renounceOwnership.selector);
+        } else if (which == 11) {
+            data = abi.encodeWithSelector(DstackApp.setRequireLaunchTicket.selector, flag);
+        } else if (which == 12) {
+            data = abi.encodeWithSelector(DstackApp.addLaunchTicket.selector, word, "");
+        } else if (which == 13) {
+            data = abi.encodeWithSelector(DstackApp.removeLaunchTicket.selector, word);
         } else {
             return; // outside the enumerated mutating surface
         }
