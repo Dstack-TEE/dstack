@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
-- **Upgrade the KMS contracts and auth-eth together.** `AuthorizationRequest`
-  gains `launchTicketHash` (see Changed), so a 0.6.4 auth-eth with 0.6.5
-  contracts, or the reverse, denies every request.
+- **The contracts are not compatible with 0.6.4.** `AuthorizationRequest` gains
+  `launchTicketHash` (see Changed), which changes the selectors of
+  `authorizeApp` and `authorizeKms` and the `IAppEpochAuth` interface ID
+  (`0xd33835bd` to `0xc396c1b0`). Upgrade `DstackKms`, every `DstackApp` proxy
+  (and `setAppImplementation`) and auth-eth together: a 0.6.4 auth-eth with a
+  0.6.5 `DstackKms`, or the reverse, denies every request, and a 0.6.5
+  `DstackKms` treats a 0.6.4 `DstackApp` as a legacy policy, limited to app
+  epoch 0 through `isAppAllowed`.
 - **Upgrade the auth backend before the KMS.** A joining KMS needs the auth
   backend's `GET /` to report `rootCaPubkey` and an `https://` source URL.
 - **Upgrade every KMS instance before `setRequireKmsLaunchTicket(true)`.**
