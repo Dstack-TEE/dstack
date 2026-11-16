@@ -406,13 +406,13 @@ turn the check on; `addLaunchTicket` and `addKmsLaunchTicket` allow a hash,
 listed by `launchTickets()` and `kmsLaunchTickets()`, with a public label only
 logged in the added event. The allowlists cover every app and root epoch.
 
-Tickets need the VMM, the KMS and the auth backend at 0.6.4 or later, and a
-guest OS at 0.6.4 or later or a 0.5.x release with the launch ticket backport:
-an older one drops the ticket, and the request fails as
-`Invalid launch ticket`. A required ticket refuses the legacy `isAppAllowed` and
-`isKmsAllowed`, whose callers cannot present one. Older KMS instances authorize
-serving through `isKmsAllowed`, so upgrade every KMS instance before turning on
-`requireKmsLaunchTicket`, or they stop serving every app.
+Tickets need the VMM, the KMS and the auth backend at 0.6.5 or later, and a
+guest OS at 0.6.5 or later, or 0.5.15 or later on 0.5.x: an older one drops
+the ticket, and the request fails as `Invalid launch ticket`. A required ticket
+refuses the legacy `isAppAllowed` and `isKmsAllowed`, whose callers cannot
+present one. Older KMS instances authorize serving through `isKmsAllowed`, so
+upgrade every KMS instance before turning on `requireKmsLaunchTicket`, or they
+stop serving every app.
 
 The ticket is a bearer secret: the host launching the CVM holds it. Use a fresh
 random ticket per deployment, and remove its hash, shown by `vmm-cli info`, once
