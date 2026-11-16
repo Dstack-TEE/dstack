@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-006",
+  "title": "Application boot policy image and config matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-auth-006"
+  ],
+  "risks": [
+    "risk-kms-auth-006"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Application boot policy image and config matrix"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-boot-policy-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

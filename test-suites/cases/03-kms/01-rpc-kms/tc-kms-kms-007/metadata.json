@@ -1,0 +1,43 @@
+{
+  "id": "tc-kms-kms-007",
+  "title": "KMS listeners, public read-only listener and PROXY protocol",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-kms-007"
+  ],
+  "risks": [
+    "risk-kms-kms-007"
+  ],
+  "tags": [
+    "kms",
+    "kms-rpc",
+    "listeners",
+    "proxy-protocol",
+    "audit"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "ReadOnly.GetMeta",
+    "ReadOnly.GetAppEnvEncryptPubKey",
+    "ReadOnly.GetSealedEnvPubKey",
+    "[listeners.*] configuration",
+    "PROXY protocol listeners"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

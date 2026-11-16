@@ -1,0 +1,72 @@
+{
+  "case_id": "tc-gw-internal-003",
+  "remarks": "The case exercised the source-listed gateway authorization client directly in case-scoped Rust harnesses compiled against the candidate tree and shared Cargo target; no physical-hardware result is claimed.",
+  "schema_version": "1.0",
+  "source_run": "central-fixtures-20260724T032131Z",
+  "steps": [
+    {
+      "evidence": "Replays the operations that produced: Candidate AuthClient source posted AppInfo for minimum, duplicate, and large payload allows; HTTP deny, malformed HTTP, wrong TLS/protocol, timeout, outage, stale cross-app deny, and recovery behaved fail-closed or fresh-allow as expected.",
+      "id": "tc-gw-internal-003-step-02",
+      "observed": "Candidate AuthClient source posted AppInfo for minimum, duplicate, and large payload allows; HTTP deny, malformed HTTP, wrong TLS/protocol, timeout, outage, stale cross-app deny, and recovery behaved fail-closed or fresh-allow as expected.",
+      "ops": [
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--manifest-path",
+            "${plan_root}/results/central-fixtures-20260724T032131Z/cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-003/artifacts/auth-client-harness-20260725T000000Z/Cargo.toml",
+            "--offline"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "command"
+        }
+      ]
+    },
+    {
+      "evidence": "Replays the operations that produced: With one concurrent authorization dependency request closed before decision and one conflicting request allowed, exactly one operation committed; the failed authorization phase was diagnosed, and one restored retry committed without duplicate state.",
+      "id": "tc-gw-internal-003-step-03",
+      "observed": "With one concurrent authorization dependency request closed before decision and one conflicting request allowed, exactly one operation committed; the failed authorization phase was diagnosed, and one restored retry committed without duplicate state.",
+      "ops": [
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--manifest-path",
+            "${plan_root}/results/central-fixtures-20260724T032131Z/cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-003/artifacts/auth-client-concurrency-harness-20260725T000000Z/Cargo.toml",
+            "--offline"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "command"
+        }
+      ]
+    },
+    {
+      "evidence": "Replays the operations that produced: Fresh AuthClient re-instantiation preserved no stale authorization state, an adjacent denied identity remained denied, no harness processes/listeners remained, and artifact redaction scan found no credential-like material.",
+      "id": "tc-gw-internal-003-step-04",
+      "observed": "Fresh AuthClient re-instantiation preserved no stale authorization state, an adjacent denied identity remained denied, no harness processes/listeners remained, and artifact redaction scan found no credential-like material.",
+      "ops": [
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--manifest-path",
+            "${plan_root}/results/central-fixtures-20260724T032131Z/cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-003/artifacts/auth-client-restart-harness-20260725T000000Z/Cargo.toml",
+            "--offline"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "command"
+        }
+      ]
+    }
+  ],
+  "summary": "Gateway authorization client source accepted only fresh successful authorization responses; deny, malformed transport, wrong TLS/protocol, timeout, outage, interrupted dependency, and adjacent identity paths failed closed; recovery and restart-style re-instantiation converged without duplicate state or leaked resources."
+}

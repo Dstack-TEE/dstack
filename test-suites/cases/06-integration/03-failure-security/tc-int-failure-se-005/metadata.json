@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-failure-se-005",
+  "title": "Credential and secret redaction audit",
+  "priority": "P0",
+  "requirements": [
+    "req-int-failure-se-005"
+  ],
+  "risks": [
+    "risk-int-failure-se-005"
+  ],
+  "tags": [
+    "integration",
+    "failure-security"
+  ],
+  "fixture": {
+    "profile": "redaction-audit-stack",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Credential and secret redaction audit"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-secret-redaction-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

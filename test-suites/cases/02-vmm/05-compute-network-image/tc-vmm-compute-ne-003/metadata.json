@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-compute-ne-003",
+  "title": "NUMA pinning hugepages and resource isolation",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-compute-ne-003"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-003"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "NUMA pinning hugepages and resource isolation"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

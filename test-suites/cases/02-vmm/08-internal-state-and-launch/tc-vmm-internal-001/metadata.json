@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-internal-001",
+  "title": "Host-share disk creation and content bounds",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-internal-001"
+  ],
+  "risks": [
+    "risk-vmm-internal-001"
+  ],
+  "tags": [
+    "vmm",
+    "internal-state-measurement-and-launch-helpers"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Host-share disk creation and content bounds"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

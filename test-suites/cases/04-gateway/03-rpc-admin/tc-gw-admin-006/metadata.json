@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-006",
+  "title": "Admin.SetCaa",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-006"
+  ],
+  "risks": [
+    "risk-gw-admin-006"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.SetCaa"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-caa-case.py",
+    "args": [],
+    "timeout_seconds": 360
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-failure-se-006",
+  "title": "Resource exhaustion and backpressure",
+  "priority": "P0",
+  "requirements": [
+    "req-int-failure-se-006"
+  ],
+  "risks": [
+    "risk-int-failure-se-006"
+  ],
+  "tags": [
+    "integration",
+    "failure-security"
+  ],
+  "fixture": {
+    "profile": "redaction-audit-stack",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Resource exhaustion and backpressure"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

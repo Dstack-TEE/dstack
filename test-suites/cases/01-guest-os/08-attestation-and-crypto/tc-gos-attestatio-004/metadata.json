@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-attestatio-004",
+  "title": "TLS key and certificate usage extensions",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-attestatio-004"
+  ],
+  "risks": [
+    "risk-gos-attestatio-004"
+  ],
+  "tags": [
+    "guest",
+    "attestation-and-crypto"
+  ],
+  "fixture": {
+    "profile": "guest-readonly",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "TLS key and certificate usage extensions"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

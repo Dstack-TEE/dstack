@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-021",
+  "title": "Random and hexadecimal utility CLI",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-021"
+  ],
+  "risks": [
+    "risk-gos-setup-021"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Random and hexadecimal utility CLI"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

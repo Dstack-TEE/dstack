@@ -1,0 +1,17 @@
+{
+  "id": "tc-kms-rotation-013",
+  "title": "Root and app key rotation lifecycle matrix",
+  "priority": "P0",
+  "requirements": ["req-kms-rotation-013"],
+  "risks": ["risk-kms-rotation-013"],
+  "tags": ["kms", "rotation", "epochs", "migration", "security"],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {"vmm": "candidate", "guest": "candidate", "kms": "candidate", "gateway": "candidate", "verifier": "candidate"},
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": ["Root and app key rotation lifecycle"],
+  "execution": {"entrypoint": "run.py", "args": [], "timeout_seconds": 900}
+}

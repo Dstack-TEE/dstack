@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-bootstrap--003",
+  "title": "Finish onboarding and listener transition",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-bootstrap--003"
+  ],
+  "risks": [
+    "risk-kms-bootstrap--003"
+  ],
+  "tags": [
+    "kms",
+    "bootstrap-onboard"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Finish onboarding and listener transition"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-finish-onboard-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

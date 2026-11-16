@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-tappd-005",
+  "title": "Tappd.Info",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-tappd-005"
+  ],
+  "risks": [
+    "risk-gos-tappd-005"
+  ],
+  "tags": [
+    "guest",
+    "tappd-rpc"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Tappd.Info"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

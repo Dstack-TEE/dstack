@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-gos-attestatio-002",
+  "capability": "cross-platform-attestation",
+  "reason": "Cross-platform versioned attestation requires complete, independently verifiable evidence and trust material for every named platform; the fixture declares no complete cross-platform attestation suite.",
+  "expires_when": "the case fixture declares the complete cross-platform attestation suite available, at which point the probe fails and this registration must be replaced by a real harness"
+}

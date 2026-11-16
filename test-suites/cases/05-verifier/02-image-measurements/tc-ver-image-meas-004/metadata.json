@@ -1,0 +1,23 @@
+{
+  "id": "tc-ver-image-meas-004",
+  "title": "Artifact manifest and image hash binding",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-image-meas-004"
+  ],
+  "risks": [
+    "risk-ver-image-meas-004"
+  ],
+  "tags": [
+    "verifier",
+    "image-measurements"
+  ],
+  "actions_under_test": [
+    "Artifact manifest and image hash binding"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 90
+  }
+}

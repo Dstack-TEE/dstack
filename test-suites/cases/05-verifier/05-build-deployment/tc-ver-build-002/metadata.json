@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-build-002",
+  "title": "Verifier default configuration and CLI override precedence",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-build-002"
+  ],
+  "risks": [
+    "risk-ver-build-002"
+  ],
+  "tags": [
+    "ver",
+    "verifier-build-and-deployment"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Verifier default configuration and CLI override precedence"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

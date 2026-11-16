@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-boot-and-i-001",
+  "title": "Measured boot and prepare ordering",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-boot-and-i-001"
+  ],
+  "risks": [
+    "risk-gos-boot-and-i-001"
+  ],
+  "tags": [
+    "guest",
+    "boot-and-identity"
+  ],
+  "fixture": {
+    "profile": "guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Measured boot and prepare ordering"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-hardware-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

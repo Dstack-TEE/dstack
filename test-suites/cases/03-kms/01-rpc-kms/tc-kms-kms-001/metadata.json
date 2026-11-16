@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-kms-001",
+  "title": "KMS.GetAppKey",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-kms-001"
+  ],
+  "risks": [
+    "risk-kms-kms-001"
+  ],
+  "tags": [
+    "kms",
+    "kms-rpc"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS.GetAppKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-attested-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "id": "tc-gw-internal-009",
+  "title": "Gateway listener configuration, PROXY protocol and audit lines",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-internal-009"
+  ],
+  "risks": [
+    "risk-gw-internal-009"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals",
+    "listeners",
+    "proxy-protocol",
+    "audit"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.ImportCert",
+    "Admin.Status",
+    "[listeners.*] configuration",
+    "PROXY protocol listeners",
+    "dstack_gateway::audit",
+    "dstack_gateway::access"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

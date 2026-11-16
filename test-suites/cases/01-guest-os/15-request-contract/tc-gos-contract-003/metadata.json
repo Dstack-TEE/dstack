@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-contract-003",
+  "title": "Worker request-contract matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-contract-003"
+  ],
+  "risks": [
+    "risk-gos-contract-003"
+  ],
+  "tags": [
+    "guest",
+    "request-contract"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Worker.GetAttestationForAppKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/api-contract-matrix-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

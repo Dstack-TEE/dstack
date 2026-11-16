@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-cluster-ad-002",
+  "title": "WaveKV sync endpoint authentication and replay",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-cluster-ad-002"
+  ],
+  "risks": [
+    "risk-gw-cluster-ad-002"
+  ],
+  "tags": [
+    "gateway",
+    "cluster-admin-observability"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "WaveKV sync endpoint authentication and replay"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-wavekv-auth-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

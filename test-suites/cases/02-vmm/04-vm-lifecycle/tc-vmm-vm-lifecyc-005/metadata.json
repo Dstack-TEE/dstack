@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-vm-lifecyc-005",
+  "title": "Reload and crash recovery",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-vm-lifecyc-005"
+  ],
+  "risks": [
+    "risk-vmm-vm-lifecyc-005"
+  ],
+  "tags": [
+    "vmm",
+    "vm-lifecycle"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Reload and crash recovery"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 240
+  }
+}

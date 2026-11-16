@@ -1,0 +1,694 @@
+{
+  "schema_version": "1.0",
+  "profiles": {
+    "guest-readonly": {
+      "classification": "ready-target",
+      "provider": "physical-tdx",
+      "ttl_seconds": 1800,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "ready-target",
+        "profile": "guest-readonly"
+      },
+      "required_capabilities": [
+        "guest-readonly"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "guest-lifecycle": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "guest-lifecycle"
+      },
+      "required_capabilities": [
+        "guest-lifecycle"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "no-tee-dev": {
+      "classification": "specified-initial-state",
+      "provider": "local-simulator",
+      "ttl_seconds": 2400,
+      "destructive_scope": "lease-only",
+      "simulation": true,
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "no-tee-dev"
+      },
+      "required_capabilities": [
+        "no-tee-dev"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "no-tee-guest-lifecycle": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "no-tee-guest-lifecycle"
+      },
+      "required_capabilities": [
+        "no-tee-guest-lifecycle"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ],
+      "simulation_platform": "dstack-tdx",
+      "development_image_required": true
+    },
+    "storage-lifecycle": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "storage-lifecycle"
+      },
+      "required_capabilities": [
+        "storage-lifecycle"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "network-lifecycle": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "network-lifecycle"
+      },
+      "required_capabilities": [
+        "network-lifecycle"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "container-observability": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "container-observability"
+      },
+      "required_capabilities": [
+        "container-observability"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "multi-identity": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "multi-identity"
+      },
+      "required_capabilities": [
+        "multi-identity"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "image-assembly": {
+      "classification": "raw-substrate",
+      "provider": "isolated-component",
+      "component": "guest-image",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "raw-substrate",
+        "profile": "image-assembly"
+      },
+      "required_capabilities": [
+        "image-assembly"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 0,
+        "port_count": 0
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned output workspace",
+        "provide candidate image inputs",
+        "verify manifests"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "vmm-empty-control-plane": {
+      "classification": "empty-control-plane",
+      "provider": "isolated-component",
+      "component": "vmm",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "empty-control-plane",
+        "profile": "vmm-empty-control-plane"
+      },
+      "required_capabilities": [
+        "vmm-empty-control-plane"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "vmm-raw-substrate": {
+      "classification": "raw-substrate",
+      "provider": "isolated-component",
+      "component": "vmm",
+      "ttl_seconds": 2400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "raw-substrate",
+        "profile": "vmm-raw-substrate"
+      },
+      "required_capabilities": [
+        "vmm-raw-substrate"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "kms-ready": {
+      "classification": "ready-target",
+      "provider": "isolated-component",
+      "component": "kms",
+      "ttl_seconds": 2400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "ready-target",
+        "profile": "kms-ready"
+      },
+      "required_capabilities": [
+        "kms-ready"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "kms-onboard": {
+      "classification": "specified-initial-state",
+      "provider": "isolated-component",
+      "component": "kms",
+      "ttl_seconds": 5400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "kms-onboard"
+      },
+      "required_capabilities": [
+        "kms-onboard"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "gateway-ready": {
+      "classification": "ready-target",
+      "provider": "isolated-component",
+      "component": "gateway",
+      "ttl_seconds": 2400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "ready-target",
+        "profile": "gateway-ready"
+      },
+      "required_capabilities": [
+        "gateway-ready"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "gateway-cluster": {
+      "classification": "specified-initial-state",
+      "provider": "isolated-component",
+      "component": "gateway",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "gateway-cluster"
+      },
+      "required_capabilities": [
+        "gateway-cluster"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "verifier-ready": {
+      "classification": "ready-target",
+      "provider": "isolated-component",
+      "component": "verifier",
+      "ttl_seconds": 2400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "ready-target",
+        "profile": "verifier-ready"
+      },
+      "required_capabilities": [
+        "verifier-ready"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "component-raw-substrate": {
+      "classification": "raw-substrate",
+      "provider": "isolated-component",
+      "ttl_seconds": 2400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "raw-substrate",
+        "profile": "component-raw-substrate"
+      },
+      "required_capabilities": [
+        "component-raw-substrate"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "gpu-policy": {
+      "classification": "specified-initial-state",
+      "provider": "hardware-pool",
+      "hardware": "nvidia-cc",
+      "ttl_seconds": 5400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "gpu-policy"
+      },
+      "required_capabilities": [
+        "gpu-policy"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "cross-platform-attestation": {
+      "classification": "specified-initial-state",
+      "provider": "hardware-pool",
+      "ttl_seconds": 5400,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "cross-platform-attestation"
+      },
+      "required_capabilities": [
+        "cross-platform-attestation"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "compatibility-matrix": {
+      "classification": "specified-initial-state",
+      "provider": "version-matrix",
+      "ttl_seconds": 7200,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "compatibility-matrix"
+      },
+      "required_capabilities": [
+        "compatibility-matrix"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 16
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ],
+      "version_matrix": [
+        "0.5.4",
+        "0.5.8",
+        "0.5.11",
+        "candidate"
+      ]
+    },
+    "identity-matrix": {
+      "classification": "specified-initial-state",
+      "provider": "physical-tdx",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "identity-matrix"
+      },
+      "required_capabilities": [
+        "identity-matrix"
+      ],
+      "resources": {
+        "vcpu": 10,
+        "memory_mb": 20480,
+        "disk_gb": 100,
+        "cid_count": 10,
+        "port_count": 32
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "gateway-exit-cluster": {
+      "classification": "specified-initial-state",
+      "provider": "isolated-component",
+      "component": "gateway",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "gateway-exit-cluster"
+      },
+      "required_capabilities": [
+        "gateway-exit-cluster"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 2,
+        "port_count": 20
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    },
+    "redaction-audit-stack": {
+      "classification": "specified-initial-state",
+      "provider": "isolated-component",
+      "component": "integration",
+      "ttl_seconds": 3600,
+      "destructive_scope": "lease-only",
+      "initial_state": {
+        "classification": "specified-initial-state",
+        "profile": "redaction-audit-stack"
+      },
+      "required_capabilities": [
+        "kms-ready",
+        "gateway-ready",
+        "redaction-audit"
+      ],
+      "resources": {
+        "vcpu": 2,
+        "memory_mb": 4096,
+        "disk_gb": 20,
+        "cid_count": 4,
+        "port_count": 32
+      },
+      "setup_actions_allowed": [
+        "allocate lease-owned substrate",
+        "start declared dependencies",
+        "verify initial state"
+      ],
+      "cleanup_expectations": [
+        "release every lease-owned resource",
+        "report cleanup errors as infrastructure errors"
+      ]
+    }
+  }
+}
