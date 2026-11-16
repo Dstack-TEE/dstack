@@ -550,7 +550,7 @@ Manage trusted KMS public keys for enhanced security:
 ./vmm-cli.py kms remove 0x1234567890abcdef...
 ```
 
-The whitelist is stored in `~/.dstack-vmm/kms-whitelist.json`.
+The whitelist is stored in `~/.dstack-vmm/kms-whitelist.json`; set `DSTACK_VMM_KMS_WHITELIST_PATH` to use a different file.
 
 After a KMS root rotation, first remove the old signer with `kms remove`, then
 add the new one with `kms add`. The whitelist is a flat set and the CLI cannot
