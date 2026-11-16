@@ -2240,7 +2240,7 @@ def main():
     deploy_parser.add_argument(
         "--launch-ticket-file",
         help="File holding the launch ticket the guest presents to the KMS "
-        "(requires dstack-vmm >= 0.6.4)",
+        "(requires dstack-vmm >= 0.6.5)",
     )
     deploy_parser.add_argument(
         "--disk-prealloc",
@@ -2525,7 +2525,7 @@ def main():
     launch_ticket_group = update_parser.add_mutually_exclusive_group()
     launch_ticket_group.add_argument(
         "--launch-ticket-file",
-        help="Replace the launch ticket with this file's (requires dstack-vmm >= 0.6.4)",
+        help="Replace the launch ticket with this file's (requires dstack-vmm >= 0.6.5)",
     )
     launch_ticket_group.add_argument(
         "--no-launch-ticket", action="store_true", help="Remove the launch ticket"

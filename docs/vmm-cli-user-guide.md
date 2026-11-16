@@ -316,8 +316,8 @@ takes its ticket in the `Onboard` request rather than from
 guest's sys-config at every boot; it returns only its hash, which `info` shows.
 The host holds the ticket, so remove that hash from the contract once the host
 stops serving the app. Tickets need dstack-vmm, the KMS and the auth backend at
-0.6.4 or later, and a guest OS at 0.6.4 or later or a 0.5.x release with the
-launch ticket backport. See
+0.6.5 or later, and a guest OS at 0.6.5 or later, or 0.5.15 or later on 0.5.x.
+See
 [launch tickets](../dstack/kms/README.md#launch-tickets).
 
 #### Port Mapping
