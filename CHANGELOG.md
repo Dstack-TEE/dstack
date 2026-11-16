@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#1588), and every proxied connection one line on `dstack_gateway::access`
   with client, SNI, route, app, bytes and duration; disable it with
   `RUST_LOG=info,dstack_gateway::access=off` (#1589).
+- vmm-cli: `DSTACK_VMM_KMS_WHITELIST_PATH` overrides the KMS whitelist path,
+  `~/.dstack-vmm/kms-whitelist.json` by default (#1591).
 - `dstack-verifier-wasm` (`@phala/dstack-verifier-wasm`): the TDX lite OS check
   as a self-contained wasm package for JS/TS verifiers, released separately as
   `verifier-wasm-v*` (#1555).
