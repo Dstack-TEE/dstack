@@ -184,6 +184,12 @@ message OnboardRequest {
   // This instance's launch ticket, presented to the source; empty when the
   // KMS policy requires none.
   string launch_ticket = 5;
+  // Merge build only: a second source holding a single root epoch, imported as
+  // the epoch after the source's. Governance must register it as the latest
+  // epoch first.
+  string merge_source_url = 6;
+  // Optional bearer token for the merge source KMS admin listener.
+  string merge_source_token = 7;
 }
 
 message OnboardResponse {
