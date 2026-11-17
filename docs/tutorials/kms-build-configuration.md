@@ -232,7 +232,7 @@ EOF
 | `[listeners.admin]` | `address`, `port`, `auth_token_hash` | Admin listener (9101), which serves the key handover; the SHA-256 of the admin token. A serving KMS requires it with TLS |
 | `[listeners.onboard]` | `address`, `port` | Plain-HTTP onboarding page (9100, before the KMS has keys) |
 | `[core]` | `cert_dir` | Directory for certificates |
-| `[core]` | `keyring_dir` | Directory for the root keys of every epoch (required; must be persistent) |
+| `[core]` | `keyring_dir` | Directory for the root keys of every epoch (must be persistent) |
 | `[core]` | `pccs_url` | PCCS endpoint for quote verification |
 | `[core.auth_api]` | `url` | auth-eth webhook service URL |
 | `[core.onboard]` | `enabled` | Enable bootstrap/onboard mode |

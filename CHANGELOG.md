@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
-- **KMS requires `core.keyring_dir`.** The root keys of every epoch move out of
-  `cert_dir` into `<keyring_dir>/epochs/<n>/`, with `<keyring_dir>/root-epoch`
-  marking the newest. It has no default: point it at persistent storage. The
-  on-disk layout is not read from older versions, so upgrade by onboarding a
-  new KMS, as before.
+- **KMS state moves to `/var/lib/kms`.** The root keys of every epoch move out
+  of `cert_dir` into the new `core.keyring_dir` (default
+  `/var/lib/kms/keyring`), as `epochs/<n>/` with `root-epoch` marking the
+  newest. `cert_dir` and the default listener TLS paths move from
+  `/etc/kms/certs` to `/var/lib/kms/certs`. A deployment that persists
+  `/etc/kms/certs` and relies on the defaults must persist `/var/lib/kms` or
+  set both paths. The on-disk layout is not read from older versions, so
+  upgrade by onboarding a new KMS, as before.
 
 ### Changed
 

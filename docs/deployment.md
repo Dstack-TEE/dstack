@@ -522,8 +522,8 @@ port = 8001
 auth_token = "<source-admin-token>"
 
 [listeners.default.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+key = "/var/lib/kms/certs/rpc.key"
+certs = "/var/lib/kms/certs/rpc.crt"
 # No `mutual` section: client certificates are verified by their attestation.
 ```
 

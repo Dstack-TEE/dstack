@@ -85,8 +85,7 @@ pub(crate) struct ImageConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
-    /// Root keys of every epoch. Required: it is the only state the KMS
-    /// cannot regenerate, so it must be placed on persistent storage on purpose.
+    /// Root keys of every epoch.
     pub keyring_dir: PathBuf,
     #[serde(default)]
     pub attestation: AttestationVerifierConfig,
@@ -312,23 +311,9 @@ mod tests {
     use super::*;
     use rocket::figment::providers::{Format, Toml};
 
-    /// The default config plus the settings it leaves to the operator.
-    fn default_figment() -> Figment {
-        load_config_figment(None).merge(Toml::string("[core]\nkeyring_dir = \"/keyring\"\n"))
-    }
-
-    #[test]
-    fn keyring_dir_has_no_default() {
-        let err = load_config_figment(None)
-            .focus("core")
-            .extract::<KmsConfig>()
-            .unwrap_err();
-        assert!(err.to_string().contains("keyring_dir"), "{err}");
-    }
-
     #[test]
     fn default_config_serves_the_handover_on_the_admin_listener() {
-        let figment = default_figment();
+        let figment = load_config_figment(None);
         let config: KmsConfig = figment
             .focus("core")
             .extract()
@@ -350,7 +335,7 @@ mod tests {
     }
 
     fn handover_check(toml: &str) -> Result<()> {
-        let figment = default_figment().merge(Toml::string(toml));
+        let figment = load_config_figment(None).merge(Toml::string(toml));
         let config: KmsConfig = figment.focus("core").extract().unwrap();
         check_key_handover(&config, &ListenersConfig::load(&figment).unwrap(), &figment)
     }
@@ -421,7 +406,7 @@ mod tests {
 
     #[test]
     fn rpc_cert_is_attested_by_default() {
-        let figment = default_figment();
+        let figment = load_config_figment(None);
         let config: KmsConfig = figment
             .focus("core")
             .extract()
