@@ -20,13 +20,16 @@ keys once epoch `N` is current.
 They cannot be combined with `rotate`. The KMS then:
 
 1. Imports the whole keyring from `source_url`, as an ordinary onboarding.
-2. Reads the root public keys the merge source publishes (`GetMeta`) and
-   requires them to extend the imported keyring to the latest registered chain
-   hash, so epoch `N` must already be registered and pending activation.
-3. Fetches the merge source's root keys, pinned to that root CA, and requires
-   its auth API to authorize the merge source for key export at epoch `N`.
-4. Checks the merged keyring against governance as a join: the current epoch
-   and the pending epoch `N` must both match their chain hashes.
+2. Fetches the merge source's keys, requires it to hold exactly one root epoch,
+   and requires the auth API to authorize it for key export at epoch `N`.
+3. Checks the merged keyring against governance as a join: the current epoch
+   and epoch `N`, registered and pending activation, must both match their
+   chain hashes.
+
+The merge source is not pinned to a root CA: only the auth API knows epoch
+`N`, by its chain hash, and the keys are checked against it before use. The
+merge source still releases its keys only to an attested KMS its own auth API
+allows, with or without its admin token.
 
 The merged KMS serves the current epoch, so it serves the existing cluster's
 roots until epoch `N` is activated. Ordinary 0.6.5 KMS instances then onboard

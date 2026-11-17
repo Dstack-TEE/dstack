@@ -39,7 +39,7 @@ use crate::{
         build_boot_info_for_attestation, root_chain_hashes, servable_epoch,
         upgrade_authority::{
             app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
-            CurrentRootEpoch, RootEpochRegistration, RootEpochRegistry,
+            RootEpochRegistration, RootEpochRegistry,
         },
     },
 };
@@ -307,6 +307,7 @@ mod tests {
     use crate::main_service::amd_attest::{
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
+    use crate::main_service::upgrade_authority::CurrentRootEpoch;
     use sha2::Digest;
 
     fn hex_of(byte: u8, len: usize) -> String {
@@ -805,35 +806,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_merge_source_is_pinned_only_as_the_registered_next_epoch() {
-        let res = handover(2);
-        let published = |keys: &KmsKeys| {
-            let ca = KeyPair::from_pem(&keys.ca_key).unwrap();
-            let k256 = SigningKey::from_slice(&keys.k256_key).unwrap();
-            (
-                ca.public_key_der(),
-                self_signed_root_ca(&ca).unwrap().pem(),
-                k256.verifying_key().to_sec1_bytes().to_vec(),
-            )
-        };
-        let (held, next) = res.keys.split_at(1);
-        let (ca_pubkey, ca_cert, k256) = published(&next[0]);
-        let latest = epoch_of(&res, 1);
-        assert_eq!(
-            merge_source_pin(held, &ca_cert, &k256, latest).unwrap(),
-            ca_pubkey
-        );
-        let (_, other_cert, other_k256) = published(&handover(1).keys[0]);
-        assert!(merge_source_pin(held, &other_cert, &k256, latest).is_err());
-        assert!(merge_source_pin(held, &ca_cert, &other_k256, latest).is_err());
-        let error = merge_source_pin(&res.keys, &ca_cert, &k256, latest).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("must be the latest registered one"),
-            "{error:#}"
-        );
-    }
-
     #[rocket::async_test]
     async fn rotation_refuses_a_registered_epoch_pending_activation() {
         let cert_dir = tempfile::tempdir().unwrap();
@@ -1143,16 +1115,9 @@ impl Keys {
             .await
             .context("source KMS is not allowed for onboarding")?;
         if let Some((url, token)) = merge_source {
-            let next = fetch_merge_keys(
-                cfg,
-                &keys_res.keys,
-                url,
-                token,
-                registration,
-                attestation_verifier,
-            )
-            .await
-            .context("failed to merge the keys of the merge source KMS")?;
+            let next = fetch_merge_keys(cfg, highest + 1, url, token, attestation_verifier)
+                .await
+                .context("failed to get the keys from the merge source KMS")?;
             keys_res.keys.push(next);
         }
         Self::from_key_response(cfg, keys_res, domain, rotate, registration).await
@@ -1430,83 +1395,22 @@ async fn fetch_keys(
     Ok((keys_res, source_attestation()?))
 }
 
-/// Fetch the root keys of the next epoch after `held` from a second source
-/// holding a single epoch, which governance must have registered as the latest
-/// one. The source is pinned to the root CA key it publishes, once that key
-/// and its k256 key extend `held` to the registered chain hash.
+/// Fetch the single root epoch of a merge source, to import as `epoch`. Its
+/// keys are checked against governance with the merged keyring.
 async fn fetch_merge_keys(
     cfg: &KmsConfig,
-    held: &[KmsKeys],
+    epoch: u32,
     url: &str,
     token: &str,
-    registration: RootEpochRegistration,
     attestation_verifier: Arc<AttestationVerifier>,
 ) -> Result<KmsKeys> {
-    let latest = registration
-        .latest
-        .context("merging requires a registered root epoch")?;
-    let client = RaClientConfig::builder()
-        .tls_skip_ca_verification(true)
-        .remote_uri(url.to_string())
-        .build()
-        .into_client()?;
-    let meta = KmsClient::new(client)
-        .get_meta()
-        .await
-        .context("failed to get the merge source metadata")?;
-    let pin = merge_source_pin(held, &meta.ca_cert, &meta.k256_pubkey, latest)?;
-    let (res, attestation) = fetch_keys(url, token, "", Some(pin), attestation_verifier).await?;
-    ensure_kms_allowed(cfg, &attestation, latest.epoch)
+    let (res, attestation) = fetch_keys(url, token, "", None, attestation_verifier).await?;
+    ensure_kms_allowed(cfg, &attestation, epoch)
         .await
         .context("merge source KMS is not allowed for onboarding")?;
     let [keys] = <[KmsKeys; 1]>::try_from(res.keys)
         .map_err(|_| anyhow::anyhow!("the merge source must hold exactly one root epoch"))?;
     Ok(keys)
-}
-
-/// The root CA key of a merge source publishing `ca_cert` and `k256_pubkey`,
-/// if those are the latest registered epoch, directly after `held`.
-fn merge_source_pin(
-    held: &[KmsKeys],
-    ca_cert: &str,
-    k256_pubkey: &[u8],
-    latest: CurrentRootEpoch,
-) -> Result<Vec<u8>> {
-    let next = held.len();
-    if latest.epoch as usize != next {
-        bail!(
-            "root epoch {next} must be the latest registered one to merge, but the latest is {}",
-            latest.epoch
-        );
-    }
-    let (_, pem) = x509_parser::pem::parse_x509_pem(ca_cert.as_bytes())
-        .context("invalid merge source CA certificate")?;
-    let ca_pubkey = pem
-        .parse_x509()
-        .context("invalid merge source CA certificate")?
-        .public_key()
-        .raw
-        .to_vec();
-    let mut pubkeys = held
-        .iter()
-        .map(|keys| {
-            let ca = KeyPair::from_pem(&keys.ca_key).context("Failed to parse CA key")?;
-            let k256 =
-                SigningKey::from_slice(&keys.k256_key).context("Failed to parse ECDSA key")?;
-            Ok((
-                ca.public_key_der(),
-                k256.verifying_key().to_sec1_bytes().to_vec(),
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    pubkeys.push((ca_pubkey.clone(), k256_pubkey.to_vec()));
-    let hashes = dstack_types::root_epoch::chain_hashes(
-        pubkeys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
-    );
-    if hashes[next] != latest.chain_hash {
-        bail!("the merge source root keys are not registered as root epoch {next}");
-    }
-    Ok(ca_pubkey)
 }
 
 /// Check the handed-over roots against governance: they must include the
