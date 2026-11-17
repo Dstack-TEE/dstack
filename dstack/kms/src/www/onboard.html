@@ -269,6 +269,17 @@ SPDX-License-Identifier: Apache-2.0
                                         placeholder="Required when the KMS contract requires a launch ticket">
                                 </div>
                                 <div class="form-group">
+                                    <label for="merge_source_url">Merge source KMS URL:</label>
+                                    <input type="url" id="merge_source_url" v-model="mergeSourceUrl"
+                                        placeholder="Optional: a KMS whose single root epoch is imported as the next epoch">
+                                </div>
+                                <div class="form-group" v-if="mergeSourceUrl">
+                                    <label for="merge_source_token">Merge source admin token:</label>
+                                    <input type="password" id="merge_source_token" v-model="mergeSourceToken"
+                                        autocomplete="off"
+                                        placeholder="Without it, the merge source needs core.onboard.public_key_handover = true">
+                                </div>
+                                <div class="form-group" v-if="!mergeSourceUrl">
                                     <label>
                                         <input type="checkbox" v-model="rotate">
                                         Rotate: import the previous epochs and generate a new root key epoch
@@ -323,6 +334,8 @@ SPDX-License-Identifier: Apache-2.0
                     sourceUrl: '',
                     sourceToken: '',
                     launchTicket: '',
+                    mergeSourceUrl: '',
+                    mergeSourceToken: '',
                     onboardDomain: '',
                     rotate: false,
                     error: '',
@@ -407,8 +420,10 @@ SPDX-License-Identifier: Apache-2.0
                             source_url: this.sourceUrl + "/prpc",
                             source_token: this.sourceToken,
                             launch_ticket: this.launchTicket.trim(),
+                            merge_source_url: this.mergeSourceUrl,
+                            merge_source_token: this.mergeSourceToken,
                             domain: this.onboardDomain,
-                            rotate: this.rotate
+                            rotate: this.rotate && !this.mergeSourceUrl
                         });
 
                         if (data.error) throw new Error(data.error);
