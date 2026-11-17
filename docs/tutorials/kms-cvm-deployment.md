@@ -65,7 +65,7 @@ When you deploy KMS as a CVM, the following happens:
 
 ### Generated Artifacts
 
-Inside the CVM, the root keyring at `/etc/kms/keyring/` (`keyring_dir`):
+Inside the CVM, in the `kms-data` volume at `/var/lib/kms/`. The root keyring under `keyring/` (`keyring_dir`):
 
 | File | Purpose |
 |------|---------|
@@ -75,7 +75,7 @@ Inside the CVM, the root keyring at `/etc/kms/keyring/` (`keyring_dir`):
 | `epochs/<n>/root-attestation` | Attestation produced when the epoch `n` keys were generated; absent if there is none |
 | `root-epoch` | Newest root epoch held |
 
-And the RPC certificates at `/etc/kms/certs/` (`cert_dir`):
+And the RPC certificates under `certs/` (`cert_dir`):
 
 | File | Purpose |
 |------|---------|
@@ -144,8 +144,7 @@ services:
       - "9101:9101"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
-      - kms-certs:/etc/kms/certs
-      - kms-keyring:/etc/kms/keyring
+      - kms-data:/var/lib/kms
     environment:
       - RUST_LOG=info
       - KMS_DOMAIN=kms.yourdomain.com
@@ -158,15 +157,14 @@ services:
     restart: unless-stopped
 
 volumes:
-  kms-certs:
-  kms-keyring:
+  kms-data:
 
 configs:
   kms_config:
     content: |
       [listeners.default.tls]
-      key = "/etc/kms/certs/rpc.key"
-      certs = "/etc/kms/certs/rpc.crt"
+      key = "/var/lib/kms/certs/rpc.key"
+      certs = "/var/lib/kms/certs/rpc.crt"
 
       [listeners.guest]
       address = "0.0.0.0"
@@ -191,8 +189,8 @@ configs:
       # certificate signing verifies CSR signature and attestation.
 
       [core]
-      cert_dir = "/etc/kms/certs"
-      keyring_dir = "/etc/kms/keyring"
+      cert_dir = "/var/lib/kms/certs"
+      keyring_dir = "/var/lib/kms/keyring"
       pccs_url = "https://pccs.phala.network/sgx/certification/v4"
 
       [core.image]
@@ -508,7 +506,7 @@ The TDX quote can be verified by:
 │  │  │  │  └────┬────┘   └──────┬───────┘  │   │   │   │
 │  │  │  │       │               │          │   │   │   │
 │  │  │  │       ▼               ▼          │   │   │   │
-│  │  │  │  /etc/kms/certs   Ethereum RPC   │   │   │   │
+│  │  │  │  /var/lib/kms     Ethereum RPC   │   │   │   │
 │  │  │  └──────────────────────────────────┘   │   │   │
 │  │  │                                          │   │   │
 │  │  │  guest-agent (/var/run/dstack.sock)     │   │   │
@@ -553,7 +551,7 @@ For detailed solutions, see the [KMS Deployment Troubleshooting Guide](/tutorial
 
 ### Understanding Storage
 
-CVM certificates and root keys are stored in Docker named volumes (`kms-certs` and `kms-keyring`). This provides:
+CVM certificates and root keys are stored in the Docker named volume `kms-data`, while `/etc/kms` holds only configuration. This provides:
 
 - **Container restart persistence** - Certificates and root keys survive container restarts
 - **CVM restart consideration** - Depending on VMM configuration, volumes may or may not persist

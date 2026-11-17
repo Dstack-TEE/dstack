@@ -127,8 +127,8 @@ Create the directory structure for KMS configuration and certificates.
 # Configuration directory
 sudo mkdir -p /etc/kms
 
-# Certificate and root keyring directories
-sudo mkdir -p /etc/kms/certs /etc/kms/keyring
+# Certificate directory
+sudo mkdir -p /etc/kms/certs
 
 # Runtime directories
 sudo mkdir -p /var/run/kms
@@ -171,8 +171,8 @@ log_level = "info"
 
 # TLS certificate for the listeners (not the plain-HTTP onboard page)
 [listeners.default.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+key = "/var/lib/kms/certs/rpc.key"
+certs = "/var/lib/kms/certs/rpc.crt"
 
 # KMS RPCs for CVMs
 [listeners.guest]
@@ -187,8 +187,8 @@ port = 9100
 
 # Core KMS Configuration
 [core]
-cert_dir = "/etc/kms/certs"
-keyring_dir = "/etc/kms/keyring"
+cert_dir = "/var/lib/kms/certs"
+keyring_dir = "/var/lib/kms/keyring"
 subject_postfix = ".dstack"
 # Intel PCCS URL for TDX quote verification
 pccs_url = "https://pccs.phala.network/sgx/certification/v4"
@@ -358,7 +358,7 @@ RUN apt-get update && \
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 # Create directories
-RUN mkdir -p /etc/kms/certs /etc/kms/keyring /etc/kms/images /var/run/kms /var/log/kms
+RUN mkdir -p /etc/kms/images /var/lib/kms/certs /var/lib/kms/keyring /var/run/kms /var/log/kms
 
 # Copy KMS binary
 COPY dstack-kms /usr/local/bin/dstack-kms
@@ -419,8 +419,8 @@ log_level = "info"
 
 # TLS certificate for the listeners (not the plain-HTTP onboard page)
 [listeners.default.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+key = "/var/lib/kms/certs/rpc.key"
+certs = "/var/lib/kms/certs/rpc.crt"
 
 # KMS RPCs for CVMs
 [listeners.guest]
@@ -435,8 +435,8 @@ port = 9100
 
 # Core KMS Configuration
 [core]
-cert_dir = "/etc/kms/certs"
-keyring_dir = "/etc/kms/keyring"
+cert_dir = "/var/lib/kms/certs"
+keyring_dir = "/var/lib/kms/keyring"
 subject_postfix = ".dstack"
 pccs_url = "https://pccs.phala.network/sgx/certification/v4"
 
@@ -545,18 +545,15 @@ services:
     volumes:
       # Mount config file from local directory
       - ./kms.toml:/etc/kms/kms.toml:ro
-      # Named volumes for persistent certificates and root keys
-      - kms-certs:/etc/kms/certs
-      - kms-keyring:/etc/kms/keyring
+      # Named volume for persistent state: certificates and root keys
+      - kms-data:/var/lib/kms
     environment:
       - RUST_LOG=info
     restart: unless-stopped
 
 volumes:
-  kms-certs:
-    # Certificates persist across container restarts
-  kms-keyring:
-    # Root keys persist across container restarts
+  kms-data:
+    # Certificates and root keys persist across container restarts
 EOF
 ```
 
