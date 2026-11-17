@@ -820,7 +820,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cached-cell"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "tokio",
 ]
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "cc-eventlog"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "cert-client"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "dstack-guest-agent-rpc",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "certbot"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "bon",
@@ -909,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "certbot-cli"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "certbot",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "ct_monitor"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1903,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-api-auth"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-attest"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "aws-nitro-enclaves-nsm-api",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-auth"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1981,14 +1981,14 @@ dependencies = [
 
 [[package]]
 name = "dstack-build-info"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "git-version",
 ]
 
 [[package]]
 name = "dstack-cli"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-cli-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "dstack-types",
@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-gateway"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2065,6 +2065,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "rocket",
+ "rocket-proxy-listener",
  "rustls",
  "safe-write",
  "serde",
@@ -2088,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-gateway-rpc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -2101,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2158,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent-rpc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "hex",
@@ -2174,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent-simulator"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2196,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-kms"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2210,6 +2211,7 @@ dependencies = [
  "dstack-types",
  "dstack-verifier",
  "fs-err",
+ "futures",
  "hex",
  "hex_fmt",
  "http-client",
@@ -2225,6 +2227,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rocket",
+ "rocket-proxy-listener",
  "safe-write",
  "serde",
  "serde-duration",
@@ -2243,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-kms-rpc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "fs-err",
@@ -2257,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-mr"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "binrw",
@@ -2299,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-netd-rpc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "prost 0.13.5",
@@ -2311,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-nvidia-attest-proxy"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2339,7 +2342,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-tee-simulator"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "aws-nitro-enclaves-nsm-api",
@@ -2376,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-types"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "ciborium",
  "hex",
@@ -2394,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-util"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
@@ -2462,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-verifier"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -2498,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-verifier-wasm"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2512,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-vmm"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2579,7 +2582,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-vmm-rpc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -2592,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-volume"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "binrw",
@@ -2613,7 +2616,7 @@ dependencies = [
 
 [[package]]
 name = "dstackup"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -3358,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "guest-api"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "http-client",
@@ -3627,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "host-api"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "http-client",
@@ -3692,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "http-client"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "http-body-util",
@@ -4112,7 +4115,7 @@ checksum = "d8972d5be69940353d5347a1344cb375d9b457d6809b428b05bb1ca2fb9ce007"
 
 [[package]]
 name = "iohash"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "blake2",
@@ -4347,7 +4350,7 @@ dependencies = [
 
 [[package]]
 name = "key-provider-client"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "dstack-types",
@@ -4433,9 +4436,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.186"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libloading"
@@ -4493,8 +4496,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "load_config"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
+ "anyhow",
  "figment",
  "rocket",
  "tempfile",
@@ -4503,7 +4507,7 @@ dependencies = [
 
 [[package]]
 name = "local-key-provider"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "blake2",
  "dcap-qvl",
@@ -4565,7 +4569,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lspci"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "insta",
@@ -4691,7 +4695,7 @@ dependencies = [
 
 [[package]]
 name = "mock-attestation"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -4919,7 +4923,7 @@ dependencies = [
 
 [[package]]
 name = "nsm-attest"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "aws-nitro-enclaves-nsm-api",
@@ -4931,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "nsm-qvl"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "ciborium",
@@ -5104,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "nvattest"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -5597,7 +5601,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "pki-fetch"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "pem 3.0.6",
@@ -6059,7 +6063,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ra-rpc"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "bon",
@@ -6082,7 +6086,7 @@ dependencies = [
 
 [[package]]
 name = "ra-tls"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "bon",
@@ -6587,8 +6591,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocket-proxy-listener"
+version = "0.6.5"
+dependencies = [
+ "anyhow",
+ "pin-project",
+ "proxy-protocol",
+ "rocket",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rocket-vsock-listener"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "derive_more 2.1.1",
@@ -7151,7 +7168,7 @@ dependencies = [
 
 [[package]]
 name = "serde-duration"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -7373,7 +7390,7 @@ dependencies = [
 
 [[package]]
 name = "sev-snp-attest"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "fs-err",
@@ -7386,7 +7403,7 @@ dependencies = [
 
 [[package]]
 name = "sev-snp-qvl"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "hex",
@@ -7562,7 +7579,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "size-parser"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -7741,7 +7758,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "supervisor"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "bon",
@@ -7764,7 +7781,7 @@ dependencies = [
 
 [[package]]
 name = "supervisor-client"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -7917,7 +7934,7 @@ dependencies = [
 
 [[package]]
 name = "tdx-attest"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -8301,7 +8318,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tpm-attest"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "dstack-types",
@@ -8320,7 +8337,7 @@ dependencies = [
 
 [[package]]
 name = "tpm-qvl"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8343,7 +8360,7 @@ dependencies = [
 
 [[package]]
 name = "tpm-types"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "cc-eventlog",
  "dstack-types",
@@ -8354,7 +8371,7 @@ dependencies = [
 
 [[package]]
 name = "tpm2"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "hex",

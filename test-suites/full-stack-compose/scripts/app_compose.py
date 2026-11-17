@@ -52,7 +52,9 @@ def common_manifest(name: str, docker_compose: str, pre_launch_script: str) -> d
 
 def kms(args: argparse.Namespace) -> None:
     """Render a KMS CVM using the production onboarding and verifier path."""
-    config = f"""[rpc]
+    if args.legacy_config:
+        # KMS 0.5.8 reads the listeners from [rpc], [core.admin] and [core.onboard].
+        listeners = """[rpc]
 address = "0.0.0.0"
 port = 8000
 
@@ -60,8 +62,31 @@ port = 8000
 key = "/kms/certs/rpc.key"
 certs = "/kms/certs/rpc.crt"
 
+[core.admin]
+enabled = false
+"""
+        onboard_listener = 'address = "0.0.0.0"\nport = 8000\n'
+    else:
+        listeners = """[listeners.default.tls]
+key = "/kms/certs/rpc.key"
+certs = "/kms/certs/rpc.crt"
+
+[listeners.guest]
+address = "0.0.0.0"
+port = 8000
+
+[listeners.admin]
+enabled = false
+
+[listeners.onboard]
+address = "0.0.0.0"
+port = 8000
+"""
+        onboard_listener = ""
+    config = f"""{listeners}
 [core]
 cert_dir = "/kms/certs"
+keyring_dir = "/kms/keyring"
 admin_token_hash = ""
 pccs_url = ""
 enforce_self_authorization = true
@@ -88,12 +113,7 @@ quote_enabled = true
 # Current KMS needs a handover path to serve; this test keeps the admin
 # listener off and serves the public one. KMS 0.5.8 ignores both settings.
 public_key_handover = true
-address = "0.0.0.0"
-port = 8000
-
-[core.admin]
-enabled = false
-"""
+{onboard_listener}"""
     docker_compose = f"""services:
   kms:
     image: {args.image_ref}
@@ -230,6 +250,11 @@ def main() -> None:
     p = sub.add_parser("kms")
     add_image_args(p)
     p.add_argument("--auth-port", required=True, type=int)
+    p.add_argument(
+        "--legacy-config",
+        action="store_true",
+        help="use the listener sections of KMS 0.5.x",
+    )
     p.set_defaults(func=kms)
 
     p = sub.add_parser("gateway")

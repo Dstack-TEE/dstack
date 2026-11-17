@@ -13,6 +13,7 @@ ACTION=$1
 YOCTO_DIR=$REPO_ROOT/os/yocto
 DSTACK_DIR=$REPO_ROOT/dstack
 CERTS_DIR=$(pwd)/certs
+KEYRING_DIR=$(pwd)/keyring
 IMAGES_DIR=$(pwd)/images
 RUN_DIR=$(pwd)/run
 RUST_BUILD_DIR=$(pwd)/rust-target
@@ -163,18 +164,30 @@ build_cfg() {
         (umask 077 && openssl rand -hex 32 >kms-admin-token)
     fi
     cat <<EOF >kms.toml
+[listeners.default]
 log_level = "info"
 
-[rpc]
-address = "127.0.0.1"
-port = $KMS_RPC_LISTEN_PORT
-
-[rpc.tls]
+[listeners.default.tls]
 key = "$CERTS_DIR/rpc.key"
 certs = "$CERTS_DIR/rpc.crt"
 
+[listeners.guest]
+address = "127.0.0.1"
+port = $KMS_RPC_LISTEN_PORT
+
+[listeners.admin]
+enabled = true
+address = "127.0.0.1"
+port = $(($BASE_PORT + 5))
+auth_token = "$(cat kms-admin-token)"
+
+[listeners.onboard]
+address = "127.0.0.1"
+port = $KMS_RPC_LISTEN_PORT
+
 [core]
 cert_dir = "$CERTS_DIR"
+keyring_dir = "$KEYRING_DIR"
 attest_rpc_cert = false
 enforce_self_authorization = false
 
@@ -184,33 +197,21 @@ enabled = $VMM_ENABLE_GPU
 [core.auth_api]
 type = "dev"
 
-[core.admin]
-enabled = true
-address = "127.0.0.1"
-port = $(($BASE_PORT + 5))
-auth_token = "$(cat kms-admin-token)"
-
-[core.admin.tls]
-key = "$CERTS_DIR/rpc.key"
-certs = "$CERTS_DIR/rpc.crt"
-
 [core.onboard]
-address = "127.0.0.1"
-port = $KMS_RPC_LISTEN_PORT
 auto_bootstrap_domain = "$KMS_DOMAIN"
 EOF
 
     # dstack-gateway
     cat <<EOF >gateway.toml
-log_level = "info"
+[listeners.guest]
 address = "127.0.0.1"
 port = $GATEWAY_RPC_LISTEN_PORT
 
-[tls]
+[listeners.guest.tls]
 key = "$CERTS_DIR/gateway-rpc.key"
 certs = "$CERTS_DIR/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
 

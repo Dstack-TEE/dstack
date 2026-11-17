@@ -15,6 +15,9 @@ message GetAppKeyRequest {
   // the original root keys. Older epochs remain available so CVMs can migrate.
   optional uint32 root_epoch = 3;
   optional uint32 app_epoch = 4;
+  // The launch ticket from the CVM's sys-config; empty when it has none. Its
+  // hash is checked against the app's allowlist.
+  string launch_ticket = 5;
 }
 
 message AppId {
@@ -82,11 +85,17 @@ message GetMetaResponse {
 
 message GetKmsKeyRequest {
   string vm_config = 1;
+  // The joining instance's launch ticket; empty when it has none. Its hash is
+  // checked against the KMS allowlist.
+  string launch_ticket = 2;
 }
 
 message KmsKeys {
   string ca_key = 1;
   bytes k256_key = 2;
+  // Attestation produced when this epoch's keys were generated, as registered
+  // with governance; empty if none. Archived by the receiver, not verified.
+  bytes attestation = 3;
 }
 
 message KmsKeyResponse {
@@ -107,6 +116,8 @@ message SignCertRequest {
   bytes csr = 2;
   bytes signature = 3;
   string vm_config = 4;
+  // As in GetAppKeyRequest.
+  string launch_ticket = 5;
 }
 
 message SignCertResponse {
@@ -130,8 +141,17 @@ service KMS {
   rpc SignCert(SignCertRequest) returns (SignCertResponse);
 }
 
+// The read-only subset of the KMS service, served on the optional
+// `[listeners.public]` listener. None of these release secrets or need a client
+// certificate.
+service ReadOnly {
+  rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
+  rpc GetAppEnvEncryptPubKey(AppId) returns (PublicKeyResponse);
+  rpc GetSealedEnvPubKey(AppId) returns (SealedEnvPubKeyResponse);
+}
+
 // The KMS admin RPC service. Served on a separate admin listener
-// (`[core.admin]`) behind the shared HTTP authenticator, so the credential
+// (`[listeners.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the
 // request body.
 service Admin {
@@ -164,6 +184,9 @@ message OnboardRequest {
   // Import the source's epochs 0..N-1 and generate epoch N locally. The source
   // must be at the current epoch N-1.
   bool rotate = 4;
+  // This instance's launch ticket, presented to the source; empty when the
+  // KMS policy requires none.
+  string launch_ticket = 5;
 }
 
 message OnboardResponse {

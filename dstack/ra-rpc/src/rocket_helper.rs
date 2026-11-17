@@ -235,13 +235,14 @@ macro_rules! declare_prpc_routes {
         // `method` is the percent-decoded route segment; the span prefixes every
         // event of the request, so it goes through `log_text` like the error text.
         #[rocket::post($path, data = "<data>")]
-        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %$crate::log_text(&method)))]
+        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %$crate::log_text(&method), remote = tracing::field::Empty))]
         async fn $post<'a: 'd, 'd>(
             state: &'a $crate::rocket_helper::deps::State<$state>,
             method: &'a str,
             rpc_request: $crate::rocket_helper::deps::RpcRequest<'a>,
             data: $crate::rocket_helper::deps::Data<'d>,
         ) -> $crate::rocket_helper::deps::RpcResponse {
+            rpc_request.record_remote();
             $crate::rocket_helper::deps::PrpcHandler::builder()
                 .state(&**state)
                 .request(rpc_request)
@@ -254,12 +255,13 @@ macro_rules! declare_prpc_routes {
         }
 
         #[rocket::get($path)]
-        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %$crate::log_text(&method)))]
+        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %$crate::log_text(&method), remote = tracing::field::Empty))]
         async fn $get(
             state: &$crate::rocket_helper::deps::State<$state>,
             method: &str,
             rpc_request: $crate::rocket_helper::deps::RpcRequest<'_>,
         ) -> $crate::rocket_helper::deps::RpcResponse {
+            rpc_request.record_remote();
             $crate::rocket_helper::deps::PrpcHandler::builder()
                 .state(&**state)
                 .request(rpc_request)
@@ -381,6 +383,15 @@ impl<'r> FromRequest<'r> for RpcRequest<'r> {
             json: request.method() == Method::Get || query_field_get_bool(request, "json"),
             is_get: request.method() == Method::Get,
         })
+    }
+}
+
+impl RpcRequest<'_> {
+    /// Record the TCP peer as `remote` on the current request span.
+    pub fn record_remote(&self) {
+        if let Some(addr) = self.remote_addr.and_then(|endpoint| endpoint.tcp()) {
+            tracing::Span::current().record("remote", tracing::field::display(addr));
+        }
     }
 }
 

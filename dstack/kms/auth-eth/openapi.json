@@ -334,6 +334,10 @@
           "rootEpochHash": {
             "type": "string",
             "description": "Chain hash committing to the root public keys of epochs 0..=rootEpoch (hex)"
+          },
+          "rootCaPubkey": {
+            "type": "string",
+            "description": "Root CA public key (P-256 SPKI DER, hex) of the current root epoch, which signs the RPC certificate of every KMS serving it; absent when none is registered."
           }
         }
       },
@@ -483,6 +487,11 @@
             "minLength": 1,
             "maxLength": 64,
             "description": "TEE platform of the attested identity, as the KMS names it, e.g. dstack-tdx; passed to the contract unchanged."
+          },
+          "launchTicketHash": {
+            "type": "string",
+            "pattern": "^(0x)?[0-9a-fA-F]{0,64}$",
+            "description": "Hash of the launch ticket the attested subject presented; omit when none. Passed to the contract left-padded to bytes32."
           },
           "operation": {
             "type": "string",

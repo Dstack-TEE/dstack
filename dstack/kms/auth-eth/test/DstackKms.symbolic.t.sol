@@ -371,6 +371,12 @@ contract DstackKmsSymbolicTest is Test {
             );
         } else if (which == 11) {
             data = abi.encodeWithSelector(UUPSUpgradeable.upgradeToAndCall.selector, addr, "");
+        } else if (which == 12) {
+            data = abi.encodeWithSelector(DstackKms.setRequireKmsLaunchTicket.selector, flag);
+        } else if (which == 13) {
+            data = abi.encodeWithSelector(DstackKms.addKmsLaunchTicket.selector, word, "");
+        } else if (which == 14) {
+            data = abi.encodeWithSelector(DstackKms.removeKmsLaunchTicket.selector, word);
         } else {
             return; // outside the enumerated KMS-own mutating surface
         }

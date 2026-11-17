@@ -255,6 +255,7 @@ describe('API Compatibility Tests', () => {
           case 'appImplementation': return '0x9876543210987654321098765432109876543210';
           case 'rootEpochCount': return rootEpochCount();
           case 'currentRootEpoch': return currentRootEpoch();
+          case 'rootEpoch': return ['0x30' + params.args[0].toString(16).padStart(2, '0'), '0x02', '', hash];
         }
       });
     const boot = async (path: string, fields: object) => {
@@ -280,7 +281,8 @@ describe('API Compatibility Tests', () => {
       expect((await boot('kms', {})).reason).toMatch(/reports none/);
 
       const info = await appFetch(new Request('http://localhost:3001/'));
-      expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
+      // The CA key of the current epoch, which signs every serving KMS's RPC certificate.
+      expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash, rootCaPubkey: '0x3001' });
     });
 
     it('supports an upgraded empty registry without querying the current epoch', async () => {
@@ -293,7 +295,9 @@ describe('API Compatibility Tests', () => {
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).reason).toMatch(/not registered/);
       const info = await appFetch(new Request('http://localhost:3001/'));
       expect(info.status).toBe(200);
-      expect(await info.json()).not.toHaveProperty('rootEpoch');
+      const body = await info.json();
+      expect(body).not.toHaveProperty('rootEpoch');
+      expect(body).not.toHaveProperty('rootCaPubkey');
       expect(current).not.toHaveBeenCalled();
     });
 
@@ -312,8 +316,10 @@ describe('API Compatibility Tests', () => {
         expect(response.status).toBe(200);
       }
       const calls = mockReadContract.mock.calls.map(([params]) => params)
-        .filter(({ functionName }) => ['rootEpochCount', 'currentRootEpoch'].includes(functionName));
-      expect(calls.map(({ functionName }) => functionName)).toEqual(['rootEpochCount', 'currentRootEpoch']);
+        .filter(({ functionName }) => ['rootEpochCount', 'currentRootEpoch', 'rootEpoch'].includes(functionName));
+      expect(calls.map(({ functionName }) => functionName)).toEqual(endpoint === 'app'
+        ? ['rootEpochCount', 'currentRootEpoch']
+        : ['rootEpochCount', 'currentRootEpoch', 'rootEpoch']);
       expect(calls.every(({ blockNumber }) => blockNumber === 98n)).toBe(true);
       expect(mockGetBlock).toHaveBeenCalledTimes(1);
     });
@@ -905,6 +911,26 @@ describe('POST /authorizeApp', () => {
     }));
   });
 
+  it('forwards the launch ticket hash, zero when absent', async () => {
+    const result = {
+      authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
+      currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 1n, latestRootEpochHash: '0x' + '77'.repeat(32),
+    };
+    mockReadContract.mockResolvedValue(result);
+    const ticket = '0x' + '99'.repeat(32);
+    for (const [launchTicketHash, expected] of [[ticket, ticket], [undefined, '0x' + '00'.repeat(32)]]) {
+      const response = await appFetch(new Request('http://localhost/authorizeApp', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...appInfo, operation: 'app_get_key', launchTicketHash }),
+      }));
+      expect(response.status).toBe(200);
+      expect(mockReadContract).toHaveBeenLastCalledWith(expect.objectContaining({
+        args: [expect.objectContaining({ launchTicketHash: expected })],
+      }));
+    }
+  });
+
   it('encodes an explicit epoch zero as present', async () => {
     mockReadContract.mockResolvedValueOnce({
       authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
@@ -956,6 +982,7 @@ describe('POST /authorizeApp', () => {
       { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', mrAggregated: 'not-hex' }) },
       { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', teeVariant: undefined }) },
       { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', teeVariant: '' }) },
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', launchTicketHash: '0x' + '99'.repeat(33) }) },
       { status: 400, body: '{"appId":' },
       { status: 413, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', padding: 'a'.repeat(256 * 1024) }) },
     ];

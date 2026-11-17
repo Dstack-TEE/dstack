@@ -65,16 +65,22 @@ When you deploy KMS as a CVM, the following happens:
 
 ### Generated Artifacts
 
-Inside the CVM at `/etc/kms/certs/`:
+Inside the CVM, in the `kms-data` volume at `/var/lib/kms/`. The root keyring under `keyring/` (`keyring_dir`):
 
 | File | Purpose |
 |------|---------|
-| `root-ca.crt` | Root Certificate Authority (self-signed) |
-| `root-ca.key` | Root CA signing key (P256 ECDSA) |
+| `epochs/<n>/root-ca.crt` | Root Certificate Authority of epoch `n` (self-signed) |
+| `epochs/<n>/root-ca.key` | Root CA signing key of epoch `n` (P256 ECDSA) |
+| `epochs/<n>/root-k256.key` | Ethereum signing key of epoch `n` (secp256k1) |
+| `epochs/<n>/root-attestation` | Attestation produced when the epoch `n` keys were generated; absent if there is none |
+| `root-epoch` | Newest root epoch held |
+
+And the RPC certificates under `certs/` (`cert_dir`):
+
+| File | Purpose |
+|------|---------|
 | `rpc.crt` | TLS certificate for RPC server |
 | `rpc.key` | RPC server private key |
-| `root-k256.key` | Ethereum signing key (secp256k1) |
-| `bootstrap-info.json` | Public keys and TDX attestation quote |
 
 ---
 
@@ -138,7 +144,7 @@ services:
       - "9101:9101"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
-      - kms-certs:/etc/kms/certs
+      - kms-data:/var/lib/kms
     environment:
       - RUST_LOG=info
       - KMS_DOMAIN=kms.yourdomain.com
@@ -151,18 +157,30 @@ services:
     restart: unless-stopped
 
 volumes:
-  kms-certs:
+  kms-data:
 
 configs:
   kms_config:
     content: |
-      [rpc]
+      [listeners.default.tls]
+      key = "/var/lib/kms/certs/rpc.key"
+      certs = "/var/lib/kms/certs/rpc.crt"
+
+      [listeners.guest]
       address = "0.0.0.0"
       port = 9100
 
-      [rpc.tls]
-      key = "/etc/kms/certs/rpc.key"
-      certs = "/etc/kms/certs/rpc.crt"
+      # Admin listener: serves the key handover to other KMS nodes, so a
+      # KMS requires it. Only the token's SHA-256 goes into the compose.
+      [listeners.admin]
+      enabled = true
+      address = "0.0.0.0"
+      port = 9101
+      auth_token_hash = "ADMIN_TOKEN_HASH"
+
+      [listeners.onboard]
+      address = "0.0.0.0"
+      port = 9100
 
       # No mutual-TLS section: client certificates are verified by the attestation
       # they carry, not by an issuer CA. Connections without a certificate are still
@@ -171,7 +189,8 @@ configs:
       # certificate signing verifies CSR signature and attestation.
 
       [core]
-      cert_dir = "/etc/kms/certs"
+      cert_dir = "/var/lib/kms/certs"
+      keyring_dir = "/var/lib/kms/keyring"
       pccs_url = "https://pccs.phala.network/sgx/certification/v4"
 
       [core.image]
@@ -185,23 +204,9 @@ configs:
       [core.auth_api.webhook]
       url = "http://127.0.0.1:9200"
 
-      # Admin listener: serves the key handover to other KMS nodes, so a
-      # KMS requires it. Only the token's SHA-256 goes into the compose.
-      [core.admin]
-      enabled = true
-      address = "0.0.0.0"
-      port = 9101
-      auth_token_hash = "ADMIN_TOKEN_HASH"
-
-      [core.admin.tls]
-      key = "/etc/kms/certs/rpc.key"
-      certs = "/etc/kms/certs/rpc.crt"
-
       [core.onboard]
       enabled = true
       auto_bootstrap_domain = ""
-      address = "0.0.0.0"
-      port = 9100
 EOF
 ```
 
@@ -228,14 +233,15 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 
 | Section | Purpose |
 |---------|---------|
-| `[rpc]` | RPC server address and port (9100) |
-| `[rpc.tls]` | TLS certificate paths for HTTPS |
+| `[listeners.default.tls]` | TLS certificate paths for HTTPS, shared by the listeners |
+| `[listeners.guest]` | KMS RPC address and port (9100) |
+| `[listeners.admin]` | Admin listener on port 9101 with TLS; other KMS nodes onboard through it with the admin token. Without it (or `core.onboard.public_key_handover = true`) the KMS does not start |
+| `[listeners.onboard]` | Plain-HTTP onboarding page on port 9100, before the KMS has keys |
 | `[core.image]` | OS image verification — downloads images from `download.dstack.org` to compute expected TDX measurements |
 | `[core.auth_api]` | Authentication via auth-eth webhook on localhost:9200 |
-| `[core.admin]` | Admin listener on port 9101 with TLS; other KMS nodes onboard through it with the admin token. Without it (or `core.onboard.public_key_handover = true`) the KMS does not start |
 | `[core.onboard]` | Bootstrap settings — `auto_bootstrap_domain` is empty so KMS enters onboard mode for manual bootstrap |
 
-> **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. This ensures `bootstrap-info.json` (containing the TDX attestation quote and public keys) is written to disk. You'll need this file later to register the KMS on-chain.
+> **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. The response carries the TDX attestation quote and public keys you'll need later to register the KMS on-chain.
 
 **Environment variables explained:**
 
@@ -357,7 +363,7 @@ Onboarding
 
 ### Step 6: Bootstrap KMS
 
-With KMS in onboard mode, trigger key generation by calling the Bootstrap RPC endpoint. This generates root keys, a TDX attestation quote, and writes `bootstrap-info.json`:
+With KMS in onboard mode, trigger key generation by calling the Bootstrap RPC endpoint. This generates root keys and a TDX attestation quote over them:
 
 ```bash
 # Inspect the KMS measurement before bootstrap
@@ -500,7 +506,7 @@ The TDX quote can be verified by:
 │  │  │  │  └────┬────┘   └──────┬───────┘  │   │   │   │
 │  │  │  │       │               │          │   │   │   │
 │  │  │  │       ▼               ▼          │   │   │   │
-│  │  │  │  /etc/kms/certs   Ethereum RPC   │   │   │   │
+│  │  │  │  /var/lib/kms     Ethereum RPC   │   │   │   │
 │  │  │  └──────────────────────────────────┘   │   │   │
 │  │  │                                          │   │   │
 │  │  │  guest-agent (/var/run/dstack.sock)     │   │   │
@@ -545,9 +551,9 @@ For detailed solutions, see the [KMS Deployment Troubleshooting Guide](/tutorial
 
 ### Understanding Storage
 
-CVM certificates are stored in a Docker named volume (`kms-certs`). This provides:
+CVM certificates and root keys are stored in the Docker named volume `kms-data`, while `/etc/kms` holds only configuration. This provides:
 
-- **Container restart persistence** - Certificates survive container restarts
+- **Container restart persistence** - Certificates and root keys survive container restarts
 - **CVM restart consideration** - Depending on VMM configuration, volumes may or may not persist
 
 ### Backup Recommendations

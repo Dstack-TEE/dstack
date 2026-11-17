@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace.package]
-version = "0.6.4"
+version = "0.6.5"
 authors = ["Kevin Wang <wy721@qq.com>", "Leechael <Leechael@github.com>"]
 edition = "2021"
 license = "MIT"
@@ -46,6 +46,7 @@ members = [
     "supervisor",
     "supervisor/client",
     "rocket-vsock-listener",
+    "rocket-proxy-listener",
     "http-client",
     "host-api",
     "guest-api",
@@ -113,6 +114,7 @@ sev-snp-qvl = { path = "sev-snp-qvl" }
 nsm-qvl = { path = "nsm-qvl" }
 certbot = { path = "certbot" }
 rocket-vsock-listener = { path = "rocket-vsock-listener" }
+rocket-proxy-listener = { path = "rocket-proxy-listener" }
 host-api = { path = "host-api", default-features = false }
 guest-api = { path = "guest-api", default-features = false }
 http-client = { path = "http-client", default-features = false }
@@ -144,7 +146,7 @@ fs-err = "3.1.0"
 fuser = "0.16.0"
 path-absolutize = "3.1.1"
 futures = "0.3.31"
-libc = "0.2.171"
+libc = "0.2.189"
 log = "0.4.26"
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 notify = "8.0.0"

@@ -198,6 +198,11 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width">
+              <label for="launchTicket">Launch Ticket</label>
+              <input id="launchTicket" type="password" autocomplete="off" v-model="form.launch_ticket" placeholder="Optional: presented to the KMS; its hash must be allowed by the app contract">
+            </div>
+
+            <div class="form-group full-width">
               <label for="annotations">Annotations</label>
               <textarea id="annotations" v-model="form.annotations" placeholder="Optional KEY=VALUE per line, for host-side tooling; never passed to the CVM"></textarea>
             </div>

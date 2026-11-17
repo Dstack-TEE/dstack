@@ -5,6 +5,134 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Upgrade notes
+
+- **KMS state moves to `/var/lib/kms`.** The root keys of every epoch move out
+  of `cert_dir` into the new `core.keyring_dir` (default
+  `/var/lib/kms/keyring`), as `epochs/<n>/` with `root-epoch` marking the
+  newest. `cert_dir` and the default listener TLS paths move from
+  `/etc/kms/certs` to `/var/lib/kms/certs`. A deployment that persists
+  `/etc/kms/certs` and relies on the defaults must persist `/var/lib/kms` or
+  set both paths. The on-disk layout is not read from older versions, so
+  upgrade by onboarding a new KMS, as before.
+
+### Changed
+
+- KMS: each root epoch keeps the attestation produced when its keys were
+  generated (`epochs/<n>/root-attestation`), and key handover carries it in
+  `KmsKeys.attestation`, so joined and rotated nodes keep the evidence of every
+  epoch. The receiver archives it without verifying it; relying parties verify
+  it. `bootstrap-info.json` is gone: `GetMeta.bootstrap_info` reports the served
+  epoch's attestation. Auto-bootstrap now records the attestation too (#539).
+
+## [0.6.5] - 2026-11-15
+
+### Upgrade notes
+
+- **The contracts are not compatible with 0.6.4.** `AuthorizationRequest` gains
+  `launchTicketHash` (see Changed), which changes the selectors of
+  `authorizeApp` and `authorizeKms` and the `IAppEpochAuth` interface ID
+  (`0xd33835bd` to `0xc396c1b0`). Upgrade `DstackKms`, every `DstackApp` proxy
+  (and `setAppImplementation`) and auth-eth together: a 0.6.4 auth-eth with a
+  0.6.5 `DstackKms`, or the reverse, denies every request, and a 0.6.5
+  `DstackKms` treats a 0.6.4 `DstackApp` as a legacy policy, limited to app
+  epoch 0 through `isAppAllowed`.
+- **Upgrade the auth backend before the KMS.** A joining KMS needs the auth
+  backend's `GET /` to report `rootCaPubkey` and an `https://` source URL.
+- **Upgrade every KMS instance before `setRequireKmsLaunchTicket(true)`.**
+  Older instances authorize serving through `isKmsAllowed`, which a required
+  ticket refuses, so they stop serving every app.
+- **KMS refuses its old listener settings.** Move `[rpc]`, `[core.admin]`,
+  `[core.onboard]` `address`/`port`/`tls`, `[default]` and top-level Rocket
+  settings to `[listeners.*]` (see Changed) when upgrading the KMS image.
+- **Gateway refuses its old listener settings.** A hand-written `gateway.toml`
+  must move its top-level listener settings, `[tls]`, `[core.admin]` and
+  `[core.debug]` (see Changed) when upgrading the gateway.
+
+### Added
+
+- KMS: an optional `[listeners.public]` listener, off by default, serving only
+  `GetMeta`, `GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, so the guest
+  listener, which releases keys, can be restricted to CVMs (#1580).
+- KMS, gateway: `proxy_protocol = true` on a listener requires a PROXY v1/v2
+  header on every connection and logs its source address as the client. The
+  header is trusted as sent, so the listener must be reachable only through the
+  proxy. prpc request logs now carry the client address as `remote` (#1582).
+- Launch tickets: key release can require a secret ticket the host presents at
+  launch, checked by the contract before the KMS releases anything, without
+  changing the compose hash. `DstackApp.setRequireLaunchTicket`,
+  `addLaunchTicket(hash, label)`, `removeLaunchTicket` and `launchTickets()`
+  gate `GetAppKey` and `SignCert` at every app epoch; `DstackKms` has the same
+  for KMS instances, gating only `kms_import_keys`. The hash is
+  `sha256("dstack-launch-ticket/v1:" || ticket)`. The VMM stores the ticket,
+  writes it to the guest's sys-config at every boot and returns only
+  `VmInfo.launch_ticket_hash`; `vmm-cli launch-ticket new|hash`, `deploy
+  --launch-ticket-file`, `update --launch-ticket-file|--no-launch-ticket`,
+  `dstack-util get-keys --launch-ticket-file` and the web UI set it. A joining
+  KMS takes its ticket in `Onboard`. Guests need OS 0.6.5, or 0.5.15 or later
+  on 0.5.x. See `dstack/kms/README.md#launch-tickets` (#1577).
+- auth-eth, dstack-auth: `GET /` reports `rootCaPubkey`, the CA key of the
+  current root epoch (#1577).
+- KMS: refused `GetAppKey`, `SignCert` and `GetKmsKey` requests are logged as
+  `key release denied` on `dstack_kms::audit`, with the app, instance, caller
+  and error, and `GetAppEnvEncryptPubKey`/`GetSealedEnvPubKey` as `env public
+  key served` or `refused` (#1583).
+- Gateway: every state-changing admin RPC and every CVM registration logs one
+  line on `dstack_gateway::audit` with the operation, caller and subject
+  (#1588), and every proxied connection one line on `dstack_gateway::access`
+  with client, SNI, route, app, bytes and duration; disable it with
+  `RUST_LOG=info,dstack_gateway::access=off` (#1589).
+- vmm-cli: `DSTACK_VMM_KMS_WHITELIST_PATH` overrides the KMS whitelist path,
+  `~/.dstack-vmm/kms-whitelist.json` by default (#1591).
+- `dstack-verifier-wasm` (`@phala/dstack-verifier-wasm`): the TDX lite OS check
+  as a self-contained wasm package for JS/TS verifiers, released separately as
+  `verifier-wasm-v*` (#1555).
+
+### Changed
+
+- **Breaking:** KMS: listener settings move to `[listeners.*]`:
+  `[listeners.default]` (`tls`, `proxy_protocol`, Rocket settings, inherited
+  by every listener), `[listeners.guest]` (was `[rpc]`), `[listeners.admin]`
+  (was `[core.admin]`, credentials included), `[listeners.public]` and
+  `[listeners.onboard]` (`address`/`port`, was in `[core.onboard]`). The KMS
+  refuses a config that still sets an old location, naming the new one. The
+  old `[default]` section was never read; only `ident` moves, so responses now
+  carry `Server: DStack KMS` (#1585).
+- **Breaking:** gateway: listener settings move to `[listeners.*]`:
+  `[listeners.default]` (Rocket settings and `proxy_protocol`, was the top
+  level, now inherited by the admin and debug listeners too),
+  `[listeners.guest]` (`address`, `tls`, was the top level), `[listeners.admin]`
+  (was `[core.admin]`) and `[listeners.debug]` (`enabled`, was `[core.debug]
+  insecure_enable_debug_rpc`). `insecure_localhost_backend` moves to
+  `[core.proxy]`. The gateway refuses a config that still sets an old location,
+  naming the new one; the gateway image's entrypoint writes the new one (#1587).
+- **Breaking:** `IAppEpochAuth.AuthorizationRequest` gains `launchTicketHash`,
+  forwarded by auth-eth and checked by dstack-auth. A required ticket refuses
+  the legacy `isAppAllowed` and `isKmsAllowed` (#1577).
+- KMS: onboarding pins the source's RPC certificate to the current root CA
+  from its own auth backend and refuses `http://` sources, so the ticket and
+  `source_token` are sent only to a KMS holding the registered roots (#1577).
+- VMM: VM work directories are created with mode 0700 (#1577).
+- verifier: `details.acpi_tables_verified` is `false` on an MR mismatch;
+  `is_valid` is unchanged (#1555).
+- mkosi OS releases no longer publish `image-hashes.txt`; MRTD, `uki_auth` and
+  `boot_pcr_digest` are in the release notes table (#1573).
+- dstack-auth is documented as development, testing and evaluation only: the
+  host operator controls its policy file (#1576).
+
+### Fixed
+
+- dstack-util: `get-keys` verifies the KMS with the guest's collateral service
+  and trust anchors, as system setup does, instead of the production defaults
+  (#1565).
+- VMM: a guest with `simulated_tee = dstack-tdx` gets the vm_config and
+  measurement document of a TDX guest, so a KMS no longer refuses it with an
+  MRTD mismatch (#1590).
+- auth-eth: bump hono to 4.13.16 for GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq,
+  GHSA-46wx-v44x-9hh2 and GHSA-4h7h-rv7c-7m2v (#1578).
+
 ## [0.6.4] - 2026-11-12
 
 ### Upgrade notes

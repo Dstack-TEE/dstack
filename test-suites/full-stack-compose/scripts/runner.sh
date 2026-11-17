@@ -150,8 +150,9 @@ register_kms_measurement() {
 }
 
 render_kms() {
-  local stage=$1 image_ref=$2 archive=$3 meta
-  meta=$(/suite/scripts/app_compose.py kms \
+  local stage=$1 image_ref=$2 archive=$3 meta legacy=()
+  [[ $stage == old ]] && legacy=(--legacy-config)
+  meta=$(/suite/scripts/app_compose.py kms "${legacy[@]}" \
     --name "dstack-e2e-kms-${stage}" \
     --image-ref "$image_ref" \
     --image-archive "$archive" \

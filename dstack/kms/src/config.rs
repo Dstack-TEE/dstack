@@ -14,6 +14,54 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("kms", DEFAULT_CONFIG, config_file, false)
 }
 
+/// Settings that moved to `[listeners.*]`. The defaults (`kms.toml`) have none
+/// of them, so one present was set by the operator and would otherwise be
+/// silently ignored.
+const MOVED_SETTINGS: [(&str, &str); 6] = [
+    ("rpc", "listeners.guest"),
+    ("core.admin", "listeners.admin"),
+    ("core.onboard.address", "listeners.onboard.address"),
+    ("core.onboard.port", "listeners.onboard.port"),
+    ("core.onboard.tls", "listeners.onboard.tls"),
+    ("default", "listeners.default"),
+];
+
+/// Refuse a config that sets a moved setting, including a Rocket setting at the
+/// top level of a config file, which the old guest and onboard listeners read.
+pub(crate) fn reject_moved_settings(figment: &Figment) -> Result<()> {
+    load_config::reject_moved_settings(figment, &MOVED_SETTINGS)
+}
+
+/// The `enabled` switches of the optional listeners. Their bind settings
+/// (`address`, `port`, `tls`, `proxy_protocol`) are read by Rocket, see
+/// [`listener_figment`].
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ListenersConfig {
+    #[serde(default)]
+    pub admin: AdminConfig,
+    #[serde(default)]
+    pub public: ListenerSwitch,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ListenerSwitch {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl ListenersConfig {
+    pub fn load(figment: &Figment) -> Result<Self> {
+        Ok(figment.extract_inner("listeners")?)
+    }
+}
+
+/// The Rocket config of listener `name`. The onboard listener does not inherit
+/// the default `tls`, since it runs before the KMS has certificates.
+pub(crate) fn listener_figment(figment: &Figment, name: &str) -> Result<Figment> {
+    let uninherited: &[&str] = if name == "onboard" { &["tls"] } else { &[] };
+    load_config::listener_figment(figment, name, uninherited)
+}
+
 const TEMP_CA_CERT: &str = "tmp-ca.crt";
 const TEMP_CA_KEY: &str = "tmp-ca.key";
 const ROOT_CA_CERT: &str = "root-ca.crt";
@@ -22,9 +70,9 @@ const RPC_CERT: &str = "rpc.crt";
 const RPC_KEY: &str = "rpc.key";
 const RPC_DOMAIN: &str = "rpc-domain";
 const K256_KEY: &str = "root-k256.key";
+const ROOT_ATTESTATION: &str = "root-attestation";
 const ROOT_EPOCH: &str = "root-epoch";
 const EPOCHS_DIR: &str = "epochs";
-const BOOTSTRAP_INFO: &str = "bootstrap-info.json";
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ImageConfig {
@@ -37,6 +85,8 @@ pub(crate) struct ImageConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
+    /// Root keys of every epoch.
+    pub keyring_dir: PathBuf,
     #[serde(default)]
     pub attestation: AttestationVerifierConfig,
     pub auth_api: AuthApi,
@@ -85,10 +135,6 @@ pub(crate) struct KmsConfig {
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
     pub metrics: MetricsConfig,
-    /// Admin API listener + authentication. The admin RPCs (e.g.
-    /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
-    #[serde(default)]
-    pub admin: AdminConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,13 +143,11 @@ pub(crate) struct MetricsConfig {
     pub enabled: bool,
 }
 
-/// Admin API listener + authentication, mirroring the gateway `[core.admin]`
-/// section. The listen `address`/`port` are read from the same `[core.admin]`
-/// section by Rocket. The token travels in the `Authorization`/`X-Admin-Token`
+/// The admin listener, `[listeners.admin]`: whether it is served and its
+/// authentication. The token travels in the `Authorization`/`X-Admin-Token`
 /// header.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct AdminConfig {
-    /// Whether to serve the admin API at all.
     #[serde(default)]
     pub enabled: bool,
     /// Shared admin token required to call any admin RPC. Can also be supplied
@@ -131,48 +175,49 @@ fn default_true() -> bool {
 /// Without the public handover, other KMS nodes can get the keys only from the
 /// admin listener over TLS. A KMS without either would strand them, so it
 /// refuses to start, in any mode.
-pub(crate) fn check_key_handover(config: &KmsConfig, figment: &Figment) -> Result<()> {
+pub(crate) fn check_key_handover(
+    config: &KmsConfig,
+    listeners: &ListenersConfig,
+    figment: &Figment,
+) -> Result<()> {
     if config.onboard.public_key_handover {
         return Ok(());
     }
+    let admin = listener_figment(figment, "admin")?;
     let set = |key: &str| {
-        figment
+        admin
             .find_value(key)
             .ok()
             .and_then(|value| value.into_string())
             .is_some_and(|value| !value.is_empty())
     };
-    let missing = if !config.admin.enabled {
-        "[core.admin] enabled = true"
-    } else if !set("core.admin.tls.key") {
-        "[core.admin.tls] key"
-    } else if !set("core.admin.tls.certs") {
-        "[core.admin.tls] certs"
+    let missing = if !listeners.admin.enabled {
+        "[listeners.admin] enabled = true"
+    } else if !set("tls.key") {
+        "the admin listener's tls key"
+    } else if !set("tls.certs") {
+        "the admin listener's tls certs"
     } else {
         return Ok(());
     };
     bail!(
         "no key handover path for onboarding other KMS nodes: {missing} is not set. \
-         Configure the admin listener with TLS ([core.admin] enabled = true, an auth_token \
-         or DSTACK_KMS_ADMIN_TOKEN, and [core.admin.tls] key and certs), or set \
-         core.onboard.public_key_handover = true"
+         Configure the admin listener with TLS ([listeners.admin] enabled = true with an \
+         admin credential, and tls key and certs in [listeners.admin.tls] or \
+         [listeners.default.tls]), or set core.onboard.public_key_handover = true"
     )
 }
 
 impl KmsConfig {
-    /// The root keys are the last files a bootstrap writes, so both existing
-    /// marks a completed one. Anything short of that is left over from an
-    /// interrupted bootstrap and may be overwritten.
+    /// The root epoch marker is the last file a bootstrap or onboarding writes,
+    /// so its presence marks a completed one. Anything short of that is left
+    /// over from an interrupted attempt and may be overwritten.
     pub fn root_keys_exist(&self) -> bool {
-        self.root_ca_key().exists() && self.k256_key().exists()
+        self.root_epoch().exists()
     }
 
     pub fn keys_exists(&self) -> bool {
-        self.root_ca_cert().exists()
-            && self.root_ca_key().exists()
-            && self.rpc_cert().exists()
-            && self.rpc_key().exists()
-            && self.k256_key().exists()
+        self.root_keys_exist() && self.rpc_cert().exists() && self.rpc_key().exists()
     }
 
     pub fn tmp_ca_cert(&self) -> PathBuf {
@@ -181,14 +226,6 @@ impl KmsConfig {
 
     pub fn tmp_ca_key(&self) -> PathBuf {
         self.cert_dir.join(TEMP_CA_KEY)
-    }
-
-    pub fn root_ca_cert(&self) -> PathBuf {
-        self.cert_dir.join(ROOT_CA_CERT)
-    }
-
-    pub fn root_ca_key(&self) -> PathBuf {
-        self.cert_dir.join(ROOT_CA_KEY)
     }
 
     pub fn rpc_cert(&self) -> PathBuf {
@@ -203,34 +240,20 @@ impl KmsConfig {
         self.cert_dir.join(RPC_DOMAIN)
     }
 
-    pub fn k256_key(&self) -> PathBuf {
-        self.cert_dir.join(K256_KEY)
-    }
-
-    /// Records the newest epoch this KMS holds, whose roots are the top-level
-    /// root files. Absent means 0.
+    /// Records the newest epoch this KMS holds.
     pub fn root_epoch(&self) -> PathBuf {
-        self.cert_dir.join(ROOT_EPOCH)
+        self.keyring_dir.join(ROOT_EPOCH)
     }
 
-    /// Root key paths of `epoch` in a keyring whose newest epoch is `latest`:
-    /// the newest roots are the top-level root files, so paths that predate
-    /// epochs are unchanged. Older epochs live in `epochs/<n>/`.
-    pub fn root_key_paths(&self, epoch: u32, latest: u32) -> RootKeyPaths {
-        let dir = if epoch == latest {
-            self.cert_dir.clone()
-        } else {
-            self.cert_dir.join(EPOCHS_DIR).join(epoch.to_string())
-        };
+    /// Root key paths of `epoch`, under `epochs/<n>/`.
+    pub fn root_key_paths(&self, epoch: u32) -> RootKeyPaths {
+        let dir = self.keyring_dir.join(EPOCHS_DIR).join(epoch.to_string());
         RootKeyPaths {
             ca_cert: dir.join(ROOT_CA_CERT),
             ca_key: dir.join(ROOT_CA_KEY),
             k256_key: dir.join(K256_KEY),
+            attestation: dir.join(ROOT_ATTESTATION),
         }
-    }
-
-    pub fn bootstrap_info(&self) -> PathBuf {
-        self.cert_dir.join(BOOTSTRAP_INFO)
     }
 }
 
@@ -271,6 +294,7 @@ pub(crate) struct RootKeyPaths {
     pub ca_cert: PathBuf,
     pub ca_key: PathBuf,
     pub k256_key: PathBuf,
+    pub attestation: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -294,13 +318,16 @@ mod tests {
             .focus("core")
             .extract()
             .expect("kms.toml must parse into KmsConfig");
-        assert!(config.admin.enabled);
-        check_key_handover(&config, &figment).expect("the default config has a handover path");
+        let listeners = ListenersConfig::load(&figment).unwrap();
+        assert!(listeners.admin.enabled);
+        assert!(!listeners.public.enabled);
+        check_key_handover(&config, &listeners, &figment)
+            .expect("the default config has a handover path");
         assert!(
-            config.admin.auth_token.is_empty(),
+            listeners.admin.auth_token.is_empty(),
             "default admin token must be empty (fail-closed)"
         );
-        assert!(!config.admin.insecure_no_auth);
+        assert!(!listeners.admin.insecure_no_auth);
         assert!(
             !config.onboard.public_key_handover,
             "public key handover must be off by default"
@@ -310,15 +337,54 @@ mod tests {
     fn handover_check(toml: &str) -> Result<()> {
         let figment = load_config_figment(None).merge(Toml::string(toml));
         let config: KmsConfig = figment.focus("core").extract().unwrap();
-        check_key_handover(&config, &figment)
+        check_key_handover(&config, &ListenersConfig::load(&figment).unwrap(), &figment)
+    }
+
+    #[test]
+    fn moved_listener_settings_are_refused() {
+        reject_moved_settings(&load_config_figment(None)).expect("kms.toml uses the new names");
+        for (toml, old) in [
+            ("[rpc]\nport = 9100\n", "rpc -> listeners.guest"),
+            (
+                "[core.admin]\nport = 9101\n",
+                "core.admin -> listeners.admin",
+            ),
+            (
+                "[core.admin]\nauth_token = \"t\"\n",
+                "core.admin -> listeners.admin",
+            ),
+            ("[core.onboard]\nport = 9102\n", "core.onboard.port -> "),
+            ("[default]\nworkers = 8\n", "default -> listeners.default"),
+        ] {
+            let figment = load_config_figment(None).merge(Toml::string(toml));
+            let err = reject_moved_settings(&figment).unwrap_err().to_string();
+            assert!(err.contains(old), "{err}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("kms.toml");
+        fs_err::write(
+            &file,
+            "log_level = \"debug\"\n[core.onboard]\nenabled = false\n",
+        )
+        .unwrap();
+        let err = reject_moved_settings(&load_config_figment(file.to_str()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("log_level -> listeners.default.log_level"),
+            "{err}"
+        );
+        let onboarding = "[core.onboard]\nenabled = false\n";
+        reject_moved_settings(&load_config_figment(None).merge(Toml::string(onboarding)))
+            .expect("onboarding options stay in core");
     }
 
     #[test]
     fn a_serving_kms_needs_a_key_handover_path() {
         let public = "[core.onboard]\npublic_key_handover = true\n";
-        let no_admin = "[core.admin]\nenabled = false\n";
-        let no_key = "[core.admin.tls]\nkey = \"\"\n";
-        let no_certs = "[core.admin.tls]\ncerts = \"\"\n";
+        let no_admin = "[listeners.admin]\nenabled = false\n";
+        let no_key = "[listeners.admin.tls]\nkey = \"\"\n";
+        let no_certs = "[listeners.admin.tls]\ncerts = \"\"\n";
         assert!(handover_check("").is_ok());
         // onboarding and bootstrap modes are checked alike.
         let onboarding = "[core.onboard]\nenabled = true\nauto_bootstrap_domain = \"kms.test\"\n";
@@ -328,9 +394,9 @@ mod tests {
             assert!(handover_check(&format!("{public}{missing}")).is_ok());
         }
         for (toml, setting) in [
-            (no_admin, "[core.admin] enabled = true"),
-            (no_key, "[core.admin.tls] key"),
-            (no_certs, "[core.admin.tls] certs"),
+            (no_admin, "[listeners.admin] enabled = true"),
+            (no_key, "the admin listener's tls key"),
+            (no_certs, "the admin listener's tls certs"),
         ] {
             let err = handover_check(toml).unwrap_err().to_string();
             assert!(err.contains(setting), "{err}");
