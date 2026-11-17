@@ -13,6 +13,7 @@ ACTION=$1
 YOCTO_DIR=$REPO_ROOT/os/yocto
 DSTACK_DIR=$REPO_ROOT/dstack
 CERTS_DIR=$(pwd)/certs
+KEYRING_DIR=$(pwd)/keyring
 IMAGES_DIR=$(pwd)/images
 RUN_DIR=$(pwd)/run
 RUST_BUILD_DIR=$(pwd)/rust-target
@@ -186,6 +187,7 @@ port = $KMS_RPC_LISTEN_PORT
 
 [core]
 cert_dir = "$CERTS_DIR"
+keyring_dir = "$KEYRING_DIR"
 attest_rpc_cert = false
 enforce_self_authorization = false
 

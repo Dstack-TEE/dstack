@@ -18,8 +18,8 @@ proxy_protocol = false
 # No `mutual` section: client certificates are verified by the attestation they
 # carry, not by an issuer CA (see ra-rpc's ratls_client_verifier).
 [listeners.default.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+key = "/var/lib/kms/certs/rpc.key"
+certs = "/var/lib/kms/certs/rpc.crt"
 
 # For CVMs: all KMS RPCs, including those that release keys.
 [listeners.guest]
@@ -68,7 +68,10 @@ address = "0.0.0.0"
 port = 8000
 
 [core]
-cert_dir = "/etc/kms/certs"
+cert_dir = "/var/lib/kms/certs"
+# Root keys of every epoch, the only state the KMS cannot regenerate. Keep it on
+# persistent storage.
+keyring_dir = "/var/lib/kms/keyring"
 subject_postfix = ".dstack"
 site_name = ""
 # Whether trusted RPCs require the KMS to first attest itself to its own

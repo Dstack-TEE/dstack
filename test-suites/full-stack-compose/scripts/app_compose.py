@@ -86,6 +86,7 @@ port = 8000
     config = f"""{listeners}
 [core]
 cert_dir = "/kms/certs"
+keyring_dir = "/kms/keyring"
 admin_token_hash = ""
 pccs_url = ""
 enforce_self_authorization = true

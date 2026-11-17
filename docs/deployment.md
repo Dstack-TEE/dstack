@@ -522,8 +522,8 @@ port = 8001
 auth_token = "<source-admin-token>"
 
 [listeners.default.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+key = "/var/lib/kms/certs/rpc.key"
+certs = "/var/lib/kms/certs/rpc.crt"
 # No `mutual` section: client certificates are verified by their attestation.
 ```
 
@@ -577,7 +577,7 @@ governance made current. See the [rotation design](./kms-emergency-key-rotation-
 for the full procedure; the KMS steps are:
 
 1. If epochs were never registered, publish the attestation the KMS produced at
-   bootstrap (kept in `bootstrap-info.json` on the bootstrapped node) and
+   bootstrap (served as `bootstrap_info` by `KMS.GetMeta`) and
    register the current root public keys as epoch 0:
    `DstackKms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl)`, via
    `script/Manage.s.sol:RegisterRootEpoch`, or a `rootEpochs` entry in the

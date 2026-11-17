@@ -13,7 +13,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
+    AppId, AppKeyResponse, BootstrapResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
     GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SealedEnvPubKeyResponse,
     SignCertRequest, SignCertResponse,
 };
@@ -80,6 +80,8 @@ impl std::ops::Deref for KmsState {
 struct RootKeys {
     ca: CaCert,
     k256: SigningKey,
+    /// Evidence produced when the keys were generated; empty if there is none.
+    attestation: Vec<u8>,
 }
 
 impl RootKeys {
@@ -88,7 +90,12 @@ impl RootKeys {
             .context("failed to load root CA certificate")?;
         let key_bytes = fs::read(&paths.k256_key).context("failed to read ECDSA root key")?;
         let k256 = SigningKey::from_slice(&key_bytes).context("failed to load ECDSA root key")?;
-        Ok(Self { ca, k256 })
+        let attestation = read_root_attestation(paths)?;
+        Ok(Self {
+            ca,
+            k256,
+            attestation,
+        })
     }
 }
 
@@ -103,7 +110,7 @@ impl Keyring {
         let latest = read_root_epoch(config)?;
         let roots = (0..=latest)
             .map(|epoch| {
-                RootKeys::load(&config.root_key_paths(epoch, latest))
+                RootKeys::load(&config.root_key_paths(epoch))
                     .with_context(|| format!("failed to load root keys of epoch {epoch}"))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -479,12 +486,21 @@ fn derive_app_keys(
     })
 }
 
-pub(crate) fn read_root_epoch(config: &KmsConfig) -> Result<u32> {
-    match fs::read_to_string(config.root_epoch()) {
-        Ok(epoch) => epoch.trim().parse().context("invalid root epoch file"),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(err) => Err(err).context("failed to read root epoch file"),
+/// The attestation of an epoch's root keys; empty if it has none.
+pub(crate) fn read_root_attestation(paths: &RootKeyPaths) -> Result<Vec<u8>> {
+    match fs::read(&paths.attestation) {
+        Ok(attestation) => Ok(attestation),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err).context("failed to read root key attestation"),
     }
+}
+
+pub(crate) fn read_root_epoch(config: &KmsConfig) -> Result<u32> {
+    fs::read_to_string(config.root_epoch())
+        .context("failed to read root epoch file")?
+        .trim()
+        .parse()
+        .context("invalid root epoch file")
 }
 
 pub struct RpcHandler {
@@ -606,6 +622,7 @@ impl RpcHandler {
                 .map(|root| KmsKeys {
                     ca_key: root.ca.key.serialize_pem(),
                     k256_key: root.k256.to_bytes().to_vec(),
+                    attestation: root.attestation.clone(),
                 })
                 .collect(),
         })
@@ -1021,9 +1038,6 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_meta(self) -> Result<GetMetaResponse> {
-        let bootstrap_info = fs::read_to_string(self.state.config.bootstrap_info())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok());
         let info = self
             .state
             .auth_api_info
@@ -1032,10 +1046,16 @@ impl KmsRpc for RpcHandler {
             .map_err(|err| anyhow!("{err:#}"))?;
         let epoch = self.state.keyring.servable_epoch(info.root_epochs)?;
         let root = self.state.epoch_root(epoch)?;
+        let k256_pubkey = root.k256.verifying_key().to_sec1_bytes().to_vec();
+        let bootstrap_info = (!root.attestation.is_empty()).then(|| BootstrapResponse {
+            ca_pubkey: root.ca.key.public_key_der(),
+            k256_pubkey: k256_pubkey.clone(),
+            attestation: root.attestation.clone(),
+        });
         Ok(GetMetaResponse {
             ca_cert: root.ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
-            k256_pubkey: root.k256.verifying_key().to_sec1_bytes().to_vec(),
+            k256_pubkey,
             bootstrap_info,
             is_dev: self.state.config.auth_api.is_dev(),
             kms_contract_address: info.kms_contract_address,
@@ -1844,18 +1864,23 @@ mod tests {
             .build()
             .self_signed()
             .unwrap();
-        fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
-        fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
+        let keyring_dir = cert_dir.join("keyring");
+        let root_dir = keyring_dir.join("epochs/0");
+        fs::create_dir_all(&root_dir).unwrap();
+        fs::write(root_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
+        fs::write(root_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
         fs::write(
-            cert_dir.join("root-k256.key"),
+            root_dir.join("root-k256.key"),
             SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
         )
         .unwrap();
+        fs::write(keyring_dir.join("root-epoch"), "0").unwrap();
 
         let overrides = format!(
             r#"
             [core]
             cert_dir = "{}"
+            keyring_dir = "{}"
             attest_rpc_cert = false
             enforce_self_authorization = false
 
@@ -1869,6 +1894,7 @@ mod tests {
             url = "{webhook_url}"
             "#,
             cert_dir.display(),
+            keyring_dir.display(),
             cert_dir.display(),
         );
         let config: KmsConfig = Figment::from(rocket::Config::default())
@@ -1930,7 +1956,7 @@ mod tests {
         );
     }
 
-    /// The keyring in `config.cert_dir` with a second root epoch appended.
+    /// The keyring in `config.keyring_dir` with a second root epoch appended.
     fn rotated_keyring(config: &KmsConfig) -> Keyring {
         let mut keyring = Keyring::load(config).unwrap();
         let key = KeyPair::generate_for(&ra_tls::rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
@@ -1944,6 +1970,7 @@ mod tests {
         keyring.roots.push(RootKeys {
             ca: CaCert::from_parts(key, cert),
             k256: SigningKey::random(&mut rand::rngs::OsRng),
+            attestation: Vec::new(),
         });
         keyring.chain_hashes =
             root_chain_hashes(keyring.roots.iter().map(|root| (&root.ca.key, &root.k256)));

@@ -204,7 +204,7 @@ async fn main() -> Result<()> {
     info!("Issuing RPC certificate under root epoch {rpc_epoch}");
 
     info!("Updating certs");
-    if let Err(err) = onboard_service::update_certs(&config, rpc_epoch, keyring.latest()).await {
+    if let Err(err) = onboard_service::update_certs(&config, rpc_epoch).await {
         if config.attest_rpc_cert {
             return Err(err).context(
                 "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
@@ -222,8 +222,7 @@ async fn main() -> Result<()> {
 
     let metrics_enabled = config.metrics.enabled;
     // Reload certificates after renewal before exposing them through RPCs.
-    let rpc_ca_cert =
-        fs_err::read_to_string(config.root_key_paths(rpc_epoch, keyring.latest()).ca_cert)?;
+    let rpc_ca_cert = fs_err::read_to_string(config.root_key_paths(rpc_epoch).ca_cert)?;
     let keyring = main_service::Keyring::load(&config).context("Failed to reload the root keys")?;
     let state = main_service::KmsState::new(config, keyring, rpc_ca_cert)
         .context("Failed to initialize KMS state")?;
