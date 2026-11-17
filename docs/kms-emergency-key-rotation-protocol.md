@@ -75,8 +75,10 @@ latest two. Keeping old roots does not authorize issuing old derived keys. There
 is no local epoch configuration: a KMS serves the current epoch on chain,
 provided its keyring holds it and reproduces its chain hash, and waits
 otherwise. When the current epoch moves, the KMS restarts to follow it and
-re-signs its RPC certificate under the new root CA. A `root-epoch` marker records
-the newest stored epoch.
+re-signs its RPC certificate under the new root CA. Each epoch is stored under
+`epochs/<n>/` with the attestation produced when its keys were generated, and
+onboarding hands both over; a `root-epoch` marker records the newest stored
+epoch.
 
 Historical epochs are not time-limited. Their roots are already exposed, so
 withholding derived keys from authorized CVMs would not reduce what an attacker

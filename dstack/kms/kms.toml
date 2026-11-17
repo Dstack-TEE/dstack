@@ -69,6 +69,8 @@ port = 8000
 
 [core]
 cert_dir = "/etc/kms/certs"
+# Root keys of every epoch. Required, with no default: point it at persistent
+# storage, e.g. keyring_dir = "/etc/kms/keyring".
 subject_postfix = ".dstack"
 site_name = ""
 # Whether trusted RPCs require the KMS to first attest itself to its own

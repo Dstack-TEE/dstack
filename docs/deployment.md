@@ -577,7 +577,7 @@ governance made current. See the [rotation design](./kms-emergency-key-rotation-
 for the full procedure; the KMS steps are:
 
 1. If epochs were never registered, publish the attestation the KMS produced at
-   bootstrap (kept in `bootstrap-info.json` on the bootstrapped node) and
+   bootstrap (served as `bootstrap_info` by `KMS.GetMeta`) and
    register the current root public keys as epoch 0:
    `DstackKms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl)`, via
    `script/Manage.s.sol:RegisterRootEpoch`, or a `rootEpochs` entry in the

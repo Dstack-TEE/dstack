@@ -65,16 +65,22 @@ When you deploy KMS as a CVM, the following happens:
 
 ### Generated Artifacts
 
-Inside the CVM at `/etc/kms/certs/`:
+Inside the CVM, the root keyring at `/etc/kms/keyring/` (`keyring_dir`):
 
 | File | Purpose |
 |------|---------|
-| `root-ca.crt` | Root Certificate Authority (self-signed) |
-| `root-ca.key` | Root CA signing key (P256 ECDSA) |
+| `epochs/<n>/root-ca.crt` | Root Certificate Authority of epoch `n` (self-signed) |
+| `epochs/<n>/root-ca.key` | Root CA signing key of epoch `n` (P256 ECDSA) |
+| `epochs/<n>/root-k256.key` | Ethereum signing key of epoch `n` (secp256k1) |
+| `epochs/<n>/root-attestation` | Attestation produced when the epoch `n` keys were generated; absent if there is none |
+| `root-epoch` | Newest root epoch held |
+
+And the RPC certificates at `/etc/kms/certs/` (`cert_dir`):
+
+| File | Purpose |
+|------|---------|
 | `rpc.crt` | TLS certificate for RPC server |
 | `rpc.key` | RPC server private key |
-| `root-k256.key` | Ethereum signing key (secp256k1) |
-| `bootstrap-info.json` | Public keys and TDX attestation quote |
 
 ---
 
@@ -139,6 +145,7 @@ services:
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - kms-certs:/etc/kms/certs
+      - kms-keyring:/etc/kms/keyring
     environment:
       - RUST_LOG=info
       - KMS_DOMAIN=kms.yourdomain.com
@@ -152,6 +159,7 @@ services:
 
 volumes:
   kms-certs:
+  kms-keyring:
 
 configs:
   kms_config:
@@ -184,6 +192,7 @@ configs:
 
       [core]
       cert_dir = "/etc/kms/certs"
+      keyring_dir = "/etc/kms/keyring"
       pccs_url = "https://pccs.phala.network/sgx/certification/v4"
 
       [core.image]
@@ -234,7 +243,7 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 | `[core.auth_api]` | Authentication via auth-eth webhook on localhost:9200 |
 | `[core.onboard]` | Bootstrap settings — `auto_bootstrap_domain` is empty so KMS enters onboard mode for manual bootstrap |
 
-> **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. This ensures `bootstrap-info.json` (containing the TDX attestation quote and public keys) is written to disk. You'll need this file later to register the KMS on-chain.
+> **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. The response carries the TDX attestation quote and public keys you'll need later to register the KMS on-chain.
 
 **Environment variables explained:**
 
@@ -356,7 +365,7 @@ Onboarding
 
 ### Step 6: Bootstrap KMS
 
-With KMS in onboard mode, trigger key generation by calling the Bootstrap RPC endpoint. This generates root keys, a TDX attestation quote, and writes `bootstrap-info.json`:
+With KMS in onboard mode, trigger key generation by calling the Bootstrap RPC endpoint. This generates root keys and a TDX attestation quote over them:
 
 ```bash
 # Inspect the KMS measurement before bootstrap
@@ -544,9 +553,9 @@ For detailed solutions, see the [KMS Deployment Troubleshooting Guide](/tutorial
 
 ### Understanding Storage
 
-CVM certificates are stored in a Docker named volume (`kms-certs`). This provides:
+CVM certificates and root keys are stored in Docker named volumes (`kms-certs` and `kms-keyring`). This provides:
 
-- **Container restart persistence** - Certificates survive container restarts
+- **Container restart persistence** - Certificates and root keys survive container restarts
 - **CVM restart consideration** - Depending on VMM configuration, volumes may or may not persist
 
 ### Backup Recommendations

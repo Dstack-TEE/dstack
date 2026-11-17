@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **KMS requires `core.keyring_dir`.** The root keys of every epoch move out of
+  `cert_dir` into `<keyring_dir>/epochs/<n>/`, with `<keyring_dir>/root-epoch`
+  marking the newest. It has no default: point it at persistent storage. The
+  on-disk layout is not read from older versions, so upgrade by onboarding a
+  new KMS, as before.
+
+### Changed
+
+- KMS: each root epoch keeps the attestation produced when its keys were
+  generated (`epochs/<n>/root-attestation`), and key handover carries it in
+  `KmsKeys.attestation`, so joined and rotated nodes keep the evidence of every
+  epoch. The receiver archives it without verifying it; relying parties verify
+  it. `bootstrap-info.json` is gone: `GetMeta.bootstrap_info` reports the served
+  epoch's attestation. Auto-bootstrap now records the attestation too (#539).
+
 ## [0.6.5] - 2026-11-15
 
 ### Upgrade notes

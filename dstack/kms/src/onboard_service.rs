@@ -34,9 +34,10 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
 
 use crate::{
-    config::KmsConfig,
+    config::{KmsConfig, RootKeyPaths},
     main_service::{
-        build_boot_info_for_attestation, root_chain_hashes, servable_epoch,
+        build_boot_info_for_attestation, read_root_attestation, read_root_epoch, root_chain_hashes,
+        servable_epoch,
         upgrade_authority::{
             app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
             RootEpochRegistration, RootEpochRegistry,
@@ -108,28 +109,22 @@ fn validate_onboarding_domain(domain: &str) -> Result<()> {
     Ok(())
 }
 
-fn stored_k256_pubkey(cfg: &KmsConfig) -> Result<Vec<u8>> {
-    let bytes = fs::read(cfg.k256_key()).context("failed to read k256 key")?;
-    let key = SigningKey::from_slice(&bytes).context("failed to parse k256 key")?;
-    Ok(key.verifying_key().to_sec1_bytes().to_vec())
-}
-
 fn setup_status(cfg: &KmsConfig) -> Result<SetupStatusResponse> {
     if !cfg.root_keys_exist() {
         return Ok(SetupStatusResponse::default());
     }
-    let k256_pubkey = stored_k256_pubkey(cfg)?;
-    let info = fs::read(cfg.bootstrap_info())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<BootstrapResponse>(&bytes).ok())
-        .filter(|info| info.k256_pubkey == k256_pubkey)
-        .unwrap_or_default();
+    let root = cfg.root_key_paths(read_root_epoch(cfg)?);
+    let ca_key =
+        KeyPair::from_pem(&fs::read_to_string(&root.ca_key)?).context("failed to parse CA key")?;
+    let k256_key =
+        SigningKey::from_slice(&fs::read(&root.k256_key)?).context("failed to parse k256 key")?;
+    let attestation = read_root_attestation(&root)?;
     Ok(SetupStatusResponse {
         provisioned: true,
         ready: cfg.keys_exists(),
-        k256_pubkey,
-        ca_pubkey: info.ca_pubkey,
-        attestation: info.attestation,
+        k256_pubkey: k256_key.verifying_key().to_sec1_bytes().to_vec(),
+        ca_pubkey: ca_key.public_key_der(),
+        attestation,
     })
 }
 
@@ -144,12 +139,10 @@ impl OnboardRpc for OnboardHandler {
         ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
-        let keys = Keys::generate(&request.domain, self.state.config.attest_rpc_cert)
+        let mut keys = Keys::generate(&request.domain, self.state.config.attest_rpc_cert)
             .await
             .context("Failed to generate keys")?;
-        let response = keys.attest().await?;
-        // Store the bootstrap info
-        safe_write(cfg.bootstrap_info(), serde_json::to_vec(&response)?)?;
+        let response = keys.latest.attest().await?;
         keys.store(cfg)?;
         Ok(response)
     }
@@ -167,7 +160,7 @@ impl OnboardRpc for OnboardHandler {
         } else {
             format!("{source_url}/prpc")
         };
-        let keys = Keys::onboard(
+        let mut keys = Keys::onboard(
             cfg,
             &source_url,
             &request.source_token,
@@ -179,7 +172,7 @@ impl OnboardRpc for OnboardHandler {
         .await
         .context("Failed to onboard")?;
         if !request.rotate {
-            let k256_pubkey = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
+            let k256_pubkey = keys.latest.k256_pubkey();
             keys.store(cfg).context("Failed to store keys")?;
             return Ok(OnboardResponse {
                 k256_pubkey,
@@ -188,8 +181,7 @@ impl OnboardRpc for OnboardHandler {
         }
         // The attestation over the new epoch is what governance registers, so
         // it is persisted with the keys and stays readable via GetSetupStatus.
-        let info = keys.attest().await?;
-        safe_write(cfg.bootstrap_info(), serde_json::to_vec(&info)?)?;
+        let info = keys.latest.attest().await?;
         keys.store(cfg).context("Failed to store keys")?;
         Ok(OnboardResponse {
             k256_pubkey: info.k256_pubkey,
@@ -479,7 +471,8 @@ mod tests {
         let overrides = format!(
             r#"
             [core]
-            cert_dir = "{}"
+            cert_dir = "{0}"
+            keyring_dir = "{0}/keyring"
             attest_rpc_cert = false
             enforce_self_authorization = false
 
@@ -503,8 +496,9 @@ mod tests {
         let verifier = AttestationVerifier::load(&cfg.attestation).unwrap();
 
         bootstrap_keys(&cfg, &verifier).await.unwrap();
-        let root_ca_key = fs::read(cfg.root_ca_key()).unwrap();
-        let k256_key = fs::read(cfg.k256_key()).unwrap();
+        let root = cfg.root_key_paths(0);
+        let root_ca_key = fs::read(&root.ca_key).unwrap();
+        let k256_key = fs::read(&root.k256_key).unwrap();
 
         // A single missing certificate is enough to make `keys_exists()` false,
         // which is what sends the KMS back into onboarding on the next start.
@@ -516,8 +510,8 @@ mod tests {
             format!("{err:#}").contains("already been bootstrapped"),
             "unexpected error: {err:#}"
         );
-        assert_eq!(fs::read(cfg.root_ca_key()).unwrap(), root_ca_key);
-        assert_eq!(fs::read(cfg.k256_key()).unwrap(), k256_key);
+        assert_eq!(fs::read(&root.ca_key).unwrap(), root_ca_key);
+        assert_eq!(fs::read(&root.k256_key).unwrap(), k256_key);
     }
 
     #[rocket::async_test]
@@ -526,13 +520,15 @@ mod tests {
         let cfg = auto_bootstrap_config(cert_dir.path());
         let verifier = AttestationVerifier::load(&cfg.attestation).unwrap();
 
-        // A crash between the two root key writes.
-        fs::write(cfg.root_ca_key(), "stale").unwrap();
+        // A crash before the root epoch marker was written.
+        let root = cfg.root_key_paths(0);
+        fs::create_dir_all(root.ca_key.parent().unwrap()).unwrap();
+        fs::write(&root.ca_key, "stale").unwrap();
         assert!(!cfg.root_keys_exist());
 
         bootstrap_keys(&cfg, &verifier).await.unwrap();
         assert!(cfg.keys_exists());
-        assert_ne!(fs::read(cfg.root_ca_key()).unwrap(), b"stale");
+        assert_ne!(fs::read(&root.ca_key).unwrap(), b"stale");
     }
 
     #[test]
@@ -551,13 +547,14 @@ mod tests {
         KmsKeyResponse {
             temp_ca_key: String::new(),
             keys: (0..epochs)
-                .map(|_| KmsKeys {
+                .map(|epoch| KmsKeys {
                     ca_key: KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
                         .unwrap()
                         .serialize_pem(),
                     k256_key: SigningKey::random(&mut rand::rngs::OsRng)
                         .to_bytes()
                         .to_vec(),
+                    attestation: vec![epoch as u8; 4],
                 })
                 .collect(),
         }
@@ -655,7 +652,7 @@ mod tests {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());
         let res = handover(3);
-        let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
+        let sent = res.keys.clone();
 
         let keys = onboard(&cfg, res, false, unregistered(RootEpochRegistry::Unchecked))
             .await
@@ -664,14 +661,12 @@ mod tests {
         assert!(cfg.tmp_ca_key().exists());
         assert!(cfg.tmp_ca_cert().exists());
 
-        assert_eq!(crate::main_service::read_root_epoch(&cfg).unwrap(), 2);
-        for (epoch, k256) in (0..).zip(&sent) {
-            assert_eq!(
-                &fs::read(cfg.root_key_paths(epoch, 2).k256_key).unwrap(),
-                k256
-            );
+        assert_eq!(read_root_epoch(&cfg).unwrap(), 2);
+        for (epoch, sent) in (0..).zip(&sent) {
+            let root = cfg.root_key_paths(epoch);
+            assert_eq!(fs::read(&root.k256_key).unwrap(), sent.k256_key);
+            assert_eq!(fs::read(&root.attestation).unwrap(), sent.attestation);
         }
-        assert_eq!(&fs::read(cfg.k256_key()).unwrap(), &sent[2]);
     }
 
     #[rocket::async_test]
@@ -683,14 +678,11 @@ mod tests {
         let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
 
         let keys = onboard(&cfg, res, true, registration).await.unwrap();
-        assert_eq!(keys.epoch, 2);
+        assert_eq!(keys.epoch(), 2);
         keys.store(&cfg).unwrap();
 
-        assert_eq!(
-            fs::read(cfg.root_key_paths(1, 2).k256_key).unwrap(),
-            sent[1]
-        );
-        let current = fs::read(cfg.k256_key()).unwrap();
+        assert_eq!(fs::read(cfg.root_key_paths(1).k256_key).unwrap(), sent[1]);
+        let current = fs::read(cfg.root_key_paths(2).k256_key).unwrap();
         assert!(!sent.contains(&current));
     }
 
@@ -748,7 +740,7 @@ mod tests {
         let keys = onboard(&cfg, res.clone(), false, registered(&res, 1))
             .await
             .unwrap();
-        assert_eq!(keys.epoch, 2);
+        assert_eq!(keys.epoch(), 2);
         // A tail nobody registered is refused.
         let error = onboard(&cfg, res.clone(), false, registered_up_to(&res, 1, 1))
             .await
@@ -816,7 +808,7 @@ mod tests {
             onboard(&cfg, current.clone(), true, registered(&current, 1))
                 .await
                 .unwrap()
-                .epoch,
+                .epoch(),
             2
         );
     }
@@ -896,61 +888,23 @@ mod tests {
     }
 
     #[rocket::async_test]
-    async fn setup_status_includes_bootstrap_info_when_present() {
+    async fn setup_status_reports_the_latest_epoch() {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());
-        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        let mut keys = Keys::generate("kms.example.com", false).await.unwrap();
+        keys.latest.attestation = vec![7, 8, 9];
         keys.store(&cfg).unwrap();
-        let expected_k256 = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
-        let stored = BootstrapResponse {
-            ca_pubkey: vec![1, 2, 3],
-            k256_pubkey: expected_k256.clone(),
-            attestation: vec![7, 8, 9],
-        };
-        fs::write(cfg.bootstrap_info(), serde_json::to_vec(&stored).unwrap()).unwrap();
         let status = setup_status(&cfg).unwrap();
         assert!(status.provisioned);
         assert!(status.ready);
-        assert_eq!(status.ca_pubkey, stored.ca_pubkey);
-        assert_eq!(status.attestation, stored.attestation);
-        assert_eq!(status.k256_pubkey, expected_k256);
-    }
+        assert_eq!(status.k256_pubkey, keys.latest.k256_pubkey());
+        assert_eq!(status.ca_pubkey, keys.latest.ca_key.public_key_der());
+        assert_eq!(status.attestation, [7, 8, 9]);
 
-    #[rocket::async_test]
-    async fn setup_status_ignores_absent_or_invalid_bootstrap_info() {
-        let cert_dir = tempfile::tempdir().unwrap();
-        let cfg = auto_bootstrap_config(cert_dir.path());
-        let keys = Keys::generate("kms.example.com", false).await.unwrap();
-        let expected_k256 = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
-        keys.store(&cfg).unwrap();
-        let stored = BootstrapResponse {
-            ca_pubkey: vec![1, 2, 3],
-            k256_pubkey: vec![4, 5, 6],
-            attestation: vec![7, 8, 9],
-        };
-        for ready in [true, false] {
-            if !ready {
-                fs::remove_file(cfg.rpc_cert()).unwrap();
-                fs::remove_file(cfg.bootstrap_info()).unwrap();
-            }
-            for info in [
-                None,
-                Some(b"invalid json".to_vec()),
-                Some(serde_json::to_vec(&stored).unwrap()),
-            ] {
-                if let Some(info) = info {
-                    fs::write(cfg.bootstrap_info(), info).unwrap();
-                }
-                let status = setup_status(&cfg).unwrap();
-                assert!(status.provisioned);
-                assert_eq!(status.ready, ready);
-                assert_eq!(status.k256_pubkey, expected_k256);
-                assert!(status.ca_pubkey.is_empty());
-                assert!(status.attestation.is_empty());
-            }
-        }
+        fs::remove_file(cfg.rpc_cert()).unwrap();
+        assert!(!setup_status(&cfg).unwrap().ready);
 
-        fs::write(cfg.k256_key(), b"invalid key").unwrap();
+        fs::write(cfg.root_key_paths(0).k256_key, b"invalid key").unwrap();
         let err = setup_status(&cfg).unwrap_err();
         assert!(format!("{err:#}").contains("failed to parse k256 key"));
     }
@@ -966,31 +920,70 @@ mod tests {
     }
 }
 
-/// Root keys of an epoch older than the current one.
-struct HistoricalRoot {
+/// The root keys of one epoch.
+struct EpochRoot {
     ca_key: KeyPair,
     ca_cert: Certificate,
     k256_key: SigningKey,
+    /// Evidence produced when the keys were generated; empty if there is none.
+    attestation: Vec<u8>,
 }
 
-impl HistoricalRoot {
-    fn new(ca_key: KeyPair, k256_key: SigningKey) -> Result<Self> {
+impl EpochRoot {
+    fn new(ca_key: KeyPair, k256_key: SigningKey, attestation: Vec<u8>) -> Result<Self> {
         let ca_cert = self_signed_root_ca(&ca_key)?;
         Ok(Self {
             ca_key,
             ca_cert,
             k256_key,
+            attestation,
         })
+    }
+
+    fn generate() -> Result<Self> {
+        Self::new(
+            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?,
+            SigningKey::random(&mut rand::rngs::OsRng),
+            Vec::new(),
+        )
+    }
+
+    fn k256_pubkey(&self) -> Vec<u8> {
+        self.k256_key.verifying_key().to_sec1_bytes().to_vec()
+    }
+
+    /// Attest the freshly generated keys and keep the attestation with them.
+    async fn attest(&mut self) -> Result<BootstrapResponse> {
+        let ca_pubkey = self.ca_key.public_key_der();
+        let k256_pubkey = self.k256_pubkey();
+        self.attestation = attest_keys(&ca_pubkey, &k256_pubkey).await?;
+        Ok(BootstrapResponse {
+            ca_pubkey,
+            k256_pubkey,
+            attestation: self.attestation.clone(),
+        })
+    }
+
+    fn store(&self, paths: &RootKeyPaths) -> Result<()> {
+        safe_write(&paths.ca_cert, self.ca_cert.pem())?;
+        if !self.attestation.is_empty() {
+            safe_write(&paths.attestation, &self.attestation)?;
+        } else if let Err(err) = fs::remove_file(&paths.attestation) {
+            // An interrupted attempt may have left one for other keys.
+            if err.kind() != std::io::ErrorKind::NotFound {
+                return Err(err.into());
+            }
+        }
+        safe_write_with_mode(&paths.ca_key, self.ca_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(&paths.k256_key, self.k256_key.to_bytes(), 0o600)?;
+        Ok(())
     }
 }
 
 struct Keys {
-    /// Epoch of the root keys below; `history` holds epochs `0..epoch`.
-    epoch: u32,
-    history: Vec<HistoricalRoot>,
-    k256_key: SigningKey,
-    ca_key: KeyPair,
-    ca_cert: Certificate,
+    /// Root keys of the epochs before the latest, indexed by epoch.
+    history: Vec<EpochRoot>,
+    latest: EpochRoot,
     rpc_key: KeyPair,
     rpc_cert: Certificate,
     rpc_domain: String,
@@ -998,71 +991,36 @@ struct Keys {
 
 impl Keys {
     async fn generate(domain: &str, attest_rpc_cert: bool) -> Result<Self> {
-        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-        let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-        let k256_key = SigningKey::random(&mut rand::rngs::OsRng);
-        Self::from_keys(ca_key, rpc_key, k256_key, domain, attest_rpc_cert).await
+        Self::new(Vec::new(), EpochRoot::generate()?, domain, attest_rpc_cert).await
     }
 
-    /// Attest the current root public keys.
-    async fn attest(&self) -> Result<BootstrapResponse> {
-        let ca_pubkey = self.ca_key.public_key_der();
-        let k256_pubkey = self.k256_key.verifying_key().to_sec1_bytes().to_vec();
-        let attestation = attest_keys(&ca_pubkey, &k256_pubkey).await?;
-        Ok(BootstrapResponse {
-            ca_pubkey,
-            k256_pubkey,
-            attestation,
-        })
-    }
-
-    async fn from_keys(
-        ca_key: KeyPair,
-        rpc_key: KeyPair,
-        k256_key: SigningKey,
+    /// Issue a fresh RPC certificate under the `latest` root.
+    async fn new(
+        history: Vec<EpochRoot>,
+        latest: EpochRoot,
         domain: &str,
         attest_rpc_cert: bool,
     ) -> Result<Self> {
-        let ca_cert = self_signed_root_ca(&ca_key)?;
-        // The only place the KMS embeds its own attestation. Skipping it lets
-        // the KMS run outside a TEE for development; it does not affect the
-        // verification of quotes presented *to* the KMS, which is a separate
-        // path (main_service::ensure_app_attestation_allowed) and stays on.
-        let attestation = if attest_rpc_cert {
-            let pubkey = rpc_key.public_key_der();
-            let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-            let response = app_attest(report_data.to_vec()).await.context(
-                "failed to get a quote for the KMS RPC certificate. The KMS attests \
-                     itself through the dstack guest agent, so it must run inside a dstack \
-                     CVM. For local development set attest_rpc_cert = false",
-            )?;
-            Some(
-                VersionedAttestation::from_bytes(&response.attestation)
-                    .context("Invalid attestation")?,
-            )
-        } else {
-            None
-        };
-
-        // Sign WWW server cert with KMS cert
-        let rpc_cert = CertRequest::builder()
-            .subject(domain)
-            .alt_names(&[domain.to_string()])
-            .special_usage("kms:rpc")
-            .maybe_attestation(attestation.as_ref())
-            .key(&rpc_key)
-            .build()
-            .signed_by(&ca_cert, &ca_key)?;
-        Ok(Keys {
-            epoch: 0,
-            history: Vec::new(),
-            k256_key,
-            ca_key,
-            ca_cert,
+        let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let rpc_cert = issue_rpc_cert(
+            &latest.ca_cert,
+            &latest.ca_key,
+            &rpc_key,
+            domain,
+            attest_rpc_cert,
+        )
+        .await?;
+        Ok(Self {
+            history,
+            latest,
             rpc_key,
             rpc_cert,
             rpc_domain: domain.to_string(),
         })
+    }
+
+    fn epoch(&self) -> u32 {
+        self.history.len() as u32
     }
 
     async fn onboard(
@@ -1169,73 +1127,79 @@ impl Keys {
         rotate: bool,
         registration: RootEpochRegistration,
     ) -> Result<Self> {
-        let latest = keys_res
-            .keys
-            .len()
-            .checked_sub(1)
-            .context("source KMS handed over no keys")? as u32;
-        let mut roots = keys_res
+        let mut history = keys_res
             .keys
             .into_iter()
             .map(|keys| {
                 let ca_key = KeyPair::from_pem(&keys.ca_key).context("Failed to parse CA key")?;
                 let k256_key =
                     SigningKey::from_slice(&keys.k256_key).context("Failed to parse ECDSA key")?;
-                Ok((ca_key, k256_key))
+                EpochRoot::new(ca_key, k256_key, keys.attestation)
             })
             .collect::<Result<Vec<_>>>()?;
-        ensure_handover_registered(&roots, registration, rotate)?;
-        let epoch = if rotate { latest + 1 } else { latest };
-        let (ca_key, k256_key) = if rotate {
-            (
-                KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?,
-                SigningKey::random(&mut rand::rngs::OsRng),
-            )
+        if history.is_empty() {
+            bail!("source KMS handed over no keys");
+        }
+        ensure_handover_registered(&history, registration, rotate)?;
+        let latest = if rotate {
+            EpochRoot::generate()?
         } else {
-            roots.pop().context("source KMS handed over no keys")?
+            history.pop().context("source KMS handed over no keys")?
         };
-        let history = roots
-            .into_iter()
-            .map(|(ca_key, k256_key)| HistoricalRoot::new(ca_key, k256_key))
-            .collect::<Result<Vec<_>>>()?;
-
-        let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-        let keys = Self::from_keys(ca_key, rpc_key, k256_key, domain, cfg.attest_rpc_cert).await?;
-        Ok(Self {
-            epoch,
-            history,
-            ..keys
-        })
+        Self::new(history, latest, domain, cfg.attest_rpc_cert).await
     }
 
-    /// The root keys go last: see [`KmsConfig::root_keys_exist`].
+    /// The root epoch marker goes last: see [`KmsConfig::root_keys_exist`].
     fn store(&self, cfg: &KmsConfig) -> Result<()> {
         ensure_temp_ca(cfg)?;
-        for (epoch, root) in (0..).zip(&self.history) {
-            let paths = cfg.root_key_paths(epoch, self.epoch);
-            safe_write(&paths.ca_cert, root.ca_cert.pem())?;
-            safe_write_with_mode(&paths.ca_key, root.ca_key.serialize_pem(), 0o600)?;
-            safe_write_with_mode(&paths.k256_key, root.k256_key.to_bytes(), 0o600)?;
-        }
-        self.store_certs(cfg)?;
-        safe_write(cfg.rpc_domain(), self.rpc_domain.as_bytes())?;
-        safe_write(cfg.root_epoch(), self.epoch.to_string())?;
-        self.store_keys(cfg)?;
-        Ok(())
-    }
-
-    fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
-        Ok(())
-    }
-
-    fn store_certs(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write(cfg.root_ca_cert(), self.ca_cert.pem())?;
         safe_write(cfg.rpc_cert(), self.rpc_cert.pem())?;
+        safe_write(cfg.rpc_domain(), self.rpc_domain.as_bytes())?;
+        safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
+        for (epoch, root) in (0..).zip(self.history.iter().chain([&self.latest])) {
+            root.store(&cfg.root_key_paths(epoch))?;
+        }
+        safe_write(cfg.root_epoch(), self.epoch().to_string())?;
         Ok(())
     }
+}
+
+/// Issue the KMS RPC certificate under the root CA `ca_cert`.
+async fn issue_rpc_cert(
+    ca_cert: &Certificate,
+    ca_key: &KeyPair,
+    rpc_key: &KeyPair,
+    domain: &str,
+    attest_rpc_cert: bool,
+) -> Result<Certificate> {
+    // The only place the KMS embeds its own attestation. Skipping it lets
+    // the KMS run outside a TEE for development; it does not affect the
+    // verification of quotes presented *to* the KMS, which is a separate
+    // path (main_service::ensure_app_attestation_allowed) and stays on.
+    let attestation = if attest_rpc_cert {
+        let pubkey = rpc_key.public_key_der();
+        let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
+        let response = app_attest(report_data.to_vec()).await.context(
+            "failed to get a quote for the KMS RPC certificate. The KMS attests \
+                 itself through the dstack guest agent, so it must run inside a dstack \
+                 CVM. For local development set attest_rpc_cert = false",
+        )?;
+        Some(
+            VersionedAttestation::from_bytes(&response.attestation)
+                .context("Invalid attestation")?,
+        )
+    } else {
+        None
+    };
+
+    // Sign WWW server cert with KMS cert
+    CertRequest::builder()
+        .subject(domain)
+        .alt_names(&[domain.to_string()])
+        .special_usage("kms:rpc")
+        .maybe_attestation(attestation.as_ref())
+        .key(rpc_key)
+        .build()
+        .signed_by(ca_cert, ca_key)
 }
 
 /// Keep the public compatibility CA independent of all epoch root keys.
@@ -1269,16 +1233,11 @@ pub(crate) fn ensure_temp_ca(cfg: &KmsConfig) -> Result<CaCert> {
 
 /// Reissue the RPC certificate under the root CA of the served `epoch`, so
 /// guests reach this KMS through the CA of the keys it serves.
-pub(crate) async fn update_certs(cfg: &KmsConfig, epoch: u32, latest: u32) -> Result<()> {
+pub(crate) async fn update_certs(cfg: &KmsConfig, epoch: u32) -> Result<()> {
     ensure_temp_ca(cfg)?;
-    let roots = cfg.root_key_paths(epoch, latest);
-    // Read existing keys
-    let ca_key = KeyPair::from_pem(&fs::read_to_string(&roots.ca_key)?)?;
+    let root = cfg.root_key_paths(epoch);
+    let ca_key = KeyPair::from_pem(&fs::read_to_string(&root.ca_key)?)?;
     let rpc_key = KeyPair::from_pem(&fs::read_to_string(cfg.rpc_key())?)?;
-
-    // Read k256 key
-    let k256_key_bytes = fs::read(&roots.k256_key)?;
-    let k256_key = SigningKey::from_slice(&k256_key_bytes)?;
 
     let domain = if cfg.onboard.auto_bootstrap_domain.is_empty() {
         fs::read_to_string(cfg.rpc_domain())?
@@ -1287,19 +1246,15 @@ pub(crate) async fn update_certs(cfg: &KmsConfig, epoch: u32, latest: u32) -> Re
     };
     let domain = domain.trim();
 
-    // Regenerate certificates using existing keys
-    let keys = Keys::from_keys(ca_key, rpc_key, k256_key, domain, cfg.attest_rpc_cert)
+    let ca_cert = self_signed_root_ca(&ca_key)?;
+    let rpc_cert = issue_rpc_cert(&ca_cert, &ca_key, &rpc_key, domain, cfg.attest_rpc_cert)
         .await
         .context("Failed to regenerate certificates")?;
 
-    renew_ca_cert_if_expiring(
-        &roots.ca_cert,
-        keys.ca_cert.pem(),
-        "KMS root CA certificate",
-    )?;
+    renew_ca_cert_if_expiring(&root.ca_cert, ca_cert.pem(), "KMS root CA certificate")?;
     // The RPC leaf depends on the refreshed domain and platform attestation, so
     // it is reissued on every startup.
-    safe_write(cfg.rpc_cert(), keys.rpc_cert.pem())?;
+    safe_write(cfg.rpc_cert(), rpc_cert.pem())?;
     info!("Reissued the KMS RPC certificate for {domain}");
 
     Ok(())
@@ -1349,9 +1304,12 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifi
     ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
-    let keys = Keys::generate(&cfg.onboard.auto_bootstrap_domain, cfg.attest_rpc_cert)
+    let mut keys = Keys::generate(&cfg.onboard.auto_bootstrap_domain, cfg.attest_rpc_cert)
         .await
         .context("Failed to generate keys")?;
+    if cfg.attest_rpc_cert {
+        keys.latest.attest().await?;
+    }
     keys.store(cfg)?;
     Ok(())
 }
@@ -1363,7 +1321,7 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifi
 /// from the current epoch with nothing pending activation, or it would collide
 /// with the next registered epoch.
 fn ensure_handover_registered(
-    roots: &[(KeyPair, SigningKey)],
+    roots: &[EpochRoot],
     registration: RootEpochRegistration,
     rotate: bool,
 ) -> Result<()> {
@@ -1371,7 +1329,7 @@ fn ensure_handover_registered(
     if rotate && registry == RootEpochRegistry::Empty {
         bail!("register root epoch 0 before rotating");
     }
-    let hashes = root_chain_hashes(roots.iter().map(|(ca, k256)| (ca, k256)));
+    let hashes = root_chain_hashes(roots.iter().map(|root| (&root.ca_key, &root.k256_key)));
     let current = servable_epoch(&hashes, registry)?;
     let held = roots.len() as u32 - 1;
     if let Some(latest) = latest {

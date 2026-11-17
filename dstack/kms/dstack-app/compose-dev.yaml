@@ -64,6 +64,7 @@ configs:
 
       [core]
       cert_dir = "/kms/certs"
+      keyring_dir = "/kms/keyring"
 
       [core.image]
       cache_dir = "/kms/images"

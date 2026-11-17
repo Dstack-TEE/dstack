@@ -93,6 +93,9 @@ message GetKmsKeyRequest {
 message KmsKeys {
   string ca_key = 1;
   bytes k256_key = 2;
+  // Attestation produced when this epoch's keys were generated, as registered
+  // with governance; empty if none. Archived by the receiver, not verified.
+  bytes attestation = 3;
 }
 
 message KmsKeyResponse {
