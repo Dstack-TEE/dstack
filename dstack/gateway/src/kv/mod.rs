@@ -2144,8 +2144,12 @@ impl KvStore {
         let mut state = self.persistent.write();
         // A corrupt record decodes as absent (logged and counted) and is
         // overwritten here, so it heals instead of wedging the key.
+        // A lease stamped beyond the drift bound (a clock since stepped back,
+        // or a corrupt value) would otherwise hold the key until wall time
+        // catches up; treat it as expired.
         if let Some(existing) = state.decode::<CertRenewLock>(&key) {
-            if now < existing.started_at.saturating_add(lock_timeout_secs) {
+            let plausible = existing.started_at <= now.saturating_add(MAX_CLOCK_DRIFT_SECS);
+            if plausible && now < existing.started_at.saturating_add(lock_timeout_secs) {
                 return None;
             }
         }
@@ -2396,44 +2400,41 @@ mod acme_credentials_tests {
         );
     }
 
+    /// A lease from a clock within the drift bound is honoured; one stamped
+    /// beyond it (here `u64::MAX`) would otherwise wedge the key until wall
+    /// time catches up, so it is treated as expired.
     #[test]
-    fn lease_expiry_does_not_overflow() {
+    fn a_lease_stamped_beyond_the_drift_bound_is_treated_as_expired() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let kv = test_kv(dir.path());
-        kv.persistent
-            .write()
-            .put_encoded(
-                keys::GLOBAL_ACME_ROTATION_LOCK.to_string(),
-                &CertRenewLock {
-                    started_at: u64::MAX,
-                    started_by: 2,
-                    nonce: 0,
-                },
-                false,
-            )
-            .expect("lock write should succeed");
+        let plant = |key: String, started_at: u64| {
+            kv.persistent
+                .write()
+                .put_encoded(
+                    key,
+                    &CertRenewLock {
+                        started_at,
+                        started_by: 2,
+                        nonce: 0,
+                    },
+                    false,
+                )
+                .expect("lock write should succeed");
+        };
 
+        plant(
+            keys::cert_lock("ahead.example"),
+            now_secs() + MAX_CLOCK_DRIFT_SECS / 2,
+        );
         assert!(
-            kv.try_acquire_rotation_lock(600).is_none(),
-            "a non-expired lock with a saturated expiry must remain held"
+            kv.try_acquire_cert_lock("ahead.example", 600).is_none(),
+            "a peer clock ahead within the drift bound still holds the lease"
         );
 
-        kv.persistent
-            .write()
-            .put_encoded(
-                keys::cert_lock("overflow.example"),
-                &CertRenewLock {
-                    started_at: u64::MAX,
-                    started_by: 2,
-                    nonce: 0,
-                },
-                false,
-            )
-            .expect("certificate lock write should succeed");
-        assert!(
-            kv.try_acquire_cert_lock("overflow.example", 600).is_none(),
-            "a non-expired certificate lock with a saturated expiry must remain held"
-        );
+        plant(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), u64::MAX);
+        assert!(kv.try_acquire_rotation_lock(600).is_some());
+        plant(keys::cert_lock("overflow.example"), u64::MAX);
+        assert!(kv.try_acquire_cert_lock("overflow.example", 600).is_some());
     }
 }
 

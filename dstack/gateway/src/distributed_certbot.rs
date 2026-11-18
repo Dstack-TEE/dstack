@@ -834,12 +834,13 @@ impl DistributedCertBot {
         Ok(Some(client))
     }
 
-    /// Register the cluster's shared ACME account, or adopt the one that
-    /// appeared while this call was waiting for the lock.
+    /// Register the cluster's shared ACME account, or adopt the one the
+    /// previous lock holder registered after this call last looked.
     ///
-    /// Called with the ACME lock held. The re-read is the point: without it
-    /// every waiter registers an account of its own the moment it is let
-    /// through, which is the race the lock was taken to avoid.
+    /// Called with the ACME lock held. The re-read is the point: without it a
+    /// caller that found no account, then took the lock once it was released,
+    /// would register one of its own, which is the race the lock was taken to
+    /// avoid.
     async fn register_or_adopt_account(
         &self,
         domain: &str,
@@ -1226,7 +1227,7 @@ mod tests {
     /// built only after the lock is granted, so an unreachable provider (as
     /// configured here) cannot be what this run fails on.
     #[tokio::test]
-    async fn first_use_registration_waits_for_the_rotation_lock() {
+    async fn first_use_registration_is_refused_while_the_rotation_lock_is_held() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
         let certbot = certbot_with_domain(data_dir.path());
         let config = test_zt_domain_config();
