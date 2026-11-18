@@ -37,7 +37,7 @@ use wavekv::types::NodeId;
 
 use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
-    config::{Config, TlsConfig},
+    config::{Config, TlsConfig, WgConfig},
     kv::{
         fetch_peers_from_bootnode, import, AppIdValidator, HttpsClientConfig, InstanceRecord,
         KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus, PortPolicy,
@@ -1538,12 +1538,15 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     // Watch for node changes and reconfigure WireGuard
     let mut rx = kv_store.watch_nodes();
     let proxy_for_nodes = proxy.clone();
+    let mut warned_overlaps = BTreeSet::new();
+    warn_peer_addresses_in_pool(&proxy, &mut warned_overlaps);
     tokio::spawn(async move {
         loop {
             if rx.changed().await.is_err() {
                 break;
             }
             info!("WaveKV: detected remote node changes, reconfiguring WireGuard...");
+            warn_peer_addresses_in_pool(&proxy_for_nodes, &mut warned_overlaps);
             proxy_for_nodes.request_wg_apply();
         }
     });
@@ -2767,6 +2770,46 @@ impl ProxyState {
     fn get_all_nodes_filtered(&self, exclude_down: bool) -> Vec<GatewayNodeInfo> {
         gateway_nodes(&self.kv_store, exclude_down)
     }
+}
+
+/// Peer gateway addresses this node could hand out to a CVM.
+///
+/// Every node must keep its pool clear of the other nodes' addresses, but each
+/// node's config validation only sees its own. The replicated node info carries
+/// a peer's address and nothing else of its config, so this is the part of the
+/// overlap that can be detected here.
+fn peer_addresses_in_pool(
+    wg: &WgConfig,
+    my_id: NodeId,
+    nodes: &BTreeMap<NodeId, NodeData>,
+) -> BTreeSet<(NodeId, Ipv4Addr)> {
+    nodes
+        .iter()
+        .filter(|(id, _)| **id != my_id)
+        .filter_map(|(id, node)| {
+            let ip = match node.wg_ip.parse::<ipnet::Ipv4Net>() {
+                Ok(net) => net.addr(),
+                Err(_) => node.wg_ip.parse().ok()?,
+            };
+            wg.is_valid_client_ip(ip).then_some((*id, ip))
+        })
+        .collect()
+}
+
+/// Warn once for each peer address that newly overlaps this node's pool.
+fn warn_peer_addresses_in_pool(proxy: &Proxy, warned: &mut BTreeSet<(NodeId, Ipv4Addr)>) {
+    let overlaps = peer_addresses_in_pool(
+        &proxy.config.wg,
+        proxy.config.sync.node_id,
+        &proxy.kv_store.load_all_nodes(),
+    );
+    for (node_id, ip) in overlaps.difference(warned) {
+        warn!(
+            "gateway node {node_id} has address {ip}, which this node may allocate to a CVM; \
+             exclude it from client_ip_range or add it to reserved_net"
+        );
+    }
+    *warned = overlaps;
 }
 
 fn gateway_nodes(kv_store: &KvStore, exclude_down: bool) -> Vec<GatewayNodeInfo> {
