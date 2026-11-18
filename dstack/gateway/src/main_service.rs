@@ -234,8 +234,12 @@ impl Proxy {
     /// cached rejection log, so the answer is current even right after a
     /// restart and does not depend on when the last reload ran.
     pub fn rejected_instances(&self) -> Vec<RejectedInstanceReport> {
-        let rejected =
-            import::accept_instances(&self.config.wg, self.kv_store.load_all_instances()).rejected;
+        let rejected = import::accept_instances(
+            &self.config.wg,
+            &self.kv_store.gateway_wg_public_keys(),
+            self.kv_store.load_all_instances(),
+        )
+        .rejected;
         let state = self.lock();
         rejected
             .into_iter()
@@ -1108,7 +1112,7 @@ fn build_state_from_kv_store(
 ) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
-    let accepted = import::accept_instances(&config.wg, instances);
+    let accepted = import::accept_instances(&config.wg, &store.gateway_wg_public_keys(), instances);
     report_rejected_instances(&accepted.rejected);
 
     // Build instances
@@ -1495,6 +1499,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     // closing a traffic gate does not touch `inst/` and would never wake the
     // watcher above.
     let mut overrides_rx = store_clone.watch_instance_overrides();
+    let mut nodes_rx = store_clone.watch_nodes();
     reload_instances_from_kv_store(&proxy_clone, &store_clone)
         .context("Failed to initial load instances from KvStore")?;
     tokio::spawn(async move {
@@ -1511,6 +1516,13 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                         break;
                     }
                     "operator override"
+                }
+                // A record is judged against the gateway nodes' keys too.
+                changed = nodes_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    "node"
                 }
             };
             info!("WaveKV: detected remote {reason} changes, reloading...");
@@ -1679,7 +1691,11 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
         );
     }
     let legacy_overrides = store.legacy_instance_overrides();
-    let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
+    let accepted = import::accept_instances(
+        &proxy.config.wg,
+        &store.gateway_wg_public_keys(),
+        store.load_all_instances(),
+    );
     // An unreadable record is not a deletion. Its instance keeps whatever the
     // data plane already holds, so it must be exempt from the removal pass
     // below; a record that lost an IP or key conflict is not exempt, because
@@ -1988,6 +2004,13 @@ impl ProxyState {
             .any(|instance| instance.id != id && instance.public_key == public_key)
         {
             bail!("WireGuard public key is already registered to another instance");
+        }
+        // Every node refuses such a record on import, so accepting it here
+        // would leave this node alone in routing it.
+        if public_key == self.config.wg.public_key
+            || self.kv_store.gateway_wg_public_keys().contains(public_key)
+        {
+            bail!("WireGuard public key belongs to a gateway node");
         }
         // The rebuild path below reconstructs the instance from scratch -- it
         // does that when the recorded IP is no longer inside the configured
