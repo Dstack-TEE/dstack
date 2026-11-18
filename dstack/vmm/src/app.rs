@@ -1602,8 +1602,9 @@ impl App {
                 vm.state.shutdown_progress = body;
                 let id = vm.config.manifest.id.clone();
                 drop(state);
-                if powering_off {
-                    self.set_started(&id, false)?;
+                if powering_off && self.refuse_if_removing(&id).is_ok() {
+                    let app = self.clone();
+                    tokio::spawn(async move { app.record_guest_power_off(&id).await });
                 }
             }
             "instance.info" => {
@@ -1614,6 +1615,26 @@ impl App {
             _ => error!("Guest reported unknown event: {event}"),
         }
         Ok(())
+    }
+
+    /// Clears `started` for a guest that is powering itself off, so it is not
+    /// restarted. Under the launch lock like every other transition, and only
+    /// while the report is still current: a start that landed since reset the
+    /// shutdown progress, and is the later word.
+    async fn record_guest_power_off(&self, id: &str) {
+        let _launch = self.launch_lock(id).await;
+        let current = {
+            let state = self.lock();
+            !state.is_removing(id)
+                && state
+                    .get(id)
+                    .is_some_and(|vm| vm.state.shutdown_progress == "powering off")
+        };
+        if current {
+            if let Err(err) = self.set_started(id, false) {
+                error!(id, "failed to record guest power-off: {err:?}");
+            }
+        }
     }
 
     /// Close the boot's env update window and store the encrypted env the
@@ -2950,6 +2971,52 @@ mod tests {
         assert!(!workdir.sealed_env_path().exists());
         // A VM the host does not know gets an error.
         assert!(app.update_sealed_env(cid + 1000, Vec::new()).await.is_err());
+    }
+
+    /// A guest powering itself off clears `started` so it is not restarted, but
+    /// only once no launch is in flight, and not over a start that landed after
+    /// the report or for a VM being removed.
+    #[tokio::test]
+    async fn a_guest_power_off_does_not_override_a_later_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let (vm, _) = bridge_vm(&app, "vm-1");
+        let cid = vm.cid;
+        app.lock().vms.insert("vm-1".into(), VmState::new(vm));
+        let workdir = app.work_dir("vm-1").unwrap();
+        fs::create_dir_all(workdir.path()).unwrap();
+        let power_off = || {
+            app.vm_event_report(cid, "shutdown.progress", "powering off".into())
+                .unwrap()
+        };
+        // Queued behind the lock and run once it is free (tokio's mutex is FIFO).
+        let settle = || async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(app.launch_lock("vm-1").await);
+        };
+
+        workdir.set_started(true).unwrap();
+        power_off();
+        settle().await;
+        assert!(!workdir.started().unwrap());
+
+        workdir.set_started(true).unwrap();
+        let held = app.launch_lock("vm-1").await;
+        power_off();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(workdir.started().unwrap(), "the write waits for the launch");
+        app.lock().get_mut("vm-1").unwrap().state.start(true);
+        drop(held);
+        settle().await;
+        assert!(workdir.started().unwrap(), "the later start wins");
+
+        assert!(app.lock().start_removing("vm-1"));
+        power_off();
+        settle().await;
+        assert!(workdir.started().unwrap());
     }
 
     /// A launch that never reached a netd built nothing, so it must not leave
