@@ -492,11 +492,24 @@ impl App {
         self.start_vm_with_restart_policy(id, true).await
     }
 
+    /// Runs the start in its own task. A dropped request -- a client that gave
+    /// up, an HTTP/2 stream reset -- would otherwise cancel it wherever it is,
+    /// including between deploying QEMU and returning, which releases the
+    /// launch lock while the deploy may still land. The next start then reads
+    /// "not running" and deploys a second QEMU next to the untracked one.
     async fn start_vm_with_restart_policy(
         &self,
         id: &str,
         reset_restart_policy: bool,
     ) -> Result<()> {
+        let app = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move { app.run_start(&id, reset_restart_policy).await })
+            .await
+            .context("VM start task failed")?
+    }
+
+    async fn run_start(&self, id: &str, reset_restart_policy: bool) -> Result<()> {
         if reset_restart_policy {
             if let Some(vm) = self.lock().get_mut(id) {
                 vm.state.auto_restart.reset();
@@ -3457,6 +3470,145 @@ mod tests {
         assert!(app.launch_locks.lock().unwrap().len() <= 1);
         let _ = app.launch_lock("vm-3").await;
         assert!(app.launch_locks.lock().unwrap().len() <= 2);
+    }
+
+    /// A supervisor that takes `delay` to answer a deploy and reports the VM
+    /// running once one has landed. Counts the deploys it was asked for.
+    async fn slow_deploy_supervisor(
+        delay: Duration,
+    ) -> (SupervisorClient, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use supervisor_client::supervisor::{
+            ProcessConfig, ProcessInfo, ProcessState, ProcessStatus, Response,
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requested = Arc::new(AtomicUsize::new(0));
+        let deployed = Arc::new(AtomicUsize::new(0));
+        let counter = requested.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let (requested, deployed) = (counter.clone(), deployed.clone());
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(&mut stream);
+                    let mut request_line = String::new();
+                    reader.read_line(&mut request_line).await.unwrap();
+                    let mut length = 0;
+                    let mut header = String::new();
+                    loop {
+                        header.clear();
+                        assert!(reader.read_line(&mut header).await.unwrap() > 0);
+                        if header == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            header.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = value.trim().parse().unwrap();
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).await.unwrap();
+                    let body = if request_line.contains("/deploy") {
+                        requested.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(delay).await;
+                        deployed.fetch_add(1, Ordering::SeqCst);
+                        serde_json::to_string(&Response::Data(())).unwrap()
+                    } else if deployed.load(Ordering::SeqCst) > 0 {
+                        let info = ProcessInfo {
+                            config: serde_json::from_value::<ProcessConfig>(
+                                serde_json::json!({ "id": "vm-1", "command": "qemu" }),
+                            )
+                            .unwrap(),
+                            state: ProcessState {
+                                status: ProcessStatus::Running,
+                                started: true,
+                                pid: Some(1),
+                                started_at: None,
+                                stopped_at: None,
+                            },
+                        };
+                        serde_json::to_string(&Response::Data(Some(info))).unwrap()
+                    } else {
+                        serde_json::to_string(&Response::Data(Option::<ProcessInfo>::None)).unwrap()
+                    };
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body,
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                });
+            }
+        });
+        (
+            SupervisorClient::new(&format!("http://{address}")),
+            requested,
+        )
+    }
+
+    /// A start whose caller goes away mid-deploy -- a client that gave up --
+    /// still finishes its launch before anything else may enter, so a second
+    /// start finds the VM running instead of deploying it again.
+    #[tokio::test]
+    async fn a_dropped_start_still_finishes_its_launch() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let image_dir = dir.path().join("images/dstack-test");
+        fs::create_dir_all(&image_dir).unwrap();
+        for file in ["kernel", "initrd", "rootfs.verity", "ovmf.fd"] {
+            fs::write(image_dir.join(file), file).unwrap();
+        }
+        fs::write(
+            image_dir.join("metadata.json"),
+            r#"{"cmdline":"","kernel":"kernel","initrd":"initrd","rootfs":"rootfs.verity","bios":"ovmf.fd","version":"0.5.11"}"#,
+        )
+        .unwrap();
+        let mut config = test_config(Path::new("/nonexistent/netd.sock"), &dir.path().join("run"));
+        config.image.path = dir.path().join("images");
+        config.cvm.qemu_version = Some("9.2.1".into());
+        let (supervisor, deploys) = slow_deploy_supervisor(Duration::from_millis(300)).await;
+        let app = App::new(config, supervisor);
+        let mut manifest = test_manifest(2048);
+        manifest.id = "vm-1".into();
+        let workdir = app.work_dir("vm-1").unwrap();
+        workdir.put_manifest(&manifest).unwrap();
+        // An existing data disk, so the launch does not need qemu-img.
+        fs::write(workdir.hda_path(), b"").unwrap();
+        let request = VmConfiguration {
+            compose_file: r#"{"manifest_version":2,"name":"test","runner":"none"}"#.into(),
+            ..Default::default()
+        };
+        app.prepare_work_dir("vm-1", &request, "").unwrap();
+        app.load_vm(workdir.path(), &Default::default(), false)
+            .await
+            .unwrap();
+
+        let mut first = tokio::spawn({
+            let app = app.clone();
+            async move { app.start_vm("vm-1").await }
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while deploys.load(Ordering::SeqCst) == 0 {
+                tokio::select! {
+                    result = &mut first => panic!("the first start ended before deploying: {result:?}"),
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+        })
+        .await
+        .expect("the first start reaches deploy");
+        first.abort();
+
+        app.start_vm("vm-1").await.unwrap();
+        assert_eq!(deploys.load(Ordering::SeqCst), 1, "one QEMU, not two");
     }
 
     #[test]
