@@ -8,19 +8,19 @@
 Models `CertStore::resolve_cert`, `CertStoreBuilder::add_cert`, and `CertResolver::update_cert`
 (clone the installed store, add, swap only on success). Hostnames are `List Char`.
 
+Tracks commit e21f36e4a6 (PR #1603, "drop dead exact-match certs and reject an empty sni
+label"): the store holds wildcard certificates only, and `resolve_cert` refuses an SNI whose first
+label is empty.
+
 Proven:
-* `exact_beats_wildcard`: an exact entry is returned whatever the wildcard table holds.
-* `resolve_wildcard_iff`: without an exact entry, an SNI resolves to `c` iff it is
-  `label ++ "." ++ parent` with `label` free of dots and the wildcard for `parent` being `c`.
+* `resolve_wildcard_iff`: an SNI resolves to `c` iff it is `label ++ "." ++ parent` with `label`
+  non-empty and free of dots, and the wildcard for `parent` is `c`.
 * `nested_subdomain_misses`: `a.b.d` never resolves through the wildcard registered for `d`;
   `base_domain_misses`: neither does `d` itself.
-* `built_exact_empty`: every store reachable from `CertStore::new` through `update_cert` has an
-  empty `exact_certs`, so the exact branch of `resolve_cert` is dead code in this crate.
+* `empty_label_misses`: an SNI starting with `.` never resolves, whatever the store holds.
 * `update_cert_err_keeps_store`, `update_cert_ok_spec`: a failed update leaves the installed
   store unchanged; a successful one replaces only `domain`'s wildcard entry, and only for a
   record whose `not_after` and whose chain's expiry are both in the future.
-* `empty_label_resolves`: `resolve_cert` itself accepts an empty first label (`".d"` gets `d`'s
-  wildcard); excluding it relies on rustls validating the SNI as a DNS name.
 
 Modeling gap: certificates and keys are opaque values; PEM/X.509 parsing is the input
 `certNotAfter : Option Nat` and `parseOk : Bool`; the clock is a parameter; `HashMap` is an
@@ -48,21 +48,17 @@ def splitOnce : Name → Option (Name × Name)
 
 /-- `CertStore`. `κ` stands for `Arc<CertifiedKey>`, `δ` for `CertData`. -/
 structure Store (κ δ : Type) where
-  exact : List (Name × κ)
   wildcard : List (Name × κ)
   certData : List (Name × δ)
 
 /-- `CertStore::new`. -/
-def Store.new {κ δ : Type} : Store κ δ := ⟨[], [], []⟩
+def Store.new {κ δ : Type} : Store κ δ := ⟨[], []⟩
 
 /-- `CertStore::resolve_cert`. -/
 def Store.resolve {κ δ : Type} (s : Store κ δ) (sni : Name) : Option κ :=
-  match get sni s.exact with
-  | some c => some c
-  | none =>
-    match splitOnce sni with
-    | some (_, parent) => get parent s.wildcard
-    | none => none
+  match splitOnce sni with
+  | some (label, parent) => if label.isEmpty then none else get parent s.wildcard
+  | none => none
 
 /-- What `add_cert` learns from a `CertData`: its replicated `not_after`, the chain's expiry
 (`get_cert_expiry`), and whether `parse_certified_key` succeeds with key `key`. -/
@@ -98,10 +94,6 @@ def Store.updateCert {κ δ : Type} (s : Store κ δ) (now : Nat) (domain : Name
   | .ok s' => s'
   | .error _ => s
 
-theorem exact_beats_wildcard {κ δ : Type} {s : Store κ δ} {sni : Name} {c : κ}
-    (h : get sni s.exact = some c) : s.resolve sni = some c := by
-  simp [Store.resolve, h]
-
 theorem splitOnce_spec : ∀ {sni l p : Name}, splitOnce sni = some (l, p) ↔
     sni = l ++ '.' :: p ∧ '.' ∉ l
   | [], l, p => by simp [splitOnce]
@@ -135,13 +127,11 @@ theorem splitOnce_spec : ∀ {sni l p : Name}, splitOnce sni = some (l, p) ↔
           have := (splitOnce_spec (sni := ys ++ '.' :: p) (l := ys) (p := p)).mpr ⟨rfl, hl.2⟩
           simp [this]
 
-theorem resolve_wildcard_iff {κ δ : Type} {s : Store κ δ} {sni : Name} {c : κ}
-    (h : get sni s.exact = none) :
+theorem resolve_wildcard_iff {κ δ : Type} {s : Store κ δ} {sni : Name} {c : κ} :
     s.resolve sni = some c ↔
-      ∃ label parent, sni = label ++ '.' :: parent ∧ '.' ∉ label ∧ get parent s.wildcard = some c := by
+      ∃ label parent, sni = label ++ '.' :: parent ∧ '.' ∉ label ∧ label ≠ [] ∧
+        get parent s.wildcard = some c := by
   unfold Store.resolve
-  rw [h]
-  simp only
   cases hs : splitOnce sni with
   | none =>
     simp only [reduceCtorEq, false_iff]
@@ -153,22 +143,28 @@ theorem resolve_wildcard_iff {κ δ : Type} {s : Store κ δ} {sni : Name} {c : 
     have hlp := splitOnce_spec.mp hs
     simp only
     constructor
-    · intro hg; exact ⟨l, p, hlp.1, hlp.2, hg⟩
-    · rintro ⟨l', p', he, hl', hg⟩
+    · intro hg
+      by_cases hl : l.isEmpty = true
+      · simp [hl] at hg
+      · simp only [hl, Bool.false_eq_true, ↓reduceIte] at hg
+        exact ⟨l, p, hlp.1, hlp.2, by simpa using hl, hg⟩
+    · rintro ⟨l', p', he, hl', hne, hg⟩
       have := (splitOnce_spec (sni := sni) (l := l') (p := p')).mpr ⟨he, hl'⟩
       rw [hs] at this
       simp only [Option.some.injEq, Prod.mk.injEq] at this
-      rw [this.2]; exact hg
+      obtain ⟨rfl, rfl⟩ := this
+      have : l.isEmpty = false := by simpa using hne
+      simp only [this, Bool.false_eq_true, ↓reduceIte]; exact hg
 
 /-- When `d` is the only wildcard registered, `a.b.d` does not resolve. -/
 theorem nested_subdomain_misses {κ δ : Type} {s : Store κ δ} {a b d : Name}
-    (ha : '.' ∉ a) (hex : get (a ++ '.' :: b ++ '.' :: d) s.exact = none)
+    (ha : '.' ∉ a)
     (hw : ∀ n, get n s.wildcard ≠ none → n = d) :
     s.resolve (a ++ '.' :: b ++ '.' :: d) = none := by
   cases hr : s.resolve (a ++ '.' :: b ++ '.' :: d) with
   | none => rfl
   | some c =>
-    obtain ⟨l, p, he, hl, hg⟩ := (resolve_wildcard_iff hex).mp hr
+    obtain ⟨l, p, he, hl, -, hg⟩ := resolve_wildcard_iff.mp hr
     have hsplit₁ := (splitOnce_spec (sni := a ++ '.' :: b ++ '.' :: d) (l := a)
       (p := b ++ '.' :: d)).mpr ⟨by simp, ha⟩
     have hsplit₂ := (splitOnce_spec (sni := a ++ '.' :: b ++ '.' :: d) (l := l) (p := p)).mpr
@@ -182,47 +178,16 @@ theorem nested_subdomain_misses {κ δ : Type} {s : Store κ δ} {a b d : Name}
 
 /-- When `d` is the only wildcard registered, `d` itself does not resolve. -/
 theorem base_domain_misses {κ δ : Type} {s : Store κ δ} {d : Name}
-    (hex : get d s.exact = none) (hw : ∀ n, get n s.wildcard ≠ none → n = d) :
+    (hw : ∀ n, get n s.wildcard ≠ none → n = d) :
     s.resolve d = none := by
   cases hr : s.resolve d with
   | none => rfl
   | some c =>
-    obtain ⟨l, p, he, _, hg⟩ := (resolve_wildcard_iff hex).mp hr
+    obtain ⟨l, p, he, _, -, hg⟩ := resolve_wildcard_iff.mp hr
     have hpd := hw p (by rw [hg]; simp)
     subst hpd
     have := congrArg List.length he
     simp at this; omega
-
-theorem addCert_exact {κ δ : Type} {s s' : Store κ δ} {now : Nat} {domain : Name} {d : Data κ}
-    {raw : δ} (h : s.addCert now domain d raw = .ok s') : s'.exact = s.exact := by
-  unfold Store.addCert at h
-  split at h
-  · simp at h
-  · split at h
-    · simp at h
-    · split at h
-      · simp at h
-      · split at h
-        · simp at h
-        · simp only [Except.ok.injEq] at h; subst h; rfl
-
-theorem updateCert_exact {κ δ : Type} (s : Store κ δ) (now : Nat) (domain : Name) (d : Data κ)
-    (raw : δ) : (s.updateCert now domain d raw).exact = s.exact := by
-  unfold Store.updateCert
-  split
-  · rename_i s' h; exact addCert_exact h
-  · rfl
-
-/-- Stores built by `CertResolver` (start empty, change only through `update_cert`). -/
-inductive Built {κ δ : Type} : Store κ δ → Prop
-  | new : Built Store.new
-  | update (s : Store κ δ) (now : Nat) (domain : Name) (d : Data κ) (raw : δ) :
-      Built s → Built (s.updateCert now domain d raw)
-
-theorem built_exact_empty {κ δ : Type} {s : Store κ δ} (h : Built s) : s.exact = [] := by
-  induction h with
-  | new => rfl
-  | update s now domain d raw _ ih => rw [updateCert_exact, ih]
 
 theorem update_cert_err_keeps_store {κ δ : Type} {s : Store κ δ} {now : Nat} {domain : Name}
     {d : Data κ} {raw : δ} {e : AddError} (h : s.addCert now domain d raw = .error e) :
@@ -266,10 +231,10 @@ theorem update_cert_ok_spec {κ δ : Type} {s s' : Store κ δ} {now : Nat} {dom
           intro n hn
           simp [get_put, Ne.symm hn]
 
-theorem empty_label_resolves {κ δ : Type} {s : Store κ δ} {d : Name} {c : κ}
-    (hex : get ('.' :: d) s.exact = none) (hw : get d s.wildcard = some c) :
-    s.resolve ('.' :: d) = some c :=
-  (resolve_wildcard_iff hex).mpr ⟨[], d, rfl, by simp, hw⟩
+/-- An empty first label is not a subdomain: `.d` resolves to nothing. -/
+theorem empty_label_misses {κ δ : Type} (s : Store κ δ) (d : Name) :
+    s.resolve ('.' :: d) = none := by
+  simp [Store.resolve, splitOnce]
 
 /-! ## Mirrors of Rust unit tests -/
 
@@ -282,6 +247,7 @@ def testStore : Store Nat Unit :=
 #guard testStore.resolve "example.com".toList == none
 #guard testStore.resolve "example.org".toList == none
 #guard testStore.resolve "sub.foo.example.com".toList == none
+#guard testStore.resolve ".example.com".toList == none
 -- an_expired_chain_is_rejected_however_the_record_dates_it
 #guard (Store.new.updateCert 100 "example.com".toList ⟨200, some 50, some (1 : Nat)⟩ ()
   : Store Nat Unit).wildcard.isEmpty
