@@ -3589,13 +3589,16 @@ mod tests {
             .await
             .unwrap();
 
-        let first = tokio::spawn({
+        let mut first = tokio::spawn({
             let app = app.clone();
             async move { app.start_vm("vm-1").await }
         });
         tokio::time::timeout(Duration::from_secs(10), async {
             while deploys.load(Ordering::SeqCst) == 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::select! {
+                    result = &mut first => panic!("the first start ended before deploying: {result:?}"),
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
             }
         })
         .await
