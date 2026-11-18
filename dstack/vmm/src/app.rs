@@ -1294,6 +1294,17 @@ impl App {
             }
         }
 
+        // Get VM IDs currently in memory and their CIDs, before the directory
+        // scan: a VM created after the scan would otherwise be in memory but
+        // not in the scan, and be torn down as if its directory were gone.
+        let (memory_vm_ids, existing_cids): (HashSet<String>, HashSet<u32>) = {
+            let state = self.lock();
+            (
+                state.vms.keys().cloned().collect(),
+                state.vms.values().map(|vm| vm.config.cid).collect(),
+            )
+        };
+
         // Get VM IDs from filesystem
         let mut fs_vm_ids = HashSet::new();
         if vm_path.exists() {
@@ -1308,15 +1319,6 @@ impl App {
                 }
             }
         }
-
-        // Get VM IDs currently in memory and their CIDs
-        let (memory_vm_ids, existing_cids): (HashSet<String>, HashSet<u32>) = {
-            let state = self.lock();
-            (
-                state.vms.keys().cloned().collect(),
-                state.vms.values().map(|vm| vm.config.cid).collect(),
-            )
-        };
 
         // Remove VMs that no longer exist in filesystem
         let to_remove: Vec<String> = memory_vm_ids.difference(&fs_vm_ids).cloned().collect();
