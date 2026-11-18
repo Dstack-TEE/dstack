@@ -2655,12 +2655,6 @@ mod tests {
         use crate::guest_host_api::HostApi;
         use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 
-        // HostApi intentionally skips unsupported platforms; do not let that turn
-        // this regression into a passing no-op.
-        assert!(matches!(
-            dstack_types::Platform::detect_or_dstack(),
-            dstack_types::Platform::Dstack
-        ));
         let dir = tempfile::tempdir().unwrap();
         let app = App::new(
             test_config(&dir.path().join("absent-netd.sock"), dir.path()),
@@ -2719,10 +2713,13 @@ mod tests {
         .unwrap();
         let shutdown = server.shutdown();
         let server = tokio::spawn(server.launch());
+        // HostApi skips unsupported platforms; pin dstack so the host it runs on
+        // cannot turn this regression into a passing no-op.
         let host = HostApi::new(
             Some(format!("http://127.0.0.1:{}", rx.await.unwrap())),
             None,
-        );
+        )
+        .on_platform(dstack_types::Platform::Dstack);
         host.update_sealed_env(payload.clone()).await.unwrap();
         assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), payload);
         assert!(!sender.encrypted_env_path().exists());
