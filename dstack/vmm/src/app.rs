@@ -534,7 +534,9 @@ impl App {
         }
         self.sync_dynamic_config(id)?;
         self.set_started(id, true)?;
-        // A guest the VMM did not launch may already run application code.
+        // Adopting a running guest leaves its boot's window as it is: open only
+        // while a boot this VMM launched has not reached application code, and
+        // closed for a guest it did not launch, which may already run it.
         let env_update = if is_running {
             None
         } else {
@@ -543,7 +545,9 @@ impl App {
         let vm_config = {
             let mut state = self.lock();
             let vm_state = state.get_mut(id).context("VM not found")?;
-            vm_state.state.env_update = env_update;
+            if env_update.is_some() {
+                vm_state.state.env_update = env_update;
+            }
             // Older images does not support for progress reporting
             if vm_state.config.image.info.shared_ro {
                 vm_state.state.start(is_running);
@@ -3289,6 +3293,46 @@ mod tests {
             seen_running.load(std::sync::atomic::Ordering::SeqCst),
             3,
             "the start must keep asking until QEMU is gone"
+        );
+    }
+
+    /// A start that finds the VM already running -- a double click, or the
+    /// automatic restart racing an explicit start -- must not close the sealed
+    /// env window of the boot that start just launched.
+    #[tokio::test]
+    async fn a_start_on_a_running_vm_keeps_its_env_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_dir = dir.path().join("images/dstack-test");
+        fs::create_dir_all(&image_dir).unwrap();
+        for file in ["kernel", "initrd", "rootfs", "ovmf.fd"] {
+            fs::write(image_dir.join(file), file).unwrap();
+        }
+        fs::write(
+            image_dir.join("metadata.json"),
+            r#"{"cmdline":"","kernel":"kernel","initrd":"initrd","rootfs":"rootfs","bios":"ovmf.fd","version":"0.5.11"}"#,
+        )
+        .unwrap();
+        let mut config = test_config(Path::new("/nonexistent/netd.sock"), &dir.path().join("run"));
+        config.image.path = dir.path().join("images");
+        config.cvm.qemu_version = Some("9.2.1".into());
+        let (supervisor, _) = exiting_supervisor(0).await;
+        let app = App::new(config, supervisor);
+        let (vm, _) = bridge_vm(&app, "vm-1");
+        let workdir = app.work_dir("vm-1").unwrap();
+        workdir.put_manifest(&vm.manifest).unwrap();
+        let request = VmConfiguration {
+            compose_file: r#"{"manifest_version":2,"name":"test","runner":"none"}"#.into(),
+            ..Default::default()
+        };
+        app.prepare_work_dir("vm-1", &request, "").unwrap();
+        app.lock().vms.insert("vm-1".into(), VmState::new(vm));
+        app.lock().vms.get_mut("vm-1").unwrap().state.env_update = Some([1; 32]);
+
+        app.start_vm("vm-1").await.unwrap();
+        assert_eq!(
+            app.lock().vms["vm-1"].state.env_update,
+            Some([1; 32]),
+            "the running boot's window is left as it was"
         );
     }
 
