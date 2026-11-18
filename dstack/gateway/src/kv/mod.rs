@@ -3770,10 +3770,11 @@ mod tombstone_gc_tests {
     }
 
     /// The property the ack watermark buys, and the one a TTL cannot: age plays
-    /// no part. A tombstone written a moment ago is collectable the instant
-    /// every peer covers the delete -- and until then it is kept no matter how
-    /// long that takes, where a TTL would drop it and let the peer push the
-    /// record it still holds back as a live value.
+    /// no part. A tombstone written a moment ago is collected by the second GC
+    /// call after every peer covers the delete (wavekv keeps it for one call so
+    /// an envelope still in flight meets it) -- and until then it is kept no
+    /// matter how long that takes, where a TTL would drop it and let the peer
+    /// push the record it still holds back as a live value.
     #[test]
     fn a_tombstone_is_collected_on_coverage_not_on_age() {
         let left_dir = tempfile::tempdir().expect("temp dir");
@@ -3804,6 +3805,14 @@ mod tombstone_gc_tests {
             right.load_all_instances().decoded.is_empty(),
             "the peer must have applied the delete"
         );
+        assert_eq!(
+            left.collect_tombstone_garbage()
+                .expect("collect")
+                .persistent,
+            0,
+            "the first call after coverage only marks the tombstone"
+        );
+        assert!(key_is_held(&left, &keys::inst("cvm")));
         assert!(
             left.collect_tombstone_garbage()
                 .expect("collect")
