@@ -197,6 +197,7 @@ impl QuoteVerifier {
             {
                 Ok(collateral) => match verify_amd_snp_attestation_with_cert_chain(
                     report,
+                    product,
                     self.ark(product),
                     collateral.ask,
                     collateral.vcek,
@@ -572,6 +573,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
         let (ark, external_root) = ark_for_product(product);
         match verify_amd_snp_attestation_with_cert_chain(
             report_bytes,
+            product,
             ark,
             ask_bytes.clone(),
             vcek_bytes.clone(),
@@ -589,6 +591,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
 
 fn verify_amd_snp_attestation_with_cert_chain(
     report_bytes: &[u8],
+    product: AmdSnpProduct,
     ark_bytes: CertBytes,
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
@@ -612,6 +615,7 @@ fn verify_amd_snp_attestation_with_cert_chain(
     (&vcek, &report).verify().map_err(|err| {
         anyhow::anyhow!("amd sev-snp report signature verification failed: {err:?}")
     })?;
+    verify_vcek_binds_report(&vcek_bytes, &report, product)?;
     validate_amd_snp_report_policy(&report)?;
 
     let parsed = parsed_amd_snp_report_from_report(&report)?;
@@ -628,6 +632,78 @@ fn verify_amd_snp_attestation_with_cert_chain(
         // external policy collateral.
         advisory_ids: Vec::new(),
     })
+}
+
+/// The VCEK is derived per chip and per TCB, so its hwID and SPL extensions
+/// must match the report's CHIP_ID and REPORTED_TCB. Otherwise a VCEK key from
+/// one chip or an old TCB could sign a report claiming another chip or a newer
+/// TCB.
+fn verify_vcek_binds_report(
+    vcek: &CertBytes,
+    report: &AttestationReport,
+    product: AmdSnpProduct,
+) -> Result<()> {
+    use x509_parser::der_parser::der::{parse_der_integer, parse_der_octetstring};
+    use x509_parser::prelude::{FromDer, X509Certificate};
+
+    let vcek_der = certificate_der(vcek)?;
+    let (_, vcek) = X509Certificate::from_der(&vcek_der).context("failed to parse VCEK X.509")?;
+    let extension = |oid: &str| -> Result<&[u8]> {
+        let mut values = vcek
+            .extensions()
+            .iter()
+            .filter(|ext| ext.oid.to_id_string() == oid)
+            .map(|ext| ext.value);
+        match (values.next(), values.next()) {
+            (Some(value), None) => Ok(value),
+            (None, _) => bail!("VCEK is missing extension {oid}"),
+            _ => bail!("VCEK has duplicate extension {oid}"),
+        }
+    };
+    let spl = |oid: &str| -> Result<u8> {
+        let (rest, value) =
+            parse_der_integer(extension(oid)?).context("invalid VCEK SPL extension")?;
+        anyhow::ensure!(rest.is_empty(), "trailing data in VCEK SPL extension");
+        Ok(u8::try_from(value.as_u32()?)?)
+    };
+
+    // Turin VCEKs carry only the first 8 bytes of CHIP_ID, as in the KDS URL.
+    let hw_id_len = match product {
+        AmdSnpProduct::Turin => 8,
+        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => 64,
+    };
+    // Older VCEKs store the raw hwID; newer ones wrap it in a DER OCTET STRING.
+    let hw_id = match extension("1.3.6.1.4.1.3704.1.4")? {
+        raw if raw.len() == hw_id_len => raw,
+        der => match parse_der_octetstring(der) {
+            Ok(([], value)) => value.as_slice()?,
+            _ => bail!("invalid VCEK hwID extension"),
+        },
+    };
+    if report.chip_id.get(..hw_id_len) != Some(hw_id) {
+        bail!("VCEK hwID does not match the report chip_id");
+    }
+
+    let tcb = report.reported_tcb;
+    let mut expected = vec![
+        ("1.3.6.1.4.1.3704.1.3.1", "blSPL", tcb.bootloader),
+        ("1.3.6.1.4.1.3704.1.3.2", "teeSPL", tcb.tee),
+        ("1.3.6.1.4.1.3704.1.3.3", "snpSPL", tcb.snp),
+        ("1.3.6.1.4.1.3704.1.3.8", "ucodeSPL", tcb.microcode),
+    ];
+    if product == AmdSnpProduct::Turin {
+        let fmc = tcb
+            .fmc
+            .context("amd sev-snp Turin report is missing reported FMC TCB")?;
+        expected.push(("1.3.6.1.4.1.3704.1.3.9", "fmcSPL", fmc));
+    }
+    for (oid, name, reported) in expected {
+        let certified = spl(oid)?;
+        if certified != reported {
+            bail!("VCEK {name} {certified} does not match the report reported_tcb {reported}");
+        }
+    }
+    Ok(())
 }
 
 fn verify_x509_chain(ark: &CertBytes, ask: &CertBytes, vcek: &CertBytes) -> Result<()> {
