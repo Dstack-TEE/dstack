@@ -2908,3 +2908,35 @@ async fn refreshing_state_leaves_the_routing_lock_free_while_it_writes_to_the_kv
         "the routing lock is held while the refresh waits on the KV store"
     );
 }
+
+#[tokio::test]
+async fn a_peer_gateway_address_inside_this_nodes_pool_is_detected() {
+    let state = create_test_state().await;
+    let wg = &state.config.wg;
+    let node = |wg_ip: &str| crate::kv::NodeData {
+        uuid: Vec::new(),
+        url: String::new(),
+        wg_public_key: String::new(),
+        wg_endpoint: String::new(),
+        wg_ip: wg_ip.to_string(),
+    };
+    let in_pool = wg
+        .client_ip_range
+        .hosts()
+        .find(|ip| wg.is_valid_client_ip(*ip))
+        .unwrap();
+    let my_id = state.config.sync.node_id;
+    let nodes = BTreeMap::from([
+        // This node's own address never counts.
+        (my_id, node(&format!("{in_pool}/24"))),
+        (my_id + 1, node(&format!("{in_pool}/24"))),
+        // A bare address, as well as the `Ipv4Net` form this node writes.
+        (my_id + 2, node(&in_pool.to_string())),
+        (my_id + 3, node("192.0.2.1/24")),
+        (my_id + 4, node("not an address")),
+    ]);
+    assert_eq!(
+        peer_addresses_in_pool(wg, my_id, &nodes),
+        BTreeSet::from([(my_id + 1, in_pool), (my_id + 2, in_pool)])
+    );
+}
