@@ -1776,7 +1776,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
         // Release old IP if it changed (prevent IP leak)
         if let Some(existing) = &existing {
             if existing.ip != new_info.ip {
-                state.state.allocated_addresses.remove(&existing.ip);
+                state.release_ip(existing.ip, &instance_id);
             }
             if existing.app_id != new_info.app_id {
                 if let Some(app_instances) = state.state.apps.get_mut(&existing.app_id) {
@@ -1925,6 +1925,20 @@ impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
         self.config.wg.is_valid_client_ip(ip)
     }
+    /// Return `ip` to the pool unless an instance other than `id` still holds
+    /// it. Two live instances can share an address while a conflict loser is
+    /// kept through its grace period, or while its record is unreadable.
+    fn release_ip(&mut self, ip: Ipv4Addr, id: &str) {
+        let held = self
+            .state
+            .instances
+            .iter()
+            .any(|(other, info)| other != id && info.ip == ip);
+        if !held {
+            self.state.allocated_addresses.remove(&ip);
+        }
+    }
+
     fn alloc_ip(&mut self) -> Option<Ipv4Addr> {
         for ip in self.config.wg.client_ip_range.hosts() {
             if !self.valid_ip(ip) {
@@ -2106,7 +2120,7 @@ impl ProxyState {
                 return Ok(existing);
             }
             info!("ip {} is invalid, removing", existing.ip);
-            self.state.allocated_addresses.remove(&existing.ip);
+            self.release_ip(existing.ip, id);
             previous = Some(existing);
         }
         let ip = self
@@ -2701,7 +2715,7 @@ impl ProxyState {
     /// counterpart is [`Self::remove_instance`].
     fn forget_instance(&mut self, id: &str) -> Option<InstanceInfo> {
         let info = self.state.instances.remove(id)?;
-        self.state.allocated_addresses.remove(&info.ip);
+        self.release_ip(info.ip, id);
         self.state.top_n.remove(&info.app_id);
         if let Some(app_instances) = self.state.apps.get_mut(&info.app_id) {
             app_instances.remove(id);
