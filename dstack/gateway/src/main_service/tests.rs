@@ -2184,6 +2184,45 @@ fn sync_from_peer_at(
         .unwrap();
 }
 
+/// A local registration that loses an IP conflict to an older peer record is
+/// kept through its grace period, so two live instances share the address for
+/// a while. Dropping the loser must not free the address the winner still uses.
+#[tokio::test]
+async fn forgetting_a_conflict_loser_keeps_the_winners_ip_allocated() {
+    let state = create_test_state().await;
+    let ip = state
+        .lock()
+        .new_client_by_id(
+            "local",
+            "local-app",
+            &test_pubkey("local-key"),
+            "",
+            Default::default(),
+        )
+        .unwrap()
+        .ip;
+    sync_from_peer_at(&state, "peer", &ip.to_string(), &test_pubkey("peer-key"), 1);
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    {
+        let proxy = state.lock();
+        assert_eq!(proxy.state.instances["peer"].ip, ip);
+        assert_eq!(proxy.state.instances["local"].ip, ip);
+    }
+    state.proxy.remove_cvm("local").unwrap();
+
+    let next = state
+        .lock()
+        .new_client_by_id(
+            "next",
+            "next-app",
+            &test_pubkey("next-key"),
+            "",
+            Default::default(),
+        )
+        .unwrap();
+    assert_ne!(next.ip, ip, "handed out an IP a live instance still holds");
+}
+
 #[tokio::test]
 async fn a_poisoned_peer_record_costs_only_its_own_instance() {
     let state = create_test_state().await;
