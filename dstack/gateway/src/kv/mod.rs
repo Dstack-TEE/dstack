@@ -2198,6 +2198,20 @@ impl KvStore {
         Ok(())
     }
 
+    /// Whether the lease at `key` still holds `acquired` and has not expired by
+    /// the local clock, the same condition [`Self::release_lock`] deletes on.
+    /// Checked before each write made under the lease: past this point a
+    /// successor may be doing the same work.
+    fn lease_still_held(
+        &self,
+        key: &str,
+        acquired: &CertRenewLock,
+        lock_timeout_secs: u64,
+    ) -> bool {
+        now_secs() < acquired.started_at.saturating_add(lock_timeout_secs)
+            && self.persistent.read().decode::<CertRenewLock>(key).as_ref() == Some(acquired)
+    }
+
     /// Try to acquire the per-domain certificate renew lock.
     pub fn try_acquire_cert_lock(
         &self,
@@ -2214,6 +2228,15 @@ impl KvStore {
         lock_timeout_secs: u64,
     ) -> Result<()> {
         self.release_lock(keys::cert_lock(domain), acquired, lock_timeout_secs)
+    }
+
+    pub fn cert_lock_still_held(
+        &self,
+        domain: &str,
+        acquired: &CertRenewLock,
+        lock_timeout_secs: u64,
+    ) -> bool {
+        self.lease_still_held(&keys::cert_lock(domain), acquired, lock_timeout_secs)
     }
 
     /// Delete the certificate renew lock whoever holds it, for
@@ -2243,6 +2266,14 @@ impl KvStore {
             acquired,
             lock_timeout_secs,
         )
+    }
+
+    pub fn rotation_lock_still_held(
+        &self,
+        acquired: &CertRenewLock,
+        lock_timeout_secs: u64,
+    ) -> bool {
+        self.lease_still_held(keys::GLOBAL_ACME_ROTATION_LOCK, acquired, lock_timeout_secs)
     }
 
     // ==================== Certificate Attestation ====================

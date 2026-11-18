@@ -32,6 +32,7 @@ use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
     cert_store::get_cert_expiry,
+    distributed_certbot::MAX_RENEW_TIMEOUT_SECS,
     kv::{
         import::Rejection, CertData, DnsCredential, DnsProvider, GlobalCertbotConfig,
         GlobalTombstoneGcConfig, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig,
@@ -1300,6 +1301,12 @@ fn merge_certbot_config(
         // Zero would abort every order before it starts, and the DNS wait is
         // derived from this value.
         ensure!(secs > 0, "renew_timeout_secs must be greater than zero");
+        ensure!(
+            secs <= MAX_RENEW_TIMEOUT_SECS,
+            "renew_timeout_secs must be at most {MAX_RENEW_TIMEOUT_SECS}: half the renew \
+             lock lease, so an order and the work around it finish before the lease expires \
+             and another node may take over"
+        );
         config.renew_timeout = Duration::from_secs(secs);
     }
     if let Some(url) = request.acme_url {
@@ -1425,6 +1432,22 @@ mod certbot_config_tests {
             },
         )
         .expect_err("a zero renew timeout must be refused");
+        assert!(err.to_string().contains("renew_timeout_secs"), "{err:#}");
+    }
+
+    #[test]
+    fn a_renew_timeout_beyond_half_the_lease_is_refused() {
+        let set = |secs| {
+            merge_certbot_config(
+                Ok(stored()),
+                SetCertbotConfigRequest {
+                    renew_timeout_secs: Some(secs),
+                    ..Default::default()
+                },
+            )
+        };
+        set(MAX_RENEW_TIMEOUT_SECS).expect("the bound itself is accepted");
+        let err = set(MAX_RENEW_TIMEOUT_SECS + 1).expect_err("past the bound must be refused");
         assert!(err.to_string().contains("renew_timeout_secs"), "{err:#}");
     }
 
