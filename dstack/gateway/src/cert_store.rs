@@ -34,8 +34,6 @@ use crate::kv::CertData;
 /// This struct is designed for maximum read performance - no locks required for lookups.
 /// Updates are done by creating a new instance and atomically swapping via outer RwLock<Arc<CertStore>>.
 pub struct CertStore {
-    /// Exact domain -> CertifiedKey
-    exact_certs: HashMap<String, Arc<CertifiedKey>>,
     /// Parent domain -> CertifiedKey (for wildcard certs)
     /// e.g., "example.com" -> cert for "*.example.com"
     wildcard_certs: HashMap<String, Arc<CertifiedKey>>,
@@ -47,7 +45,6 @@ impl CertStore {
     /// Create a new empty certificate store
     pub fn new() -> Self {
         Self {
-            exact_certs: HashMap::new(),
             wildcard_certs: HashMap::new(),
             cert_data: HashMap::new(),
         }
@@ -55,18 +52,13 @@ impl CertStore {
 
     /// Resolve certificate for a given SNI hostname (lock-free)
     fn resolve_cert(&self, sni: &str) -> Option<Arc<CertifiedKey>> {
-        // 1. Try exact match first
-        if let Some(cert) = self.exact_certs.get(sni) {
-            return Some(cert.clone());
-        }
-
-        // 2. Try wildcard match (only one level deep per TLS spec)
+        // Wildcard match (only one level deep per TLS spec)
         // For "foo.bar.example.com", only try "bar.example.com"
-        if let Some((_, parent)) = sni.split_once('.') {
-            self.wildcard_certs.get(parent).cloned()
-        } else {
-            None
+        let (label, parent) = sni.split_once('.')?;
+        if label.is_empty() {
+            return None;
         }
+        self.wildcard_certs.get(parent).cloned()
     }
 
     /// Check if a certificate exists for a domain
@@ -93,7 +85,6 @@ impl CertStore {
 
 impl fmt::Debug for CertStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let exact_domains: Vec<_> = self.exact_certs.keys().cloned().collect();
         let wildcard_domains: Vec<_> = self
             .wildcard_certs
             .keys()
@@ -101,7 +92,6 @@ impl fmt::Debug for CertStore {
             .collect();
 
         f.debug_struct("CertStore")
-            .field("exact_domains", &exact_domains)
             .field("wildcard_domains", &wildcard_domains)
             .finish()
     }
@@ -209,7 +199,6 @@ impl ResolvesServerCert for CertResolver {
 ///
 /// Use this to build a complete certificate store, then call `build()` to get the immutable CertStore.
 pub struct CertStoreBuilder {
-    exact_certs: HashMap<String, Arc<CertifiedKey>>,
     wildcard_certs: HashMap<String, Arc<CertifiedKey>>,
     cert_data: HashMap<String, CertData>,
 }
@@ -218,7 +207,6 @@ impl CertStoreBuilder {
     /// Create a new empty builder
     pub fn new() -> Self {
         Self {
-            exact_certs: HashMap::new(),
             wildcard_certs: HashMap::new(),
             cert_data: HashMap::new(),
         }
@@ -226,7 +214,6 @@ impl CertStoreBuilder {
 
     fn from_store(store: &CertStore) -> Self {
         Self {
-            exact_certs: store.exact_certs.clone(),
             wildcard_certs: store.wildcard_certs.clone(),
             cert_data: store.cert_data.clone(),
         }
@@ -283,7 +270,6 @@ impl CertStoreBuilder {
     /// Build the immutable CertStore
     pub fn build(self) -> CertStore {
         CertStore {
-            exact_certs: self.exact_certs,
             wildcard_certs: self.wildcard_certs,
             cert_data: self.cert_data,
         }
@@ -467,6 +453,9 @@ mod tests {
 
         // Should not resolve different domain
         assert!(!store.has_cert_for_sni("example.org"));
+
+        // An empty label is not a subdomain
+        assert!(!store.has_cert_for_sni(".example.com"));
     }
 
     /// A certificate whose chain has already expired, described by a record
