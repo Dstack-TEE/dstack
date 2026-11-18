@@ -390,6 +390,13 @@ fn replay_runtime_events<H: Hasher>(
     cc_eventlog::replay_events::<H>(runtime_events, to_event)
 }
 
+fn validate_runtime_events(runtime_events: &[RuntimeEvent]) -> Result<()> {
+    runtime_events
+        .iter()
+        .try_for_each(RuntimeEvent::validate)
+        .context("invalid runtime event")
+}
+
 fn find_event(runtime_events: &[RuntimeEvent], name: &str) -> Result<RuntimeEvent> {
     for event in runtime_events {
         if event.event == "system-ready" {
@@ -1081,6 +1088,7 @@ impl AttestationV1 {
                 config,
             ),
         };
+        validate_runtime_events(&runtime_events)?;
         let report = match &platform {
             PlatformEvidence::Tdx { quote, .. } => DstackVerifiedReport::DstackTdx(
                 verify_tdx_quote_with_events(verifier, quote, &runtime_events, &report_data)
@@ -2349,6 +2357,7 @@ impl Attestation {
         verifier: &AttestationVerifier,
         now: Option<SystemTime>,
     ) -> Result<VerifiedAttestation> {
+        validate_runtime_events(&self.runtime_events)?;
         let report = match &self.quote {
             AttestationQuote::DstackTdx(q) => {
                 let report = self.verify_tdx(verifier, &q.quote).await?;
