@@ -10,7 +10,7 @@ use parcelona::u8::*;
 use tracing::trace;
 
 pub fn extract_sni(b: &[u8]) -> Option<&[u8]> {
-    extract_sni_inner(b).ok().map(|r| r.1)
+    extract_sni_inner(b).ok()
 }
 
 /// Read a `u8`-length-prefixed record.
@@ -30,14 +30,26 @@ fn take_record_u8_len(b: &[u8]) -> Result<(&[u8], &[u8]), PErr<'_, u8>> {
     take_record(b, len)
 }
 
-fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
+/// Split off a block of declared length `len`, or as much of it as has
+/// arrived, so a partial buffer still parses as far as it goes but nothing is
+/// read past the declared end.
+fn take_declared(b: &[u8], len: usize) -> (&[u8], &[u8]) {
+    let (block, rest) = b.split_at(len.min(b.len()));
+    (rest, block)
+}
+
+/// Bytes left in a block of declared length `len` once parsing reached `rest`.
+fn room(len: usize, block: &[u8], rest: &[u8]) -> usize {
+    len - (block.len() - rest.len())
+}
+
+fn extract_sni_inner(b: &[u8]) -> Result<&[u8], PErr<'_, u8>> {
     const CONTENT_TYPE_HANDSHAKE: u8 = 0x16;
     const HANDSHAKE_TYPE_CLIENT_HELLO: usize = 1;
     const EXTENSION_TYPE_SNI: usize = 0;
     const NAME_TYPE_HOST_NAME: usize = 0;
 
-    let origin_len = b.len();
-    if origin_len < 10 {
+    if b.len() < 10 {
         return Err(PErr::new(b));
     }
 
@@ -45,7 +57,9 @@ fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
         let err = PErr::new(b).user_msg_push(Msg::Str("not a handshake record"));
         return Err(err);
     }
-    let b = &b[5..];
+    // Record length; a handshake fragmented over records is parsed only within the first.
+    let (b, c) = take_len_be_u16(&b[3..])?;
+    let (_, b) = take_declared(b, c);
     // Handshake message type.
     let (b, c) = take_len_be_u8(b)?;
     if c != HANDSHAKE_TYPE_CLIENT_HELLO {
@@ -54,37 +68,51 @@ fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
     }
 
     // Handshake message length.
-    let (b, c) = take_len_be_u24(b)?;
-    trace!("1. message len {:?}", c);
+    let (b, hello_len) = take_len_be_u24(b)?;
+    trace!("1. message len {:?}", hello_len);
+    let (_, hello) = take_declared(b, hello_len);
 
     // ProtocolVersion (2 bytes) & random (32 bytes).
-    let (b, _) = take_record(b, 34)?;
+    let (b, _) = take_record(hello, 34)?;
 
     // Session ID (u8-length vec), cipher suites (u16-length vec), compression methods (u8-length vec).
     let (b, _) = take_record_u8_len(b)?;
     let (b, _) = take_record_be_u16(b)?;
     let (b, _) = take_record_u8_len(b)?;
 
-    // Extensions length.
-    let (mut b, mut c) = take_len_be_u16(b)?;
+    // Extensions length; extensions are the last field of a ClientHello.
+    let (b, exts_len) = take_len_be_u16(b)?;
+    trace!("3. Extensions length {:?}", exts_len);
+    if exts_len != room(hello_len, hello, b) {
+        let err = PErr::new(b).user_msg_push(Msg::Str("extensions length mismatch"));
+        return Err(err);
+    }
+    let (_, exts) = take_declared(b, exts_len);
+    let mut b = exts;
     let mut ext_type: usize;
     let mut ext_leng: usize;
-    trace!("3. Extensions length {:?}", c);
+    let mut ext: &[u8];
     loop {
         // Extension type & length.
         (b, ext_type) = take_len_be_u16(b)?;
         (b, ext_leng) = take_len_be_u16(b)?;
 
         trace!("4. Ext type (0) {:?} len {:?}", ext_type, ext_leng);
+        if ext_leng > room(exts_len, exts, b) {
+            let err = PErr::new(b).user_msg_push(Msg::Str("extension length overflow"));
+            return Err(err);
+        }
+        (b, ext) = take_declared(b, ext_leng);
         if ext_type != EXTENSION_TYPE_SNI {
-            if ext_leng > 0 {
-                (b, _) = take_record(b, ext_leng)?;
-            }
             continue;
         }
-        // ServerNameList length.
-        (b, c) = take_len_be_u16(b)?;
+        // ServerNameList length; the list is the whole extension.
+        let (mut b, c) = take_len_be_u16(ext)?;
         trace!("5. ServerNameListmessag len {:?}", c);
+        if c != room(ext_leng, ext, b) {
+            let err = PErr::new(b).user_msg_push(Msg::Str("server name list length mismatch"));
+            return Err(err);
+        }
         // ServerNameList.
         let mut sni: &[u8];
         let mut name_type: usize;
@@ -97,13 +125,8 @@ fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
             if name_type != NAME_TYPE_HOST_NAME {
                 continue;
             }
-            let sni_point: usize = origin_len - b.len();
-            trace!(
-                "[sni] {:?} sni {:?}",
-                sni_point,
-                String::from_utf8_lossy(sni)
-            );
-            return Ok((sni_point, sni));
+            trace!("[sni] {:?}", String::from_utf8_lossy(sni));
+            return Ok(sni);
         }
     }
 }
@@ -147,6 +170,38 @@ mod tests {
     fn extracts_the_server_name_from_a_client_hello() {
         let hello = client_hello(b"app.example.com");
         assert_eq!(extract_sni(&hello), Some(&b"app.example.com"[..]));
+    }
+
+    /// Offset of the extensions length in `client_hello`: 5 record header,
+    /// 4 handshake header, 34 version/random, 1 session id, 4 cipher suites,
+    /// 2 compression methods.
+    const EXTENSIONS_LEN_OFFSET: usize = 50;
+
+    #[test]
+    fn a_name_outside_the_declared_extensions_block_is_not_returned() {
+        let mut hello = client_hello(b"app.example.com");
+        hello[EXTENSIONS_LEN_OFFSET..][..2].fill(0);
+        assert_eq!(extract_sni(&hello), None);
+    }
+
+    #[test]
+    fn a_name_past_the_declared_record_is_not_returned() {
+        let mut hello = client_hello(b"app.example.com");
+        // Declare every enclosing block as ending before the extensions.
+        let trailing = hello.len() - EXTENSIONS_LEN_OFFSET - 2;
+        let record_len = u16::from_be_bytes([hello[3], hello[4]]) as usize - trailing;
+        hello[3..5].copy_from_slice(&(record_len as u16).to_be_bytes());
+        hello[6..9].copy_from_slice(&((record_len - 4) as u32).to_be_bytes()[1..]);
+        hello[EXTENSIONS_LEN_OFFSET..][..2].fill(0);
+        assert_eq!(extract_sni(&hello), None);
+    }
+
+    #[test]
+    fn a_name_outside_the_declared_server_name_list_is_not_returned() {
+        let mut hello = client_hello(b"app.example.com");
+        // ServerNameList length follows the extension type and length.
+        hello[EXTENSIONS_LEN_OFFSET + 6..][..2].fill(0);
+        assert_eq!(extract_sni(&hello), None);
     }
 
     #[test]
