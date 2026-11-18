@@ -2083,7 +2083,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wavekv 1.0.0",
- "wavekv 2.1.0",
+ "wavekv 2.2.0",
  "x509-parser 0.16.0",
 ]
 
@@ -8866,9 +8866,9 @@ dependencies = [
 
 [[package]]
 name = "wavekv"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99f5f24dfab68f43806c0a15c3b87d9cde250dfc876cae3ec34642427becf336"
+checksum = "7abcc88e4e31da65469d4bfa568c7bae38cc6473532cdcdd9cf1e217ef7af844"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",
