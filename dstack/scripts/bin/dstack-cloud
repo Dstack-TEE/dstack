@@ -470,7 +470,15 @@ class CloudDeploymentManager:
             return App()
 
         with open(app_config_path, 'r') as f:
-            return App.from_dict(json.load(f))
+            app = App.from_dict(json.load(f))
+        # Older projects may carry another length, and changing it would change
+        # the instance id, so it is only reported.
+        if app.instance_id_seed and len(app.instance_id_seed) != 40:
+            logger.warning(
+                f"instance_id_seed in {APP_CONFIG_FILE} should be 20 bytes (40 hex chars), "
+                f"got {len(app.instance_id_seed)} chars"
+            )
+        return app
 
     def save_app_config(self, app: App) -> None:
         """Save application configuration."""
