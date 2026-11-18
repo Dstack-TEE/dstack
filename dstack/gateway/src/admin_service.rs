@@ -24,7 +24,8 @@ use dstack_gateway_rpc::{
     SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
     SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, SetTombstoneGcConfigRequest,
     StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse, UpdateDnsCredentialRequest,
-    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    WaveKvStatusResponse, WgKeyProofConfig, ZtDomainCertStatus,
+    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use tracing::{info, warn};
@@ -35,7 +36,8 @@ use crate::{
     distributed_certbot::MAX_RENEW_TIMEOUT_SECS,
     kv::{
         import::Rejection, CertData, DnsCredential, DnsProvider, GlobalCertbotConfig,
-        GlobalTombstoneGcConfig, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig,
+        GlobalTombstoneGcConfig, GlobalWgKeyProofConfig, NodeStatus, PortFlags, PortPolicy,
+        ZtDomainConfig,
     },
     main_service::Proxy,
     models::PortPolicyView,
@@ -917,6 +919,28 @@ impl AdminRpc for AdminRpcHandler {
         }
         .await;
         self.audit("set_tombstone_gc_config", &subject, result)
+    }
+
+    // ==================== WireGuard Key Proof Policy ====================
+
+    async fn get_wg_key_proof_config(self) -> Result<WgKeyProofConfig> {
+        let stored = self.state.kv_store().get_wg_key_proof_config()?;
+        Ok(WgKeyProofConfig {
+            require_key_proof: stored.is_some_and(|c| c.require_key_proof),
+        })
+    }
+
+    async fn set_wg_key_proof_config(self, request: WgKeyProofConfig) -> Result<()> {
+        let subject = format!("require_key_proof {}", request.require_key_proof);
+        let result = async {
+            let config = GlobalWgKeyProofConfig {
+                require_key_proof: request.require_key_proof,
+            };
+            self.state.kv_store().set_wg_key_proof_config(&config)?;
+            Ok(())
+        }
+        .await;
+        self.audit("set_wg_key_proof_config", &subject, result)
     }
 
     async fn set_instance_port_policy(self, request: SetInstancePortPolicyRequest) -> Result<()> {

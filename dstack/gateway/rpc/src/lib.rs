@@ -7,3 +7,4 @@ extern crate alloc;
 pub use generated::*;
 
 mod generated;
+pub mod wg_key_proof;

@@ -469,6 +469,19 @@ pub struct GlobalTombstoneGcConfig {
     pub writes_per_collection: u64,
 }
 
+/// WireGuard key proof policy (stored in KV, synced across nodes).
+///
+/// A node verifies only the registrations it receives and its peers trust
+/// what it replicates, so the policy only protects the cluster when every node
+/// enforces it. Storing it in the replicated KV makes it one switch, toggled at
+/// runtime. An absent record means "not required"; a corrupt one means
+/// "required".
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GlobalWgKeyProofConfig {
+    /// Refuse registrations without a valid WireGuard key proof.
+    pub require_key_proof: bool,
+}
+
 // Key prefixes and builders
 pub mod keys {
     use super::NodeId;
@@ -494,6 +507,7 @@ pub mod keys {
     pub const GLOBAL_PREFIX: &str = "global/";
     pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
     pub const GLOBAL_TOMBSTONE_GC_CONFIG: &str = "global/tombstone_gc_config";
+    pub const GLOBAL_WG_KEY_PROOF_CONFIG: &str = "global/wg_key_proof_config";
     pub const GLOBAL_ACME_CREDENTIALS: &str = "global/acme_credentials";
     pub const GLOBAL_ACME_ATTESTATION: &str = "global/acme_attestation";
     pub const GLOBAL_ACME_ROTATION_LOCK: &str = "global/acme_rotation_lock";
@@ -1679,6 +1693,26 @@ impl KvStore {
     pub fn set_tombstone_gc_config(&self, config: &GlobalTombstoneGcConfig) -> Result<()> {
         self.persistent.write().put_encoded(
             keys::GLOBAL_TOMBSTONE_GC_CONFIG.to_string(),
+            config,
+            true,
+        )?;
+        Ok(())
+    }
+
+    /// Get the WireGuard key proof policy, if an operator has stored one.
+    ///
+    /// `None` means "not required". A corrupt record is an error, which registration reads as "required" (fails closed, see
+    /// `ProxyInner::require_wg_key_proof`).
+    pub fn get_wg_key_proof_config(&self) -> Result<Option<GlobalWgKeyProofConfig>> {
+        self.persistent
+            .read()
+            .decode_strict(keys::GLOBAL_WG_KEY_PROOF_CONFIG)
+    }
+
+    /// Store the WireGuard key proof policy, replicating it to every node.
+    pub fn set_wg_key_proof_config(&self, config: &GlobalWgKeyProofConfig) -> Result<()> {
+        self.persistent.write().put_encoded(
+            keys::GLOBAL_WG_KEY_PROOF_CONFIG.to_string(),
             config,
             true,
         )?;

@@ -245,6 +245,7 @@ dcap-qvl-webpki = "0.103.15"
 elliptic-curve = { version = "0.13.8", features = ["pkcs8"] }
 getrandom = "0.3.1"
 hkdf = "0.12.4"
+hmac = "0.12.1"
 p256 = "0.13.2"
 p384 = "0.13"
 rsa = "0.9"
