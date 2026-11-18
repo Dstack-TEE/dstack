@@ -121,6 +121,7 @@ impl Keyring {
         })
     }
 
+    /// Never empty: [`Self::load`] reads epochs `0..=latest`.
     pub(crate) fn latest(&self) -> u32 {
         self.roots.len() as u32 - 1
     }
@@ -153,7 +154,10 @@ pub(crate) fn servable_epoch(
     chain_hashes: &[[u8; 32]],
     registry: RootEpochRegistry,
 ) -> Result<u32> {
-    let latest = chain_hashes.len() as u32 - 1;
+    let latest = u32::try_from(chain_hashes.len())
+        .ok()
+        .and_then(|len| len.checked_sub(1))
+        .context("the keyring holds no root epoch")?;
     let current = match registry {
         RootEpochRegistry::Unchecked => return Ok(latest),
         RootEpochRegistry::Empty if latest == 0 => return Ok(0),
@@ -1188,6 +1192,13 @@ mod tests {
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
     use std::{path::Path, time::Duration};
+
+    #[test]
+    fn an_empty_keyring_serves_no_epoch() {
+        for registry in [RootEpochRegistry::Unchecked, RootEpochRegistry::Empty] {
+            assert!(servable_epoch(&[], registry).is_err());
+        }
+    }
 
     const SNP_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
         snp: true,
