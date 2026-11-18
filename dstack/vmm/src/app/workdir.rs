@@ -7,7 +7,7 @@
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use dstack_types::{
     shared_filenames::{
         APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, USER_CONFIG,
@@ -77,7 +77,8 @@ impl VmWorkDir {
         if let Some(networking) = manifest.networks.first() {
             value["networking"] = serde_json::to_value(networking)?;
         }
-        fs::write(manifest_path, serde_json::to_string(&value)?).context("failed to write manifest")
+        safe_write::safe_write(manifest_path, serde_json::to_string(&value)?)
+            .context("failed to write manifest")
     }
 
     pub fn started(&self) -> Result<bool> {
@@ -92,9 +93,14 @@ impl VmWorkDir {
     }
 
     pub fn set_started(&self, started: bool) -> Result<()> {
-        let state_path = self.state_path();
-        fs::write(state_path, serde_json::to_string(&State { started })?)
-            .context("failed to write state")
+        // `safe_write` creates missing parents; a removed VM must not come back
+        // as a directory holding nothing but its state.
+        ensure!(self.workdir.is_dir(), "VM workdir does not exist");
+        safe_write::safe_write(
+            self.state_path(),
+            serde_json::to_string(&State { started })?,
+        )
+        .context("failed to write state")
     }
 
     pub fn shared_dir(&self) -> PathBuf {
@@ -369,6 +375,19 @@ mod tests {
 
     use super::VmWorkDir;
     use crate::config::Networking;
+
+    #[test]
+    fn started_is_not_written_into_a_removed_workdir() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workdir = VmWorkDir::new(temp.path().join("vm"));
+        assert!(workdir.set_started(true).is_err());
+        assert!(!workdir.path().exists());
+
+        fs::create_dir_all(workdir.path())?;
+        workdir.set_started(true)?;
+        assert!(workdir.started()?);
+        Ok(())
+    }
 
     #[test]
     fn runtime_networks_snapshot_replaces_target_instead_of_following_it() -> Result<()> {
