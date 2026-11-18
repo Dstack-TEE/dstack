@@ -17,8 +17,9 @@ use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayNodeInfo, GetPeersResponse, GuestAgentConfig, InfoResponse, PeerInfo,
-    QuotedPublicKey, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
+    wg_key_proof, AcmeInfoResponse, GatewayNodeInfo, GetPeersResponse, GuestAgentConfig,
+    InfoResponse, PeerInfo, QuotedPublicKey, RegisterCvmRequest, RegisterCvmResponse,
+    WireGuardConfig, WireGuardPeer,
 };
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RemoteEndpoint, RpcCall, VerifiedAttestation};
@@ -312,6 +313,25 @@ impl Proxy {
 impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
         self.state.lock().or_panic("Failed to lock AppState")
+    }
+
+    /// Whether registrations must carry a valid WireGuard key proof: the
+    /// replicated policy, or not required when none is stored.
+    ///
+    /// Read per registration, so a toggle applies without a restart. A corrupt
+    /// record fails closed, like the ACME credentials: reading it as "not
+    /// required" could silently drop a cluster-wide "required" on one node, and
+    /// that node would then accept unproven keys every peer trusts once
+    /// replicated. CVMs that do not send proofs yet cannot register until an
+    /// operator overwrites the record with `SetWgKeyProofConfig`.
+    pub(crate) fn require_wg_key_proof(&self) -> bool {
+        match self.kv_store.get_wg_key_proof_config() {
+            Ok(stored) => stored.is_some_and(|c| c.require_key_proof),
+            Err(err) => {
+                error!("the WireGuard key proof policy is unreadable, requiring proofs: {err:?}");
+                true
+            }
+        }
     }
 
     /// Render the WireGuard config under the routing lock, then write and apply
@@ -2864,6 +2884,41 @@ fn validated_agent_token(instance_id: &str, token: Option<String>) -> Option<Str
     }
 }
 
+/// Apply the key proof policy (`require`) to a registration's `wg_key_proof`.
+///
+/// Checked only on the node the CVM registers with: the proof is made for this
+/// node's key, and peers already trust what a registering node replicates.
+fn ensure_wg_key_proof(
+    require: bool,
+    gateway_private_key: &str,
+    request: &RegisterCvmRequest,
+    app_info: &AppInfo,
+    instance_id: &str,
+) -> Result<()> {
+    let Some(proof) = &request.wg_key_proof else {
+        if require {
+            bail!("WireGuard key proof is required but the CVM sent none");
+        }
+        debug!("[{instance_id}] registering without a WireGuard key proof");
+        return Ok(());
+    };
+    let verified = wg_key_proof::verify(
+        proof,
+        gateway_private_key,
+        &request.client_public_key,
+        &app_info.app_id,
+        &app_info.instance_id,
+    );
+    match verified {
+        Ok(()) => Ok(()),
+        Err(err) if require => Err(err.context("invalid WireGuard key proof")),
+        Err(err) => {
+            warn!("[{instance_id}] accepting an invalid WireGuard key proof: {err:#}");
+            Ok(())
+        }
+    }
+}
+
 pub struct RpcHandler {
     remote_endpoint: Option<RemoteEndpoint>,
     remote_app_id: Option<Vec<u8>>,
@@ -2904,6 +2959,13 @@ impl GatewayRpc for RpcHandler {
                 .ensure_app_authorized(&app_info)
                 .await
                 .context("App authorization failed")?;
+            ensure_wg_key_proof(
+                self.state.require_wg_key_proof(),
+                &self.state.config.wg.private_key,
+                &request,
+                &app_info,
+                &instance_id,
+            )?;
             let compose_hash = hex::encode(&app_info.compose_hash);
             let port_policy = request
                 .port_policy
@@ -2978,6 +3040,7 @@ impl GatewayRpc for RpcHandler {
             external_port: port.into(),
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            wg_public_key: state.config.wg.public_key.clone(),
         })
     }
 

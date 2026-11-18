@@ -37,6 +37,7 @@ use ra_rpc::{
 use ra_tls::{
     attestation::{detect_tee_variant, AttestationVerifier, QuoteContentType, TeeVariant},
     cert::{generate_self_signed_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
+    traits::CertExt,
 };
 use rand::Rng as _;
 use safe_write::{safe_write, safe_write_with_mode};
@@ -59,8 +60,9 @@ use cert_client::{request_app_keys, CertRequestClient};
 use cmd_lib::run_fun as cmd;
 use dstack_api_auth::jwt;
 use dstack_gateway_rpc::{
-    gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
-    RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
+    gateway_client::GatewayClient, wg_key_proof, InfoResponse, PortAttrs as RpcPortAttrs,
+    PortPolicy as RpcPortPolicy, RegisterCvmRequest, RegisterCvmResponse, WgKeyProof,
+    WireGuardPeer,
 };
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_json::Value;
@@ -605,6 +607,44 @@ fn gateway_agent_token(app_id: &[u8], app_root_key: &[u8]) -> Result<String> {
     jwt::sign(&secret, &claims)
 }
 
+/// The app and instance ids the gateway reads from this CVM's client
+/// certificate, which is what a WireGuard key proof is bound to.
+fn client_cert_identity(client_cert: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    let (_, pem) = x509_parser::pem::parse_x509_pem(client_cert.as_bytes())
+        .context("failed to parse client cert PEM")?;
+    let cert = pem.parse_x509().context("failed to parse client cert")?;
+    let app_info = cert
+        .get_app_info()?
+        .context("client cert carries no app info")?;
+    Ok((app_info.app_id, app_info.instance_id))
+}
+
+/// The WireGuard key proof for the gateway node that answered `info`.
+///
+/// `None` when the gateway predates key proofs (no `wg_public_key`) or the
+/// proof cannot be built: registering without one is exactly what older CVMs
+/// do, and whether that is acceptable is the gateway's call.
+fn build_wg_key_proof(
+    info: Result<InfoResponse>,
+    wg_sk: &str,
+    identity: impl FnOnce() -> Result<(Vec<u8>, Vec<u8>)>,
+) -> Option<WgKeyProof> {
+    let gateway_pk = match info {
+        Ok(info) if !info.wg_public_key.is_empty() => info.wg_public_key,
+        Ok(_) => return None,
+        Err(err) => {
+            warn!("failed to get gateway info, registering without a key proof: {err:#}");
+            return None;
+        }
+    };
+    identity()
+        .and_then(|(app_id, instance_id)| {
+            wg_key_proof::compute(wg_sk, &gateway_pk, &app_id, &instance_id)
+        })
+        .inspect_err(|err| warn!("failed to build the WireGuard key proof: {err:#}"))
+        .ok()
+}
+
 impl<'a> GatewayContext<'a> {
     fn new(shared: &'a HostShared, keys: &'a AppKeys) -> Self {
         Self { shared, keys }
@@ -671,12 +711,21 @@ impl<'a> GatewayContext<'a> {
             &key_store.client_cert,
             gateway_app_id,
         )?;
+        // Info and RegisterCvm share the client's pooled connection, so behind
+        // a per-connection balancer both reach the same node. If they do not,
+        // the proof names the key it targets and that node treats it as invalid.
+        let wg_key_proof = build_wg_key_proof(
+            client.info().await.context("failed to get gateway info"),
+            &key_store.wg_sk,
+            || client_cert_identity(&key_store.client_cert),
+        );
         let result = client
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy.clone()),
                 health_check,
                 agent_token: agent_token.clone(),
+                wg_key_proof: wg_key_proof.clone(),
             })
             .await
             .context("Failed to register CVM");
@@ -701,6 +750,7 @@ impl<'a> GatewayContext<'a> {
                 port_policy: Some(port_policy),
                 health_check,
                 agent_token,
+                wg_key_proof,
             })
             .await
             .context("Failed to register CVM")
@@ -3973,6 +4023,48 @@ mod kms_provider_inventory_tests {
         assert!(validate_key_provider_inputs(KeyProviderKind::None, &no_urls).is_ok());
         let error = validate_key_provider_inputs(KeyProviderKind::Kms, &no_urls).unwrap_err();
         assert!(error.to_string().contains("No KMS URLs are set"));
+    }
+}
+
+#[cfg(test)]
+mod wg_key_proof_tests {
+    use super::{build_wg_key_proof, wg_key_proof, InfoResponse};
+    use anyhow::anyhow;
+
+    const CLIENT_SK: &str = "WCwzH5ldiytV13648mAYDqvo3TJ7oVO0uk6a+PQRaFM=";
+    const CLIENT_PK: &str = "un2Su94T3QglHE4DiL4ZrZ2iCIDhZlF2cS71h1pXUlo=";
+    const GATEWAY_SK: &str = "aP33GjsVN0Pz8E4gsggEIjf7Z3f+g2Pn6/+5QMnG0GI=";
+    const GATEWAY_PK: &str = "yZccXHB08kzYxfvKq/OXUiGSOwpSTrvZuQ05XmxA5wI=";
+
+    fn info(wg_public_key: &str) -> anyhow::Result<InfoResponse> {
+        Ok(InfoResponse {
+            wg_public_key: wg_public_key.to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn identity() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+        Ok((vec![1; 20], vec![2; 20]))
+    }
+
+    #[test]
+    fn attaches_proof_when_gateway_reports_its_key() {
+        let proof = build_wg_key_proof(info(GATEWAY_PK), CLIENT_SK, identity).unwrap();
+        assert_eq!(proof.gateway_public_key, GATEWAY_PK);
+        wg_key_proof::verify(&proof, GATEWAY_SK, CLIENT_PK, &[1; 20], &[2; 20]).unwrap();
+    }
+
+    #[test]
+    fn skips_proof_for_older_or_unreachable_gateways() {
+        assert!(build_wg_key_proof(info(""), CLIENT_SK, identity).is_none());
+        assert!(build_wg_key_proof(Err(anyhow!("down")), CLIENT_SK, identity).is_none());
+    }
+
+    #[test]
+    fn skips_proof_it_cannot_build() {
+        let no_identity = || Err(anyhow!("no app info"));
+        assert!(build_wg_key_proof(info(GATEWAY_PK), CLIENT_SK, no_identity).is_none());
+        assert!(build_wg_key_proof(info("garbage"), CLIENT_SK, identity).is_none());
     }
 }
 

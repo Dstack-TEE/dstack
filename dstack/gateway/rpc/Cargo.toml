@@ -16,6 +16,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 scale = { workspace = true, features = ["derive"] }
+base64.workspace = true
+hkdf.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+x25519-dalek.workspace = true
 
 [build-dependencies]
 prpc-build.workspace = true

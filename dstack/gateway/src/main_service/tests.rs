@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::config::{load_config_figment, Config, MutualConfig};
-use crate::kv::PortFlags;
+use crate::kv::{GlobalWgKeyProofConfig, PortFlags};
 use crate::models::HealthState;
 use crate::proxy::port_policy::is_port_allowed;
 use crate::time::encode_ts;
@@ -2939,4 +2939,148 @@ async fn a_peer_gateway_address_inside_this_nodes_pool_is_detected() {
         peer_addresses_in_pool(wg, my_id, &nodes),
         BTreeSet::from([(my_id + 1, in_pool), (my_id + 2, in_pool)])
     );
+}
+
+mod wg_key_proof_policy {
+    use super::*;
+
+    const CLIENT_SK: &str = "WCwzH5ldiytV13648mAYDqvo3TJ7oVO0uk6a+PQRaFM=";
+    const CLIENT_PK: &str = "un2Su94T3QglHE4DiL4ZrZ2iCIDhZlF2cS71h1pXUlo=";
+    const GATEWAY_SK: &str = "aP33GjsVN0Pz8E4gsggEIjf7Z3f+g2Pn6/+5QMnG0GI=";
+    const GATEWAY_PK: &str = "yZccXHB08kzYxfvKq/OXUiGSOwpSTrvZuQ05XmxA5wI=";
+
+    fn app_info() -> AppInfo {
+        AppInfo {
+            app_id: vec![1; 20],
+            compose_hash: vec![],
+            instance_id: vec![2; 20],
+            device_id: vec![],
+            mr_system: [0; 32],
+            mr_aggregated: [0; 32],
+            os_image_hash: vec![],
+            key_provider_info: vec![],
+            init_script_hashes: None,
+        }
+    }
+
+    fn request(proof: Option<dstack_gateway_rpc::WgKeyProof>) -> RegisterCvmRequest {
+        RegisterCvmRequest {
+            client_public_key: CLIENT_PK.to_string(),
+            wg_key_proof: proof,
+            ..Default::default()
+        }
+    }
+
+    fn proof_for(app_info: &AppInfo) -> dstack_gateway_rpc::WgKeyProof {
+        wg_key_proof::compute(
+            CLIENT_SK,
+            GATEWAY_PK,
+            &app_info.app_id,
+            &app_info.instance_id,
+        )
+        .unwrap()
+    }
+
+    fn check(require: bool, proof: Option<dstack_gateway_rpc::WgKeyProof>) -> Result<()> {
+        ensure_wg_key_proof(require, GATEWAY_SK, &request(proof), &app_info(), "test")
+    }
+
+    #[test]
+    fn accepts_valid_proof() {
+        check(false, Some(proof_for(&app_info()))).unwrap();
+        check(true, Some(proof_for(&app_info()))).unwrap();
+    }
+
+    #[test]
+    fn accepts_missing_or_invalid_proof_when_not_required() {
+        check(false, None).unwrap();
+        let other_instance = AppInfo {
+            instance_id: vec![3; 20],
+            ..app_info()
+        };
+        check(false, Some(proof_for(&other_instance))).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_proof_when_required() {
+        let err = check(true, None).unwrap_err();
+        assert!(format!("{err:#}").contains("sent none"), "{err:#}");
+    }
+
+    #[test]
+    fn rejects_invalid_proof_when_required() {
+        let other_instance = AppInfo {
+            instance_id: vec![3; 20],
+            ..app_info()
+        };
+        assert!(check(true, Some(proof_for(&other_instance))).is_err());
+
+        let mut forged = proof_for(&app_info());
+        forged.mac[0] ^= 1;
+        assert!(check(true, Some(forged)).is_err());
+
+        // A proof made for another gateway node is refused, not misverified.
+        let mut elsewhere = proof_for(&app_info());
+        elsewhere.gateway_public_key = CLIENT_PK.to_string();
+        let err = check(true, Some(elsewhere)).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("targets gateway key"),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_stored_policy_decides_and_a_corrupt_one_requires_proofs() {
+        let state = create_test_state().await;
+        assert!(!state.require_wg_key_proof(), "absent means not required");
+        for require_key_proof in [true, false] {
+            state
+                .kv_store
+                .set_wg_key_proof_config(&GlobalWgKeyProofConfig { require_key_proof })
+                .unwrap();
+            assert_eq!(state.require_wg_key_proof(), require_key_proof);
+        }
+        state
+            .kv_store
+            .persistent()
+            .write()
+            .put(
+                crate::kv::keys::GLOBAL_WG_KEY_PROOF_CONFIG.to_string(),
+                b"not-messagepack".to_vec(),
+            )
+            .unwrap();
+        assert!(state.require_wg_key_proof());
+    }
+
+    #[tokio::test]
+    async fn admin_set_and_get_round_trip() {
+        use crate::admin_service::AdminRpcHandler;
+        use dstack_gateway_rpc::{admin_server::AdminRpc, WgKeyProofConfig};
+
+        let state = create_test_state().await;
+        let admin = || {
+            AdminRpcHandler::construct(CallContext::builder().state(&state.proxy).build()).unwrap()
+        };
+        assert!(
+            !admin()
+                .get_wg_key_proof_config()
+                .await
+                .unwrap()
+                .require_key_proof
+        );
+        admin()
+            .set_wg_key_proof_config(WgKeyProofConfig {
+                require_key_proof: true,
+            })
+            .await
+            .unwrap();
+        assert!(
+            admin()
+                .get_wg_key_proof_config()
+                .await
+                .unwrap()
+                .require_key_proof
+        );
+        assert!(state.require_wg_key_proof());
+    }
 }

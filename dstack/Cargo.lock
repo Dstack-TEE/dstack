@@ -2092,12 +2092,17 @@ name = "dstack-gateway-rpc"
 version = "0.6.5"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "hkdf 0.12.4",
+ "hmac 0.12.1",
  "parity-scale-codec",
  "prost 0.13.5",
  "prpc",
  "prpc-build",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "x25519-dalek 2.0.1",
 ]
 
 [[package]]

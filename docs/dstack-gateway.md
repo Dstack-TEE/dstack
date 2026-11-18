@@ -188,6 +188,32 @@ proxies. It works on TCP listeners only: a listener bound to a Unix socket
 (`address = "unix:..."`) fails to start with it, so set `proxy_protocol = false`
 in that listener's section when `[listeners.default]` turns it on.
 
+## WireGuard key proof on registration
+
+A CVM registers its WireGuard public key with `RegisterCvm`. Without a proof
+the gateway takes that key on trust, so a CVM that learned another CVM's public
+key could claim it while the other CVM's record is recycled, and keep it once
+that CVM comes back. Newer CVMs read the node's WireGuard key from `Info` and
+attach a proof that they hold the matching private key, bound to their attested
+app and instance ids.
+
+Whether registrations with a missing or invalid proof are refused is one
+cluster-wide switch stored in the replicated KV, read with
+`GetWgKeyProofConfig` and toggled at runtime with `SetWgKeyProofConfig`
+(admin RPCs). It is off until set. Off, a missing or invalid proof is accepted,
+and an invalid one is logged as a warning. On, both are refused.
+Turn it on only after every CVM sends a proof and every node is upgraded: a node
+verifies only the registrations it receives, and its peers accept whatever it
+replicates. If the stored policy cannot be decoded, nodes fail closed and
+require proofs until it is overwritten. The proof is checked at registration
+and not stored, so records written before the policy was turned on are not
+re-checked.
+
+A proof is made for one node's key, so if the CVM's gateway URL is a balancer,
+it must keep a connection on one node (`Info` and `RegisterCvm` share it). A
+balancer that routes each request separately can split the two, and that node
+then refuses the proof.
+
 ## Metrics
 
 The admin server exposes Prometheus metrics at `GET /metrics`. It is part of the

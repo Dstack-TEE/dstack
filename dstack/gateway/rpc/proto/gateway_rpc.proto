@@ -41,6 +41,30 @@ message RegisterCvmRequest {
   // The gateway then calls without a token and gets whatever the host left
   // open -- possibly nothing, which is the intended default.
   optional string agent_token = 4;
+  // Proof that this CVM holds the private key behind `client_public_key`.
+  //
+  // Without it the key is taken on trust, and a CVM that learned another
+  // CVM's public key could register with it while that CVM's record is
+  // recycled, then win the oldest-record-wins resolution on its return.
+  //
+  // Absent from a CVM that predates the field, or one whose gateway did not
+  // report a WireGuard key in `Info`. The gateway accepts that unless the
+  // cluster's key proof policy (`SetWgKeyProofConfig`) requires a proof.
+  WgKeyProof wg_key_proof = 5;
+}
+
+// WgKeyProof proves possession of a WireGuard private key to one gateway node.
+//
+// `mac` is HMAC-SHA256 keyed by HKDF-SHA256 over X25519(client key, gateway
+// key), and covers both public keys plus the CVM's attested app and instance
+// ids, so it convinces only the node holding the named gateway key, and only
+// for this CVM.
+message WgKeyProof {
+  // The WireGuard public key of the gateway node the proof is made for, as
+  // returned by its `Info`. A node refuses a proof naming another key.
+  string gateway_public_key = 1;
+  // The MAC, 32 bytes.
+  bytes mac = 2;
 }
 
 // PortPolicy carries the gateway-relevant per-port configuration declared by
@@ -272,6 +296,9 @@ message InfoResponse {
   string app_address_ns_prefix = 3;
   // The version of the gateway
   string version = 4;
+  // This node's WireGuard public key, the target of `WgKeyProof`. Empty from
+  // a gateway that predates key proofs.
+  string wg_public_key = 5;
 }
 
 // Peer info for GetPeers response
@@ -588,6 +615,13 @@ service Admin {
   // node's config-file default so the whole cluster collects on the same
   // write-count boundaries. Zero disables collection cluster-wide.
   rpc SetTombstoneGcConfig(SetTombstoneGcConfigRequest) returns (google.protobuf.Empty) {}
+
+  // ==================== WireGuard Key Proof Policy ====================
+  // Get the cluster-wide WireGuard key proof policy
+  rpc GetWgKeyProofConfig(google.protobuf.Empty) returns (WgKeyProofConfig) {}
+  // Store the WireGuard key proof policy in the replicated KV. Takes effect on
+  // the next registration on every node, without a restart.
+  rpc SetWgKeyProofConfig(WgKeyProofConfig) returns (google.protobuf.Empty) {}
 
   // ==================== Per-Instance Port Policy Override ====================
   // Set an admin override for an instance's port policy. Takes precedence
@@ -930,6 +964,14 @@ message TombstoneGcConfigResponse {
 message SetTombstoneGcConfigRequest {
   // Collect tombstones once every this many replicated writes (0 = disabled)
   uint64 writes_per_collection = 1;
+}
+
+// ==================== WireGuard Key Proof Policy Messages ====================
+
+// Cluster-wide WireGuard key proof policy
+message WgKeyProofConfig {
+  // Refuse registrations without a valid WireGuard key proof
+  bool require_key_proof = 1;
 }
 
 // ==================== Per-Instance Port Policy Override Messages ====================
