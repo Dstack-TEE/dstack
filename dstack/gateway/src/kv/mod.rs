@@ -316,6 +316,10 @@ pub struct CertData {
 pub struct CertRenewLock {
     pub started_at: u64,
     pub started_by: NodeId,
+    /// Tells apart two acquisitions by one node within one second, e.g. right
+    /// after a force release.
+    #[serde(default)]
+    pub nonce: u64,
 }
 
 /// Certificate attestation (TDX Quote of certificate public key)
@@ -2128,13 +2132,13 @@ impl KvStore {
 
     // ==================== Renew / Rotation Locks ====================
 
-    /// Try to take the lease at `key`, returning the value written; pass it to
-    /// [`Self::release_lock`]. A crashed holder is covered by the timeout.
+    /// Try to take the lease at `key`; pass the result to [`Self::release_lock`].
+    /// A crashed holder is covered by the timeout.
     ///
     /// Read, expiry check and write share one write guard, so this is mutual
     /// exclusion within a node. Across nodes it is best-effort: WaveKV is
     /// last-writer-wins without compare-and-swap, so two nodes can both acquire
-    /// during a replication gap, which the loser's release then detects.
+    /// during a replication gap.
     fn try_acquire_lock(&self, key: String, lock_timeout_secs: u64) -> Option<CertRenewLock> {
         let now = now_secs();
         let mut state = self.persistent.write();
@@ -2148,25 +2152,45 @@ impl KvStore {
         let lock = CertRenewLock {
             started_at: now,
             started_by: self.my_node_id,
+            nonce: rand::random(),
         };
         state.put_encoded(key, &lock, false).ok()?;
         Some(lock)
     }
 
-    /// Release the lease at `key` only if it still holds `acquired`, so a
-    /// holder that outlived the timeout cannot delete its successor's lock.
-    fn release_lock(&self, key: String, acquired: &CertRenewLock) -> Result<()> {
-        let mut state = self.persistent.write();
-        if let Some(current) = state.decode::<CertRenewLock>(&key) {
-            if current != *acquired {
-                warn!(
-                    "not releasing lock {key}: node {} took it over after this holder exceeded the lock timeout",
-                    current.started_by
-                );
-                return Ok(());
-            }
+    /// Release the lease at `key` if it still holds `acquired` and has not
+    /// expired by the local clock.
+    ///
+    /// A delete is stamped with local wall time, and a peer can take over only
+    /// once its own clock reads `started_at + lock_timeout_secs`, stamping its
+    /// lock no earlier. So a delete before the local clock reaches that point
+    /// cannot beat a takeover, whatever the clock skew; past it, the delete
+    /// could wipe a successor's lock this node has not received yet, so the
+    /// lease is left to expire instead. The same holds for a successor after a
+    /// force release, which did not wait for expiry: hence the delete only
+    /// when the current value is `acquired`, told apart by its nonce from a
+    /// same-second re-acquisition, and never for an already-released key.
+    fn release_lock(
+        &self,
+        key: String,
+        acquired: &CertRenewLock,
+        lock_timeout_secs: u64,
+    ) -> Result<()> {
+        if now_secs() >= acquired.started_at.saturating_add(lock_timeout_secs) {
+            warn!("not releasing lock {key}: it has expired, leaving it to be taken over");
+            return Ok(());
         }
-        state.delete(key)?;
+        let mut state = self.persistent.write();
+        match state.decode::<CertRenewLock>(&key) {
+            Some(current) if current == *acquired => {
+                state.delete(key)?;
+            }
+            Some(current) => warn!(
+                "not releasing lock {key}: node {} holds it now",
+                current.started_by
+            ),
+            None => warn!("not releasing lock {key}: it was already released"),
+        }
         Ok(())
     }
 
@@ -2179,8 +2203,13 @@ impl KvStore {
         self.try_acquire_lock(keys::cert_lock(domain), lock_timeout_secs)
     }
 
-    pub fn release_cert_lock(&self, domain: &str, acquired: &CertRenewLock) -> Result<()> {
-        self.release_lock(keys::cert_lock(domain), acquired)
+    pub fn release_cert_lock(
+        &self,
+        domain: &str,
+        acquired: &CertRenewLock,
+        lock_timeout_secs: u64,
+    ) -> Result<()> {
+        self.release_lock(keys::cert_lock(domain), acquired, lock_timeout_secs)
     }
 
     /// Delete the certificate renew lock whoever holds it, for
@@ -2200,8 +2229,16 @@ impl KvStore {
         self.try_acquire_lock(keys::GLOBAL_ACME_ROTATION_LOCK.into(), lock_timeout_secs)
     }
 
-    pub fn release_rotation_lock(&self, acquired: &CertRenewLock) -> Result<()> {
-        self.release_lock(keys::GLOBAL_ACME_ROTATION_LOCK.into(), acquired)
+    pub fn release_rotation_lock(
+        &self,
+        acquired: &CertRenewLock,
+        lock_timeout_secs: u64,
+    ) -> Result<()> {
+        self.release_lock(
+            keys::GLOBAL_ACME_ROTATION_LOCK.into(),
+            acquired,
+            lock_timeout_secs,
+        )
     }
 
     // ==================== Certificate Attestation ====================
@@ -2370,6 +2407,7 @@ mod acme_credentials_tests {
                 &CertRenewLock {
                     started_at: u64::MAX,
                     started_by: 2,
+                    nonce: 0,
                 },
                 false,
             )
@@ -2387,6 +2425,7 @@ mod acme_credentials_tests {
                 &CertRenewLock {
                     started_at: u64::MAX,
                     started_by: 2,
+                    nonce: 0,
                 },
                 false,
             )
@@ -2421,17 +2460,87 @@ mod cert_lock_tests {
                 &CertRenewLock {
                     started_at: acquired.started_at + 1,
                     started_by: 2,
+                    nonce: 0,
                 },
                 false,
             )
             .expect("takeover write should succeed");
 
-        kv.release_cert_lock("takeover.example", &acquired)
+        kv.release_cert_lock("takeover.example", &acquired, 600)
             .expect("release should not error");
         assert!(
             kv.try_acquire_cert_lock("takeover.example", 600).is_none(),
             "the new holder lock must survive the old holder release"
         );
+    }
+
+    /// After a force release the same node can re-acquire within the same
+    /// second, writing the same started_at and started_by; the nonce keeps the
+    /// stale holder's release from matching.
+    #[test]
+    fn a_force_released_holder_does_not_release_a_same_second_successor() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        let stale = kv
+            .try_acquire_cert_lock("forced.example", 600)
+            .expect("first acquisition should succeed");
+        kv.force_release_cert_lock("forced.example")
+            .expect("force release should succeed");
+        // The successor's value differs from the stale one only in its nonce.
+        kv.persistent
+            .write()
+            .put_encoded(
+                keys::cert_lock("forced.example"),
+                &CertRenewLock {
+                    nonce: stale.nonce.wrapping_add(1),
+                    ..stale.clone()
+                },
+                false,
+            )
+            .expect("successor write should succeed");
+
+        kv.release_cert_lock("forced.example", &stale, 600)
+            .expect("release should not error");
+        assert!(
+            kv.try_acquire_cert_lock("forced.example", 600).is_none(),
+            "the successor lock must survive the stale release"
+        );
+    }
+
+    /// A released key holds a tombstone; releasing again must not write a
+    /// fresh one, which would beat a successor's lock not yet received.
+    #[test]
+    fn releasing_an_absent_lock_writes_nothing() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        let held = kv
+            .try_acquire_cert_lock("absent.example", 600)
+            .expect("acquisition should succeed");
+        kv.force_release_cert_lock("absent.example")
+            .expect("force release should succeed");
+        let key = keys::cert_lock("absent.example");
+        let tombstone = || kv.persistent.read().get_including_tombstones(&key);
+        let before = tombstone().expect("force release leaves a tombstone");
+
+        kv.release_cert_lock("absent.example", &held, 600)
+            .expect("release should not error");
+        assert_eq!(tombstone().map(|e| e.meta), Some(before.meta));
+    }
+
+    /// Past its expiry a peer may already have taken the lease over unseen,
+    /// and a delete now would beat that takeover, so the holder leaves it.
+    #[test]
+    fn an_expired_lease_is_left_to_be_taken_over() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        let held = kv
+            .try_acquire_cert_lock("slow.example", 600)
+            .expect("acquisition should succeed");
+
+        // Released as if under a timeout that has already run out.
+        kv.release_cert_lock("slow.example", &held, 0)
+            .expect("release should not error");
+        assert!(kv.try_acquire_cert_lock("slow.example", 600).is_none());
     }
 
     #[test]
@@ -2498,6 +2607,7 @@ mod value_encoding_tests {
         let encoded = encode(&CertRenewLock {
             started_at: 1_700_000_000,
             started_by: 7,
+            nonce: 0,
         })
         .expect("encode should succeed");
 
@@ -2513,6 +2623,7 @@ mod value_encoding_tests {
         let encoded = encode(&CertRenewLock {
             started_at: 1_700_000_000,
             started_by: 7,
+            nonce: 0,
         })
         .expect("encode should succeed");
 
@@ -2528,11 +2639,9 @@ mod value_encoding_tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
 
-        let legacy = rmp_serde::encode::to_vec(&CertRenewLock {
-            started_at: 1_700_000_000,
-            started_by: 7,
-        })
-        .expect("legacy encode should succeed");
+        // An older gateway's two-field `CertRenewLock`, as a positional array.
+        let legacy = rmp_serde::encode::to_vec(&(1_700_000_000u64, 7 as NodeId))
+            .expect("legacy encode should succeed");
         assert!(
             starts_with_msgpack_array(&legacy),
             "fixture must be a positional array to exercise the legacy path"
@@ -2551,6 +2660,7 @@ mod value_encoding_tests {
             .expect("a record written by an older gateway must stay readable");
         assert_eq!(decoded.started_at, 1_700_000_000);
         assert_eq!(decoded.started_by, 7);
+        assert_eq!(decoded.nonce, 0);
     }
 
     /// `DnsCredential` is the most demanding value type in the set: it nests an

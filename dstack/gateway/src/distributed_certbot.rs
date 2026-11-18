@@ -160,7 +160,8 @@ impl DistributedCertBot {
     }
 
     fn release_rotation_lock(&self, lock: &crate::kv::CertRenewLock) -> Result<()> {
-        self.kv_store.release_rotation_lock(lock)?;
+        self.kv_store
+            .release_rotation_lock(lock, ROTATION_LOCK_TIMEOUT_SECS)?;
         self.notify_lock_write();
         Ok(())
     }
@@ -174,7 +175,8 @@ impl DistributedCertBot {
     }
 
     fn release_cert_lock(&self, domain: &str, lock: &crate::kv::CertRenewLock) -> Result<()> {
-        self.kv_store.release_cert_lock(domain, lock)?;
+        self.kv_store
+            .release_cert_lock(domain, lock, RENEW_LOCK_TIMEOUT_SECS)?;
         self.notify_lock_write();
         Ok(())
     }
@@ -1453,10 +1455,11 @@ mod tests {
         let stale = crate::kv::CertRenewLock {
             started_at: current.started_at.saturating_sub(100),
             started_by: 99,
+            nonce: 0,
         };
         certbot
             .kv_store
-            .release_rotation_lock(&stale)
+            .release_rotation_lock(&stale, ROTATION_LOCK_TIMEOUT_SECS)
             .expect("stale release should be a no-op, not an error");
         assert!(
             certbot
@@ -1467,7 +1470,7 @@ mod tests {
         );
         certbot
             .kv_store
-            .release_rotation_lock(&current)
+            .release_rotation_lock(&current, ROTATION_LOCK_TIMEOUT_SECS)
             .expect("owner release should succeed");
         assert!(certbot
             .kv_store
