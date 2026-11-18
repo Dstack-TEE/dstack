@@ -675,6 +675,7 @@ impl App {
         // Teardown deletes the same interfaces a launch creates, and derives
         // their names rather than reading a record, so it must not overlap one.
         let _launch = self.launch_lock(id).await;
+        self.refuse_if_removing(id)?;
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
         // Not fallible: a VM that has been asked to stop is stopped whether or
@@ -3322,6 +3323,32 @@ mod tests {
         // so it is never turned away by one.
         work_dir.set_started(false).unwrap();
         assert!(app.start_vm("vm-1").await.is_err());
+    }
+
+    /// A stop waiting for the launch lock while a removal is marked must not
+    /// go on to stop and tear down what the removal is already handling.
+    #[tokio::test]
+    async fn a_stop_queued_behind_a_removal_is_turned_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(Path::new("/nonexistent/netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let work_dir = app.work_dir("vm-1").unwrap();
+        std::fs::create_dir_all(work_dir.path()).unwrap();
+        work_dir.set_started(true).unwrap();
+
+        let held = app.launch_lock("vm-1").await;
+        let stop = tokio::spawn({
+            let app = app.clone();
+            async move { app.stop_vm("vm-1").await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(app.lock().start_removing("vm-1"));
+        drop(held);
+        let error = stop.await.unwrap().unwrap_err();
+        assert!(format!("{error:#}").contains("being removed"), "{error:#}");
+        assert!(work_dir.started().unwrap());
     }
 
     /// The window a launch spends between reading "not running" and actually
