@@ -28,6 +28,7 @@ pub(crate) struct KeyProvision {
 pub(crate) struct HostApi {
     client: Option<DefaultClient>,
     pccs_url: Option<String>,
+    platform: Platform,
 }
 
 impl Default for HostApi {
@@ -41,7 +42,13 @@ impl HostApi {
         Self {
             client: base_url.map(new_client),
             pccs_url,
+            platform: Platform::detect_or_dstack(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn on_platform(self, platform: Platform) -> Self {
+        Self { platform, ..self }
     }
 
     pub fn load_or_default(url: Option<String>) -> Result<Self> {
@@ -58,7 +65,7 @@ impl HostApi {
     }
 
     pub async fn notify(&self, event: &str, payload: &str) -> Result<()> {
-        match Platform::detect_or_dstack() {
+        match self.platform {
             Platform::Dstack => {}
             Platform::Gcp | Platform::NitroEnclave | Platform::AwsEc2 => {
                 // Skip notify on unsupported platforms
@@ -84,7 +91,7 @@ impl HostApi {
     /// re-encrypted to the current root epoch, or an empty one when nothing
     /// changed. An error means the window may still be open.
     pub async fn update_sealed_env(&self, sealed_env: Vec<u8>) -> Result<()> {
-        if !matches!(Platform::detect_or_dstack(), Platform::Dstack) {
+        if !matches!(self.platform, Platform::Dstack) {
             return Ok(());
         }
         let Some(client) = &self.client else {
@@ -205,15 +212,11 @@ mod tests {
             )
             .unwrap();
         });
-        HostApi::new(Some(url), None)
+        HostApi::new(Some(url), None).on_platform(Platform::Dstack)
     }
 
     #[tokio::test]
     async fn only_an_answer_or_a_host_without_a_window_closes_the_env_window() {
-        // Off dstack, such as on a cloud CI runner, there is no window to close.
-        if !matches!(Platform::detect_or_dstack(), Platform::Dstack) {
-            return;
-        }
         let unknown = r#"{"error":"Service not found: UpdateSealedEnv"}"#;
         for (status, body, closed) in [
             (200, "", true),
@@ -233,12 +236,20 @@ mod tests {
         let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", gone.local_addr().unwrap());
         drop(gone);
-        assert!(HostApi::new(Some(url), None)
+        assert!(HostApi::new(Some(url.clone()), None)
+            .on_platform(Platform::Dstack)
             .update_sealed_env(Vec::new())
             .await
             .is_err());
+        // Off dstack there is no window to close, and no host is asked.
+        HostApi::new(Some(url), None)
+            .on_platform(Platform::Gcp)
+            .update_sealed_env(Vec::new())
+            .await
+            .unwrap();
         // No host API configured means no window.
         HostApi::new(None, None)
+            .on_platform(Platform::Dstack)
             .update_sealed_env(Vec::new())
             .await
             .unwrap();
