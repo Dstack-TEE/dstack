@@ -193,6 +193,7 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
     let _lock = runtime_event_lock()?;
     let version = runtime_event_version()?;
     let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), version);
+    event.validate()?;
     let mode = detect_tee_variant()?;
 
     if mode.has_tdx() {

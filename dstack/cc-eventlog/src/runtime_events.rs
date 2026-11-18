@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use dstack_types::EventLogVersion;
 use fs_err as fs;
 use or_panic::ResultOrPanic;
@@ -140,6 +140,20 @@ impl RuntimeEvent {
         }
     }
 
+    /// Reject an event whose digest preimage does not determine its fields.
+    ///
+    /// The V1 preimage `event_type_le || ":" || name || ":" || payload` splits
+    /// back into a single `(name, payload)` pair only if the name has no ':'.
+    pub fn validate(&self) -> Result<()> {
+        if self.version.is_v1() && self.event.contains(':') {
+            bail!(
+                "V1 runtime event name {:?} must not contain ':'",
+                self.event
+            );
+        }
+        Ok(())
+    }
+
     /// The event type used when extending RTMR. Always `DSTACK_RUNTIME_EVENT_TYPE`.
     /// Version is distinguished via `EventLogVersion`, not the event type.
     pub fn cc_event_type(&self) -> u32 {
@@ -223,6 +237,22 @@ mod tests {
             v2.digest::<Sha384>(),
             "v1 and v2 digests must differ"
         );
+    }
+
+    #[test]
+    fn v1_name_with_colon_is_rejected() {
+        let v1 = |name: &str, payload: &[u8]| {
+            RuntimeEvent::new(name.to_string(), payload.to_vec(), EventLogVersion::V1)
+        };
+        let forged = v1("app-id:x", b"y");
+        assert_eq!(
+            forged.digest::<Sha384>(),
+            v1("app-id", b"x:y").digest::<Sha384>()
+        );
+        assert!(forged.validate().is_err());
+        assert!(v1("app-id", b"x:y").validate().is_ok());
+        let v2 = RuntimeEvent::new("a:b".to_string(), vec![], EventLogVersion::V2);
+        assert!(v2.validate().is_ok());
     }
 
     #[test]
