@@ -22,8 +22,9 @@ Proven:
 * `servableEpoch_current`, `servableEpoch_empty`, `servableEpoch_binds_keys`: a keyring serves
   epoch `e` under a registered current epoch only if its chain hash at `e` is the registered one,
   hence only if it holds exactly the registered keys `0..=e`; an empty registry serves only a
-  one-epoch keyring at epoch 0. `servableEpoch_nil_*` and `latest_nil` show what the code does on
-  an empty slice: `len as u32 - 1` wraps to `u32::MAX` (release builds have no overflow checks).
+  one-epoch keyring at epoch 0. `servableEpoch_nil`: an empty keyring serves nothing, under any
+  registry (`servable_epoch` checks `len` since PR #1618; `Keyring::latest` keeps
+  `len as u32 - 1`, documented as never empty).
 * `authorizedEpoch_spec`: an authorized epoch is at most the current one, held, and outside dev
   mode the current epoch is the backend's, with a nonzero hash matching the keyring.
 * `handover_binds_held`, `handover_binds_keys`, `handover_rotation`, `handover_empty`: a handover
@@ -145,24 +146,43 @@ inductive Registry where
 /-- `main_service.rs: Keyring::latest` on a keyring with `n` epochs: `len as u32 - 1`. -/
 def latestOf (n : Nat) : UInt32 := n.toUInt32 - 1
 
-/-- `main_service.rs: servable_epoch`. -/
+/-- `main_service.rs: servable_epoch`. `latest` is
+`u32::try_from(len).ok().and_then(|n| n.checked_sub(1))`, an error when it is `None`; in range it
+equals `latestOf len`. -/
 def servableEpoch (hashes : List Bytes) (registry : Registry) : Except String UInt32 :=
-  let latest := latestOf hashes.length
-  match registry with
-  | .unchecked => .ok latest
-  | .empty => if latest = 0 then .ok 0 else .error "no root epoch is registered"
-  | .current c =>
-    match hashes[c.epoch.toNat]? with
-    | some hash => if hash = c.chainHash then .ok c.epoch else .error "not the registered ones"
-    | none => .error "the keyring does not hold the current epoch"
+  if hashes.length = 0 ∨ 2 ^ 32 ≤ hashes.length then .error "the keyring holds no root epoch"
+  else
+    let latest := latestOf hashes.length
+    match registry with
+    | .unchecked => .ok latest
+    | .empty => if latest = 0 then .ok 0 else .error "no root epoch is registered"
+    | .current c =>
+      match hashes[c.epoch.toNat]? with
+      | some hash => if hash = c.chainHash then .ok c.epoch else .error "not the registered ones"
+      | none => .error "the keyring does not hold the current epoch"
 
 theorem latestOf_toNat {n : Nat} (h0 : 0 < n) (h : n < 2 ^ 32) : (latestOf n).toNat = n - 1 := by
   simp only [latestOf]; rw [UInt32.toNat_sub]; simp; omega
+
+/-- A keyring serves only if it holds between 1 and `2^32` epochs. -/
+theorem servableEpoch_length {hashes : List Bytes} {r : Registry} {e : UInt32}
+    (h : servableEpoch hashes r = .ok e) : 0 < hashes.length ∧ hashes.length < 2 ^ 32 := by
+  unfold servableEpoch at h
+  split at h
+  · cases h
+  · omega
+
+/-- An empty keyring serves nothing, whatever the registry. -/
+theorem servableEpoch_nil (r : Registry) :
+    servableEpoch [] r = .error "the keyring holds no root epoch" := by
+  simp [servableEpoch]
 
 theorem servableEpoch_current {hashes : List Bytes} {c : CurrentRootEpoch} {e : UInt32}
     (h : servableEpoch hashes (.current c) = .ok e) :
     e = c.epoch ∧ hashes[c.epoch.toNat]? = some c.chainHash := by
   simp only [servableEpoch] at h
+  split at h
+  · cases h
   split at h
   · rename_i hash hget
     split at h
@@ -170,9 +190,12 @@ theorem servableEpoch_current {hashes : List Bytes} {c : CurrentRootEpoch} {e : 
     · cases h
   · cases h
 
-theorem servableEpoch_empty {hashes : List Bytes} {e : UInt32} (hlen : hashes.length < 2 ^ 32)
+theorem servableEpoch_empty {hashes : List Bytes} {e : UInt32}
     (h : servableEpoch hashes .empty = .ok e) : e = 0 ∧ hashes.length = 1 := by
+  have hlen := (servableEpoch_length h).2
   simp only [servableEpoch] at h
+  split at h
+  · cases h
   split at h
   · rename_i hl
     cases h
@@ -183,19 +206,6 @@ theorem servableEpoch_empty {hashes : List Bytes} {e : UInt32} (hlen : hashes.le
     simp at this
     omega
   · cases h
-
-/-- On an empty slice `len as u32 - 1` wraps: `Keyring::latest` is `u32::MAX`. -/
-theorem latest_nil : latestOf 0 = 4294967295 := by decide
-
-/-- An empty slice under the dev registry "serves" epoch `u32::MAX`. `Keyring::load` and
-`Keys::from_key_response` never build an empty keyring, so this is a precondition, not a bug. -/
-theorem servableEpoch_nil_unchecked : servableEpoch [] .unchecked = .ok 4294967295 := rfl
-
-theorem servableEpoch_nil_empty : servableEpoch [] .empty = .error "no root epoch is registered" := rfl
-
-theorem servableEpoch_nil_current (c : CurrentRootEpoch) :
-    servableEpoch [] (.current c) = .error "the keyring does not hold the current epoch" := by
-  simp [servableEpoch]
 
 /-- A keyring serves epoch `e` under a registered current epoch only if it holds exactly the
 keys registered for epochs `0..=e`. -/
@@ -459,17 +469,17 @@ theorem handover_unfold {kec : Bytes → Bytes} {roots : List (Bytes × Bytes)} 
 epochs run from the current one to at most the latest, and the highest held epoch is bound by
 the current or the latest registered chain hash. -/
 theorem handover_binds_held {kec : Bytes → Bytes} {roots : List (Bytes × Bytes)} {c l : CurrentRootEpoch}
-    {rotate : Bool} (hne : roots ≠ []) (hlen : roots.length < 2 ^ 32)
-    (h : ensureHandoverRegistered kec roots ⟨.current c, some l⟩ rotate = .ok ()) :
+    {rotate : Bool} (h : ensureHandoverRegistered kec roots ⟨.current c, some l⟩ rotate = .ok ()) :
     c.epoch ≤ latestOf roots.length ∧ latestOf roots.length ≤ l.epoch ∧
       ((latestOf roots.length = c.epoch ∧
           (chainHashes kec roots)[c.epoch.toNat]? = some c.chainHash) ∨
        (latestOf roots.length = l.epoch ∧
           (chainHashes kec roots)[l.epoch.toNat]? = some l.chainHash)) := by
   obtain ⟨-, current, hserv, -, hl⟩ := handover_unfold h
+  obtain ⟨hpos, hlen⟩ := servableEpoch_length hserv
+  simp only [length_chainHashes] at hpos hlen
   obtain ⟨rfl, hget⟩ := servableEpoch_current hserv
   obtain ⟨h1, h2, h3, -⟩ := hl l rfl
-  have hpos : 0 < roots.length := List.length_pos_iff.2 hne
   have hheld := latestOf_toNat hpos hlen
   have hc : c.epoch.toNat < roots.length := by
     have := (List.getElem?_eq_some_iff.1 hget).1; simpa using this
@@ -493,12 +503,13 @@ current and latest epochs are the reported ones), an accepted handover holds exa
 it. -/
 theorem handover_binds_keys {kec : Bytes → Bytes} (hk : ∀ x, (kec x).length = 32)
     (hinj : Function.Injective kec) {roots registered : List (Bytes × Bytes)} {c l : CurrentRootEpoch}
-    {rotate : Bool} (hne : roots ≠ []) (hlen : roots.length < 2 ^ 32)
-    (hc : (chainHashes kec registered)[c.epoch.toNat]? = some c.chainHash)
+    {rotate : Bool} (hc : (chainHashes kec registered)[c.epoch.toNat]? = some c.chainHash)
     (hl : (chainHashes kec registered)[l.epoch.toNat]? = some l.chainHash)
     (h : ensureHandoverRegistered kec roots ⟨.current c, some l⟩ rotate = .ok ()) :
     roots = registered.take roots.length := by
-  have hpos : 0 < roots.length := List.length_pos_iff.2 hne
+  obtain ⟨-, current, hserv, -⟩ := handover_unfold h
+  obtain ⟨hpos, hlen⟩ := servableEpoch_length hserv
+  simp only [length_chainHashes] at hpos hlen
   have hheld := latestOf_toNat hpos hlen
   have key : ∀ e : UInt32, latestOf roots.length = e → ∀ hash,
       (chainHashes kec roots)[e.toNat]? = some hash →
@@ -508,7 +519,7 @@ theorem handover_binds_keys {kec : Bytes → Bytes} (hk : ∀ x, (kec x).length 
     subst he
     rw [hheld, Nat.sub_add_cancel hpos, List.take_length] at this
     exact this
-  obtain ⟨-, -, hor⟩ := handover_binds_held hne hlen h
+  obtain ⟨-, -, hor⟩ := handover_binds_held h
   rcases hor with ⟨he, hg⟩ | ⟨he, hg⟩
   · exact key _ he _ hg hc
   · exact key _ he _ hg hl
@@ -526,10 +537,10 @@ theorem handover_rotation {kec : Bytes → Bytes} {roots : List (Bytes × Bytes)
 
 /-- With nothing registered only a one-epoch keyring joins, and nobody rotates. -/
 theorem handover_empty {kec : Bytes → Bytes} {roots : List (Bytes × Bytes)} {rotate : Bool}
-    (hlen : roots.length < 2 ^ 32) (h : ensureHandoverRegistered kec roots ⟨.empty, none⟩ rotate = .ok ()) :
+    (h : ensureHandoverRegistered kec roots ⟨.empty, none⟩ rotate = .ok ()) :
     roots.length = 1 ∧ rotate = false := by
   obtain ⟨hrot, current, hserv, -, -⟩ := handover_unfold h
-  refine ⟨by simpa using (servableEpoch_empty (by simpa using hlen) hserv).2, ?_⟩
+  refine ⟨by simpa using (servableEpoch_empty hserv).2, ?_⟩
   cases rotate
   · rfl
   · exact absurd ⟨rfl, rfl⟩ hrot
@@ -890,9 +901,10 @@ theorem fill_spec {kec : Bytes → Bytes} {st : Kms} (h : Reachable kec st) (hne
   simp only [fillRootEpochs, latestRootEpoch, h0, ↓reduceIte]
   refine ⟨by omega, by omega, get _ hlt, get _ (by omega)⟩
 
-/-- A keyring holding the registered keys up to the current epoch serves it. -/
+/-- A keyring of fewer than `2^32` epochs holding the registered keys up to the current epoch
+serves it. -/
 theorem keyring_servable_of_contract {kec : Bytes → Bytes} {st : Kms} {roots : List (Bytes × Bytes)}
-    (h : Reachable kec st) (hne : st.epochs ≠ []) (hsmall : st.current < 2 ^ 32)
+    (h : Reachable kec st) (hne : st.epochs ≠ []) (hroots : roots.length < 2 ^ 32)
     (hkeys : roots.take (st.current + 1) = (st.epochs.map Entry.keys).take (st.current + 1)) :
     servableEpoch (chainHashes kec roots)
         (.current ⟨st.current.toUInt32, (fillRootEpochs st).currentRootEpochHash⟩) =
@@ -916,8 +928,13 @@ theorem keyring_servable_of_contract {kec : Bytes → Bytes} {st : Kms} {roots :
     simp only [List.getElem?_take, Nat.lt_succ_self, ↓reduceIte] at e1 e2
     simp only [chainHashes]
     rw [e1, e2, hkeys]
+  have hlt : st.current < roots.length := by
+    have := (List.getElem?_eq_some_iff.1 (hget.trans hcur)).1
+    simpa using this
   have hn : st.current.toUInt32.toNat = st.current := by simp; omega
-  simp only [servableEpoch, hn, hget, hcur, ↓reduceIte]
+  have hlen : ¬((chainHashes kec roots).length = 0 ∨ 2 ^ 32 ≤ (chainHashes kec roots).length) := by
+    simp only [length_chainHashes]; omega
+  simp only [servableEpoch, hlen, hn, hget, hcur, ↓reduceIte]
 
 /-- Conversely, a keyring serving the contract's current epoch holds exactly its registered keys
 up to that epoch. -/
