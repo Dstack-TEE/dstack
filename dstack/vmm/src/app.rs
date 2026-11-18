@@ -1233,16 +1233,22 @@ impl App {
             self.spawn_finish_remove(&id);
         }
 
-        // Clean up orphaned supervisor processes (in supervisor but not loaded as VMs)
+        // Clean up orphaned supervisor processes (in supervisor but not loaded as VMs).
+        // A process whose workdir is still there belongs to a VM that failed to
+        // load, not to one that is gone: stopping it would take a running VM
+        // down over a missing image or an unreadable manifest.
         let loaded_vm_ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
         for (_, process) in &running_vms {
-            if !loaded_vm_ids.contains(&process.config.id) {
-                info!(
-                    "Cleaning up orphaned supervisor process: {}",
-                    process.config.id
-                );
-                self.spawn_finish_remove(&process.config.id);
+            let id = &process.config.id;
+            if loaded_vm_ids.contains(id) {
+                continue;
             }
+            if self.work_dir(id).is_ok_and(|dir| dir.path().exists()) {
+                error!(id, "VM failed to load, leaving its running process alone");
+                continue;
+            }
+            info!("Cleaning up orphaned supervisor process: {id}");
+            self.spawn_finish_remove(id);
         }
 
         Ok(())
@@ -2560,6 +2566,90 @@ mod tests {
             .unwrap();
         assert!(!workdir.path().exists());
         server.abort();
+    }
+
+    /// A supervisor that lists `ids` as running CVMs and answers everything
+    /// else with nothing.
+    async fn listing_supervisor(ids: &'static [&'static str]) -> SupervisorClient {
+        use supervisor_client::supervisor::{
+            ProcessConfig, ProcessInfo, ProcessState, ProcessStatus, Response,
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).await.unwrap();
+                let mut header = String::new();
+                loop {
+                    header.clear();
+                    assert!(reader.read_line(&mut header).await.unwrap() > 0);
+                    if header == "\r\n" {
+                        break;
+                    }
+                }
+                let body = if request_line.contains("/list") {
+                    let list: Vec<ProcessInfo> = ids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, id)| ProcessInfo {
+                            config: serde_json::from_value::<ProcessConfig>(serde_json::json!({
+                                "id": id, "command": "qemu", "cid": 10 + i as u32,
+                            }))
+                            .unwrap(),
+                            state: ProcessState {
+                                status: ProcessStatus::Running,
+                                started: true,
+                                pid: Some(1),
+                                started_at: None,
+                                stopped_at: None,
+                            },
+                        })
+                        .collect();
+                    serde_json::to_string(&Response::Data(list)).unwrap()
+                } else {
+                    serde_json::to_string(&Response::Data(Option::<ProcessInfo>::None)).unwrap()
+                };
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        SupervisorClient::new(&format!("http://{address}"))
+    }
+
+    /// A running VM that fails to load at VMM start -- its image is gone, its
+    /// manifest is unreadable -- is still a VM. Only a process with no workdir
+    /// at all is an orphan to clean up.
+    #[tokio::test]
+    async fn a_running_vm_that_fails_to_load_is_not_treated_as_an_orphan() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            listing_supervisor(&["unloadable", "orphan"]).await,
+        );
+        let workdir = app.work_dir("unloadable").unwrap();
+        fs::create_dir_all(workdir.path()).unwrap();
+        fs::write(workdir.manifest_path(), b"{\"id\":").unwrap();
+
+        app.reload_vms().await.unwrap();
+        assert!(app.lock().get("unloadable").is_none());
+        assert!(
+            !app.lock().is_removing("unloadable"),
+            "a VM that failed to load must keep running"
+        );
+        assert!(app.lock().is_removing("orphan"));
     }
 
     #[tokio::test]
