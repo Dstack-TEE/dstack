@@ -3107,6 +3107,15 @@ impl<'a> Stage0<'a> {
                 getrandom::fill(&mut rand_id)?;
                 rand_id
             };
+        } else if instance_info.instance_id_seed.len() != 20 {
+            // Still used as given: rejecting or replacing it would fail the boot
+            // or change the instance id of an existing CVM. The id is only
+            // unique together with the app id; a seed of another length makes
+            // even that depend on the platform binding.
+            warn!(
+                "instance_id_seed is {} bytes, expected 20",
+                instance_info.instance_id_seed.len()
+            );
         }
         let instance_id = if self.shared.app_compose.no_instance_id {
             vec![]
