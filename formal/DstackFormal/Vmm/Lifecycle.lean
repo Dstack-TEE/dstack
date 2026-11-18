@@ -23,9 +23,9 @@ Models (fn by fn; one model step per stretch of code between two awaits):
   two steps), `stop`, `remove`; `process.rs`: exit.
 
 Tracks `next` at ca4717064d (#1609) with #1610 (5c681af5ee), #1611 (59ae8f8c28), #1612
-(e63fd16999), #1613 (ee8be15597) and #1614 (464a7975cb) applied. `Config` switches #1609,
-#1610 and #1611 off to replay the bugs they fix, and adds a recheck the code lacks
-(`reloadRecheck`) and the cancellation assumption (`cancel`).
+(e63fd16999), #1613 (ee8be15597), #1614 (464a7975cb), #1616 (9a5839f500: load auto-starts
+recheck `started`) and #1617 (457ce8c443: a start runs in its own task) applied. `Config`
+switches #1609, #1610, #1611, #1616 and #1617 off to replay the bugs they fix.
 
 State: disk (`Disk`: workdir, loadable manifest, `.state` started flag, `.removing`,
 `.netd-pending`), netd (holds interfaces or not), supervisor (the tracked entry, its `started`
@@ -41,8 +41,9 @@ Assumptions:
 * The supervisor runs detached and survives a VMM crash. A crash lets in-flight supervisor
   requests land before the restarted VMM's first supervisor call (`crash` requires no request in
   flight).
-* Futures dropped at an await (a client that gave up) are modeled as `drop` / `abort`; dropping a
-  start while its `deploy` request is in flight (`startCancel`) is behind `Config.cancel`.
+* Futures dropped at an await (a client that gave up) are modeled as `drop` / `abort`. Before
+  #1617 a start could be dropped while its `deploy` request was in flight (`startCancel`, only
+  with `startSpawned = false`); since #1617 the spawned start runs to completion.
 * Any step may fail where the Rust code may return an error; failures are over-approximated
   (`drop`, `abort`, `rmGiveUp`, `svFail`, a failed netd release).
 
@@ -279,7 +280,7 @@ def State.released (s : State) (ok : Bool) : Bool := !s.disk.pending || ok
 
 def Reload.fresh : Reload := ⟨.list, false, false, false, false⟩
 
-/-- Fixes that can be switched off, and the environment assumption about cancellation. -/
+/-- Fixes that can be switched off to replay the bugs they fix. -/
 structure Config where
   /-- #1609: boot treats a process as an orphan only if its workdir is gone. -/
   keepRunning : Bool
@@ -287,15 +288,16 @@ structure Config where
   snapshotFirst : Bool
   /-- #1611: a guest power-off is recorded under the launch lock, if still current. -/
   poweroffSerialized : Bool
-  /-- Not in the code: the reload RPC's start rechecks `started` under the lock, like the
-  automatic restart. -/
-  reloadRecheck : Bool
-  /-- Environment: a start future may be dropped while its `deploy` request is in flight. -/
-  cancel : Bool
+  /-- #1616: the auto-starts of `load_vm` (boot) and `load_or_update_vm` (reload RPC) recheck
+  `started` under the launch lock (`start_vm_with_restart_policy(id, false)`). -/
+  loadRecheck : Bool
+  /-- #1617: `start_vm` runs `run_start` in a spawned task, so dropping the caller (an HTTP/2
+  stream reset; HTTP/1 handlers are not cancelled) no longer cancels a launch mid-way. -/
+  startSpawned : Bool
   deriving DecidableEq, Repr
 
 /-- The code after the fix PRs. -/
-def fixed : Config := ⟨true, true, true, false, false⟩
+def fixed : Config := ⟨true, true, true, true, true⟩
 
 def replaceReload (rs : List Reload) (r r' : Reload) : List Reload := r' :: rs.erase r
 
@@ -379,7 +381,8 @@ inductive Step (c : Config) : State → State → Prop
   -- `start_vm_with_restart_policy`.
   | startCheck (s : State) (k : Kind) (hh : s.held = some (.start k .check))
       (hn : s.removal = none)
-      (hs : (k = .auto ∨ (k = .reload ∧ c.reloadRecheck = true)) → s.disk.started = true) :
+      (hs : (k = .auto ∨ ((k = .reload ∨ k = .boot) ∧ c.loadRecheck = true)) →
+        s.disk.started = true) :
       Step c s { s with held := some (.start k .info) }
   | startInfo (s : State) (k : Kind) (hh : s.held = some (.start k .info))
       (hw : ¬(s.entry = .running ∧ s.svStarted = false)) :
@@ -409,7 +412,9 @@ inductive Step (c : Config) : State → State → Prop
   | startDone (s : State) (k : Kind) (hh : s.held = some (.start k .await))
       (hq : ∀ r ∈ s.reqs, r.attached = false) :
       Step c s { s with held := none }
-  | startCancel (s : State) (k : Kind) (hc : c.cancel = true)
+  /-- Before #1617: the caller is dropped while `deploy` is in flight; the launch lock is
+  released and the request detaches. -/
+  | startCancel (s : State) (k : Kind) (hc : c.startSpawned = false)
       (hh : s.held = some (.start k .await)) :
       Step c s { s with held := none, reqs := s.reqs.map fun r => { r with attached := false } }
   -- `stop_vm` (#1613: the removing recheck under the lock).

@@ -14,11 +14,9 @@ what the fixes and assumptions are for.
 Counterexamples:
 * `deploy_while_removing`: (a) as stated is false for the fixed code. By design: removal stops
   the process once it holds the lock.
-* `cancel_two_running`: (b) needs the assumption that a start future is not dropped while its
-  `deploy` request is in flight.
-* `reload_start_overrides_stop`: (c) is false for the fixed code (reload RPC start).
 * `orphan_stop_before_1609`, `reload_removes_new_vm_before_1610`,
-  `poweroff_cancels_start_before_1611`: the bugs #1609, #1610 and #1611 fix.
+  `poweroff_cancels_start_before_1611`, `reload_start_overrides_stop` (c, before #1616),
+  `cancel_two_running` (b, before #1617): the bugs #1609, #1610, #1611, #1616 and #1617 fix.
 
 Rust tests mirrored: `a_running_vm_that_fails_to_load_is_not_treated_as_an_orphan`
 (`unloadable_kept_running`), `a_guest_power_off_does_not_override_a_later_start`
@@ -79,15 +77,17 @@ theorem deploy_while_removing : ∃ s s', Reachable fixed s ∧ Step fixed s s' 
   have h := h.step (Step.svPass _ ⟨false, true⟩ (by decide) rfl (by decide))
   exact ⟨_, _, h, Step.svAct _ ⟨true, true⟩ (by decide) rfl (by decide), rfl, by decide, rfl⟩
 
-/-! ## (b) needs the no-cancellation assumption
+/-! ## (b) before #1617: a dropped start lets two QEMUs run
 
-A start future dropped while its `deploy` request is in flight releases the launch lock; the
+Before #1617 a start future dropped (an HTTP/2 client reset; HTTP/1 handlers are not cancelled)
+while its `deploy` request is in flight released the launch lock; the
 next start reads "not running" before the orphaned request lands, and the supervisor's
 check-then-act lets both deploys through. The second `processes.insert` replaces the first
 entry, whose child keeps running untracked. (The same window also lets the second launch
-sweep the first QEMU's interfaces, the race the launch lock exists to prevent.) -/
+sweep the first QEMU's interfaces, the race the launch lock exists to prevent.) #1617 runs the
+start in its own task; `at_most_one_running` proves the property for the fixed code. -/
 
-def cancelling : Config := { fixed with cancel := true }
+def cancelling : Config := { fixed with startSpawned := false }
 
 theorem cancel_two_running : ∃ s, Reachable cancelling s ∧ s.running = 2 := by
   have h := (Reachable.init (c := cancelling)).step (Step.create _ true true rfl rfl)
@@ -114,17 +114,20 @@ theorem cancel_two_running : ∃ s, Reachable cancelling s ∧ s.running = 2 := 
   have h := h.step (Step.svActReplace _ ⟨true, false⟩ (by decide) rfl rfl)
   exact ⟨_, h, rfl⟩
 
-/-! ## (c) is false for the fixed code: the reload RPC's start overrides an acknowledged stop
+/-! ## (c) before #1616: the reload RPC's start overrides an acknowledged stop
 
-`load_or_update_vm` reads `started` and queues `start_vm` with `reset_restart_policy = true`,
-which does not reread `started` under the launch lock. A stop that lands in between is undone:
-the VM is redeployed after `StopVm` returned Ok. Here the reload races `create_vm`; a VM whose
+`load_or_update_vm` read `started` and queued `start_vm` with `reset_restart_policy = true`,
+which did not reread `started` under the launch lock. A stop that landed in between was undone:
+the VM was redeployed after `StopVm` returned Ok. Here the reload races `create_vm`; a VM whose
 supervisor entry is missing (supervisor restarted, `sv_remove`) races any stop the same way.
-`stop_sticks` proves the property once the reload start rechecks. -/
+#1616 rechecks; `stop_sticks` proves the property for the fixed code. -/
 
-theorem reload_start_overrides_stop : ∃ s s', Reachable fixed s ∧ s.g.stopAcked = true ∧
-    Step fixed s s' ∧ s.entry ≠ .running ∧ s'.entry = .running := by
-  have h := (Reachable.init (c := fixed)).step (Step.create _ true true rfl rfl)
+def noLoadRecheck : Config := { fixed with loadRecheck := false }
+
+theorem reload_start_overrides_stop : ∃ s s', Reachable noLoadRecheck s ∧
+    s.g.stopAcked = true ∧ Step noLoadRecheck s s' ∧ s.entry ≠ .running ∧
+    s'.entry = .running := by
+  have h := (Reachable.init (c := noLoadRecheck)).step (Step.create _ true true rfl rfl)
   have h := h.step (Step.reloadRpc _ rfl)
   have h := h.step (Step.rlList _ Reload.fresh (by decide) rfl)
   have h := h.step (Step.createLoad _ true rfl rfl rfl)
@@ -154,7 +157,7 @@ theorem reload_start_overrides_stop : ∃ s s', Reachable fixed s ∧ s.g.stopAc
   have h := h.step (Step.exit _ rfl)
   -- The reload's start runs on its stale read.
   have h := h.step (Step.acquire _ (.start .reload) (by decide) rfl)
-  have h := h.step (Step.startCheck _ .reload rfl rfl (by simp [fixed]))
+  have h := h.step (Step.startCheck _ .reload rfl rfl (by simp [noLoadRecheck, fixed]))
   have h := h.step (Step.startInfo _ .reload rfl (by decide))
   have h := h.step (Step.startCommit _ .reload false rfl rfl rfl)
   have h := h.step (Step.startFresh _ .reload rfl rfl)

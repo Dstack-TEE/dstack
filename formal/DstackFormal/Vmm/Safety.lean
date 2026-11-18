@@ -8,20 +8,23 @@ import DstackFormal.Vmm.Lifecycle
 # dstack-vmm CVM lifecycle: safety invariants
 
 Proofs over the model in `Vmm.Lifecycle` (`dstack/vmm/src/app.rs`, `main_service.rs`,
-`app/workdir.rs`, `dstack/supervisor/src/supervisor.rs`; `next` at ca4717064d with #1610-#1614
-applied). `Inv` is an inductive invariant of every configuration with the #1609 and #1610 fixes
-and no cancellation (`Good`); `reachable_inv` proves it by induction over `Step`, one field at a
-time.
+`app/workdir.rs`, `dstack/supervisor/src/supervisor.rs`; `next` at ca4717064d with #1610-#1614,
+#1616 and #1617 applied). `Inv` is an inductive invariant of every configuration with the
+#1609, #1610, #1616 and #1617 fixes (`Good`); `reachable_inv` proves it by induction over
+`Step`, one field at a time.
 
 Proven (for `fixed`):
 * (a') `removal_holds_no_deploy`: once `finish_remove_vm` holds the launch lock, no step makes
   the process run; `running_needs_start`: only a start holding the lock and awaiting `deploy`
-  does. The literal (a) is false (`Traces.deploy_while_removing`).
-* (b) `at_most_one_running`: at most one running QEMU process per id.
+  does. The literal (a) -- nothing runs while the id is in the removing set -- is false by
+  design (`Traces.deploy_while_removing`): `remove_vm` claims the id without the lock, a start
+  past its under-lock check still deploys, and the removal stops it once it holds the lock.
+* (b) `at_most_one_running`: at most one running QEMU process per id, with no assumption on
+  cancellation: since #1617 a dropped caller does not release the lock mid-launch. Before
+  #1617 it is false (`Traces.cancel_two_running`).
 * (c) `stop_sticks`, `stop_sticks_started`: after an acknowledged stop, until an explicit start
-  commits, nothing deploys the VM and `started` stays false -- assuming the reload RPC's start
-  rechecks `started` under the lock (`Config.reloadRecheck`); the fixed code does not, and the
-  statement is false for it (`Traces.reload_start_overrides_stop`).
+  commits, nothing deploys the VM and `started` stays false: no automatic restart, guest event,
+  boot or reload start. Before #1616 it is false (`Traces.reload_start_overrides_stop`).
 * (d) `removal_targets_marked_or_gone`: every removal past its claim, including the ones crash
   recovery resumes or starts, targets a workdir with `.removing` or none, so no stop by a
   removal hits an unmarked workdir; `boot_keeps_stopped`: the boot reload never sets a stopped
@@ -47,9 +50,10 @@ namespace DstackFormal.Vmm
 structure Good (c : Config) : Prop where
   keepRunning : c.keepRunning = true
   snapshotFirst : c.snapshotFirst = true
-  noCancel : c.cancel = false
+  startSpawned : c.startSpawned = true
+  loadRecheck : c.loadRecheck = true
 
-theorem good_fixed : Good fixed := ⟨rfl, rfl, rfl⟩
+theorem good_fixed : Good fixed := ⟨rfl, rfl, rfl, rfl⟩
 
 /-! ## Observers -/
 
@@ -236,7 +240,7 @@ theorem step_lock (hi : Inv s) (hs : Step c s s') :
   cases hs <;> simp_all
 
 theorem step_reqs (hc : Good c) (hi : Inv s) (hs : Step c s s') : ReqsOk s' := by
-  have := hi.lock; have hr := hi.reqs; have := hc.noCancel; clear hi
+  have := hi.lock; have hr := hi.reqs; have := hc.startSpawned; clear hi
   unfold ReqsOk at *
   rcases hr with h | ⟨k, r, hh, hr, ha, hck⟩
   · cases hs <;> simp_all
@@ -433,7 +437,9 @@ theorem reachable_inv {c : Config} (hc : Good c) {s : State} (h : Reachable c s)
 entries a second deploy replaced. -/
 def State.running (s : State) : Nat := (if s.entry = .running then 1 else 0) + s.untracked
 
-/-- (b) At most one running supervisor process per id. -/
+/-- (b) At most one running supervisor process per id. No assumption on cancellation: since
+#1617 a start runs in its own task, so a dropped caller cannot release the launch lock while
+its `deploy` is in flight. -/
 theorem at_most_one_running {c : Config} (hc : Good c) {s : State} (h : Reachable c s) :
     s.running ≤ 1 := by
   have := (reachable_inv hc h).untracked
@@ -581,7 +587,7 @@ structure Ack (s : State) : Prop where
   held : s.g.stopAcked = true → s.held.all Held.ackOk = true
   waiters : s.g.stopAcked = true → Waiter.start .boot ∉ s.waiters
 
-theorem ack_step {c : Config} (hr : c.reloadRecheck = true) {s s' : State} (hi : Inv s)
+theorem ack_step {c : Config} (hr : c.loadRecheck = true) {s s' : State} (hi : Inv s)
     (ha : Ack s) (hs : Step c s s') : Ack s' := by
   obtain ⟨a1, a2, a3⟩ := ha
   have := hi.stopLate; have := hi.boot; have := hi.bootTask; have := hi.fresh
@@ -592,27 +598,27 @@ theorem ack_step {c : Config} (hr : c.reloadRecheck = true) {s s' : State} (hi :
     | (cases (‹Kind›) <;> simp_all <;> grind)
     | grind [List.mem_of_mem_erase]
 
-theorem reachable_ack {c : Config} (hc : Good c) (hr : c.reloadRecheck = true) {s : State}
+theorem reachable_ack {c : Config} (hc : Good c) {s : State}
     (h : Reachable c s) : Ack s := by
   induction h with
   | init => exact ⟨by simp [State.init], by simp [State.init], by simp [State.init]⟩
-  | step h0 hs ih => exact ack_step hr (reachable_inv hc h0) ih hs
+  | step h0 hs ih => exact ack_step hc.loadRecheck (reachable_inv hc h0) ih hs
 
 /-- (c) After an acknowledged stop and until an explicit start commits, nothing deploys the VM:
-no automatic restart, guest event, boot or reload start -- provided a start the reload RPC
-queued rechecks `started` under the lock, as the automatic restart does. Without that recheck
-the statement is false: `Traces.reload_start_overrides_stop`. -/
-theorem stop_sticks {c : Config} (hc : Good c) (hr : c.reloadRecheck = true) {s s' : State}
+no automatic restart, guest event, boot or reload start. #1616 makes the starts `load_vm` and
+`load_or_update_vm` queue recheck `started` under the lock, as the automatic restart does;
+without it the statement is false: `Traces.reload_start_overrides_stop`. -/
+theorem stop_sticks {c : Config} (hc : Good c) {s s' : State}
     (h : Reachable c s) (hack : s.g.stopAcked = true) (hs : Step c s s')
     (hrun : s'.entry = .running) : s.entry = .running := by
   refine Classical.byContradiction fun hn => ?_
   obtain ⟨k, hk⟩ := running_needs_start hc h hs hrun hn
-  have := (reachable_ack hc hr h).held hack
+  have := (reachable_ack hc h).held hack
   simp_all
 
 /-- (c) While a stop is acknowledged, `started` stays false except by an explicit start. -/
-theorem stop_sticks_started {c : Config} (hc : Good c) (hr : c.reloadRecheck = true)
-    {s : State} (h : Reachable c s) (hack : s.g.stopAcked = true) : s.disk.started = false :=
-  (reachable_ack hc hr h).started hack
+theorem stop_sticks_started {c : Config} (hc : Good c) {s : State}
+    (h : Reachable c s) (hack : s.g.stopAcked = true) : s.disk.started = false :=
+  (reachable_ack hc h).started hack
 
 end DstackFormal.Vmm
