@@ -50,7 +50,7 @@ pub use sync_service::{fetch_peers_from_bootnode, PersistentWriteNotifier, WaveK
 use tracing::{error, warn};
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     net::Ipv4Addr,
     path::Path,
     time::Duration,
@@ -1373,6 +1373,15 @@ impl KvStore {
                 let node_id = keys::parse_node_info_key(&key)?;
                 Some((node_id, data))
             })
+            .collect()
+    }
+
+    /// WireGuard public keys of every gateway node in the store.
+    pub fn gateway_wg_public_keys(&self) -> HashSet<String> {
+        self.load_all_nodes()
+            .into_values()
+            .map(|node| node.wg_public_key)
+            .filter(|key| !key.is_empty())
             .collect()
     }
 

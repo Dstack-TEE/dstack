@@ -167,6 +167,37 @@ async fn test_wireguard_public_key_cannot_be_reused_by_another_instance() {
     assert!(!state.lock().state.instances.contains_key("instance-2"));
 }
 
+/// Every node refuses a record carrying a gateway node's key on import, so the
+/// node taking the registration must refuse it too, or it alone routes it.
+#[tokio::test]
+async fn a_gateway_nodes_public_key_does_not_register() {
+    let state = create_test_state_with(|config| {
+        config.wg.public_key = test_pubkey("own-gateway");
+    })
+    .await;
+    let peer_gateway = test_pubkey("peer-gateway");
+    state
+        .kv_store
+        .sync_node(
+            7,
+            &crate::kv::NodeData {
+                uuid: b"gw7-uuid".to_vec(),
+                url: "https://gw7.example.com:9202".to_string(),
+                wg_public_key: peer_gateway.clone(),
+                wg_endpoint: String::new(),
+                wg_ip: String::new(),
+            },
+        )
+        .unwrap();
+    let own = state.config.wg.public_key.clone();
+
+    for (id, key) in [("steals-peer-key", &peer_gateway), ("steals-own-key", &own)] {
+        let result = state.do_register_cvm("app", id, key, "compose", Default::default());
+        assert!(result.is_err(), "{id} registered");
+        assert!(!state.lock().state.instances.contains_key(id));
+    }
+}
+
 #[tokio::test]
 async fn test_port_policy_restrict_mode_allows_listed_only() {
     let state = create_test_state().await;

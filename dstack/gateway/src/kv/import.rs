@@ -144,10 +144,6 @@ fn validate_instance(
     validate_id("instance_id", instance_id)?;
     validate_id("app_id", &data.app_id)?;
     validate_wg_public_key(&data.public_key)?;
-    ensure!(
-        data.public_key != wg.public_key,
-        "public key belongs to this gateway"
-    );
     // The routable network, not this node's allocation share: in a cluster
     // every node carries peers for the CVMs registered on the other nodes, and
     // those hold addresses from the other nodes' shares by design.
@@ -180,11 +176,25 @@ fn validate_instance(
 /// wins, ties broken by instance ID) so that every node reaches the same
 /// decision from the same KV contents — the local registration path resolves
 /// them the same way, by refusing the newcomer.
-pub fn accept_instances(wg: &WgConfig, loaded: LoadedInstances) -> AcceptedInstances {
-    accept_instances_at(wg, loaded, now_secs())
+///
+/// `gateway_keys` are the WireGuard keys of the gateway nodes in the KV. A
+/// record carrying one of them loses to that gateway on every node, not only
+/// on the gateway whose key it is: judged by this node's own key alone, the
+/// nodes would disagree on which instances exist.
+pub fn accept_instances(
+    wg: &WgConfig,
+    gateway_keys: &HashSet<String>,
+    loaded: LoadedInstances,
+) -> AcceptedInstances {
+    accept_instances_at(wg, gateway_keys, loaded, now_secs())
 }
 
-fn accept_instances_at(wg: &WgConfig, loaded: LoadedInstances, now: u64) -> AcceptedInstances {
+fn accept_instances_at(
+    wg: &WgConfig,
+    gateway_keys: &HashSet<String>,
+    loaded: LoadedInstances,
+    now: u64,
+) -> AcceptedInstances {
     let LoadedInstances {
         decoded,
         undecodable,
@@ -213,6 +223,12 @@ fn accept_instances_at(wg: &WgConfig, loaded: LoadedInstances, now: u64) -> Acce
         let checked = validate_instance(wg, now, &instance_id, &data)
             .map_err(|reason| (Rejection::Unusable, reason))
             .and_then(|()| {
+                if data.public_key == wg.public_key || gateway_keys.contains(&data.public_key) {
+                    return Err((
+                        Rejection::LostConflict,
+                        anyhow::anyhow!("public key belongs to a gateway node"),
+                    ));
+                }
                 if let Some(owner) = claimed_ips.get(&data.ip) {
                     return Err((
                         Rejection::LostConflict,
@@ -297,7 +313,7 @@ mod tests {
     }
 
     fn accept(records: Vec<(&str, InstanceRecord)>) -> AcceptedInstances {
-        accept_instances_at(&wg_config(), loaded(records), NOW)
+        accept_instances_at(&wg_config(), &HashSet::new(), loaded(records), NOW)
     }
 
     #[test]
@@ -365,6 +381,7 @@ mod tests {
         let wg = wg_config();
         let accepted = accept_instances_at(
             &wg,
+            &HashSet::new(),
             loaded(vec![(
                 "self-peer",
                 instance("10.0.0.20", &wg.public_key, 100),
@@ -373,6 +390,28 @@ mod tests {
         );
         assert!(accepted.instances.is_empty());
         assert_eq!(accepted.rejected.len(), 1);
+    }
+
+    #[test]
+    fn every_node_rejects_another_gateways_public_key() {
+        // A CVM can register with one node under a peer gateway's key. Judged by
+        // each node's own key only, the peer refuses the record while every other
+        // node accepts it, and the nodes disagree on which instances exist.
+        let peer_gateway = key(8);
+        let accepted = accept_instances_at(
+            &wg_config(),
+            &HashSet::from([peer_gateway.clone()]),
+            loaded(vec![
+                ("steals-peer-key", instance("10.0.0.20", &peer_gateway, 100)),
+                ("good", instance("10.0.0.21", &key(1), 200)),
+            ]),
+            NOW,
+        );
+        assert!(!accepted.instances.contains_key("steals-peer-key"));
+        assert!(accepted.instances.contains_key("good"));
+        // The gateway owns the key, so the instance has to stop being routable
+        // rather than keep whatever the data plane already holds.
+        assert!(accepted.unreadable().is_empty());
     }
 
     #[test]
@@ -434,6 +473,7 @@ mod tests {
             };
             let accepted = accept_instances(
                 &wg,
+                &HashSet::new(),
                 loaded(vec![
                     ("mine", instance(mine, &key(1), 100)),
                     ("peers", instance(peers, &key(2), 100)),
@@ -499,6 +539,7 @@ mod tests {
     fn an_undecodable_record_is_reported_as_unreadable_not_as_absent() {
         let accepted = accept_instances_at(
             &wg_config(),
+            &HashSet::new(),
             LoadedInstances {
                 decoded: [("good".to_string(), instance("10.0.0.20", &key(1), 100))]
                     .into_iter()
