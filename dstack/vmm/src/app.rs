@@ -468,7 +468,9 @@ impl App {
             }
         };
         if auto_start && vm_work_dir.started().unwrap_or_default() {
-            self.start_vm(&vm_id).await?;
+            // Not an explicit start: re-read `started` under the launch lock
+            // so a stop that lands meanwhile sticks.
+            self.start_vm_with_restart_policy(&vm_id, false).await?;
         }
         Ok(())
     }
@@ -1464,7 +1466,8 @@ impl App {
             if already_running {
                 info!("Skipping, {vm_id} is already running");
             } else {
-                self.start_vm(&vm_id).await?;
+                // See `load_vm`.
+                self.start_vm_with_restart_policy(&vm_id, false).await?;
             }
         }
 
@@ -3296,11 +3299,9 @@ mod tests {
         );
     }
 
-    /// A start that finds the VM already running -- a double click, or the
-    /// automatic restart racing an explicit start -- must not close the sealed
-    /// env window of the boot that start just launched.
-    #[tokio::test]
-    async fn a_start_on_a_running_vm_keeps_its_env_window() {
+    /// An app whose `vm-1` has a workdir and image complete enough to load and
+    /// to pass the start's config sync.
+    fn loadable_vm(supervisor: SupervisorClient) -> (tempfile::TempDir, App, VmConfig) {
         let dir = tempfile::tempdir().unwrap();
         let image_dir = dir.path().join("images/dstack-test");
         fs::create_dir_all(&image_dir).unwrap();
@@ -3315,16 +3316,49 @@ mod tests {
         let mut config = test_config(Path::new("/nonexistent/netd.sock"), &dir.path().join("run"));
         config.image.path = dir.path().join("images");
         config.cvm.qemu_version = Some("9.2.1".into());
-        let (supervisor, _) = exiting_supervisor(0).await;
         let app = App::new(config, supervisor);
         let (vm, _) = bridge_vm(&app, "vm-1");
-        let workdir = app.work_dir("vm-1").unwrap();
-        workdir.put_manifest(&vm.manifest).unwrap();
+        app.work_dir("vm-1")
+            .unwrap()
+            .put_manifest(&vm.manifest)
+            .unwrap();
         let request = VmConfiguration {
             compose_file: r#"{"manifest_version":2,"name":"test","runner":"none"}"#.into(),
             ..Default::default()
         };
         app.prepare_work_dir("vm-1", &request, "").unwrap();
+        (dir, app, vm)
+    }
+
+    /// Loading reads `started` off disk and only then queues a start behind
+    /// the launch lock. A stop acknowledged in between must stick, as it does
+    /// for the automatic restart.
+    #[tokio::test]
+    async fn an_auto_start_on_load_does_not_outlive_the_stop_it_raced() {
+        let (_dir, app, _) = loadable_vm(exiting_supervisor(0).await.0);
+        let workdir = app.work_dir("vm-1").unwrap();
+        workdir.set_started(true).unwrap();
+
+        let held = app.launch_lock("vm-1").await;
+        let load = tokio::spawn({
+            let app = app.clone();
+            let path = workdir.path().to_path_buf();
+            async move { app.load_vm(path, &Default::default(), true).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        workdir.set_started(false).unwrap();
+        drop(held);
+        load.await.unwrap().unwrap();
+        assert!(app.lock().get("vm-1").is_some());
+        assert!(!workdir.started().unwrap(), "the stop must stick");
+    }
+
+    /// A start that finds the VM already running -- a double click, or the
+    /// automatic restart racing an explicit start -- must not close the sealed
+    /// env window of the boot that start just launched.
+    #[tokio::test]
+    async fn a_start_on_a_running_vm_keeps_its_env_window() {
+        let (_dir, app, vm) = loadable_vm(exiting_supervisor(0).await.0);
         app.lock().vms.insert("vm-1".into(), VmState::new(vm));
         app.lock().vms.get_mut("vm-1").unwrap().state.env_update = Some([1; 32]);
 
