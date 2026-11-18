@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use certbot::{
     advisory_dns_wait, resolve_issuer_domain_name, AcmeAccount, AcmeClient, ChallengeKind,
     Dns01Client, ValidationMethod,
@@ -22,13 +22,18 @@ use tracing::{error, info, warn};
 
 use crate::cert_store::{get_cert_expiry, CertResolver};
 use crate::kv::{
-    AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
-    KvStore, PersistentWriteNotifier, ZtDomainConfig,
+    AcmeAttestation, CertAttestation, CertCredentials, CertData, CertRenewLock, DnsCredential,
+    DnsProvider, KvStore, PersistentWriteNotifier, ZtDomainConfig,
 };
 use crate::time::now_secs;
 
 /// Lock timeout for certificate renewal (10 minutes)
 const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
+
+/// Upper bound on `renew_timeout`: half the renew lease, leaving the other
+/// half for the work around the order (DNS client setup, attestation) and for
+/// clock skew, so the certificate is saved while the lease is still held.
+pub(crate) const MAX_RENEW_TIMEOUT_SECS: u64 = RENEW_LOCK_TIMEOUT_SECS / 2;
 
 /// Lock timeout for ACME credential rotation (10 minutes)
 const ROTATION_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -181,6 +186,24 @@ impl DistributedCertBot {
         Ok(())
     }
 
+    fn ensure_cert_lock_held(&self, domain: &str, lock: &CertRenewLock) -> Result<()> {
+        ensure!(
+            self.kv_store
+                .cert_lock_still_held(domain, lock, RENEW_LOCK_TIMEOUT_SECS),
+            "renew lock for {domain} has expired or been taken over; not committing"
+        );
+        Ok(())
+    }
+
+    fn ensure_rotation_lock_held(&self, lock: &CertRenewLock) -> Result<()> {
+        ensure!(
+            self.kv_store
+                .rotation_lock_still_held(lock, ROTATION_LOCK_TIMEOUT_SECS),
+            "ACME lock has expired or been taken over; not committing"
+        );
+        Ok(())
+    }
+
     async fn dns_client(&self, domain: &str, dns_cred: &DnsCredential) -> Result<Dns01Client> {
         match &dns_cred.provider {
             DnsProvider::Cloudflare { api_token, api_url } => {
@@ -305,14 +328,14 @@ impl DistributedCertBot {
     /// first-use registration on any node is refused for the duration.
     pub async fn rotate_acme_credentials(&self) -> Result<RotationOutcome> {
         let rotation_lock = self.acquire_acme_lock("rotate ACME credentials")?;
-        let result = self.do_rotate_acme_credentials().await;
+        let result = self.do_rotate_acme_credentials(&rotation_lock).await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
         }
         result
     }
 
-    async fn do_rotate_acme_credentials(&self) -> Result<RotationOutcome> {
+    async fn do_rotate_acme_credentials(&self, lock: &CertRenewLock) -> Result<RotationOutcome> {
         let configs = self.kv_store.list_zt_domain_configs();
         let certbot_config = self.config()?;
         let acme_url = if certbot_config.acme_url.is_empty() {
@@ -352,6 +375,7 @@ impl DistributedCertBot {
         // account, and recovering from a partial re-pin below never needs to
         // register another account. Readers create an ACME client per
         // operation, so all nodes pick this up after WaveKV propagates it.
+        self.ensure_rotation_lock_held(lock)?;
         self.kv_store.save_acme_credentials(&CertCredentials {
             acme_credentials: credentials.clone(),
         })?;
@@ -383,6 +407,7 @@ impl DistributedCertBot {
                     AcmeClient::load(validation.method, &credentials, validation.max_dns_wait)
                         .await
                         .context("failed to prepare ACME client")?;
+                self.ensure_rotation_lock_held(lock)?;
                 client
                     .set_caa_records(std::slice::from_ref(&config.domain))
                     .await
@@ -405,7 +430,10 @@ impl DistributedCertBot {
         // window where the published account and the CAA records disagree.
         // Run it even when some domains failed so the new account is still
         // recorded.
-        if let Err(err) = self.generate_and_save_acme_attestation(&account_uri).await {
+        if let Err(err) = self
+            .generate_and_save_acme_attestation(lock, &account_uri)
+            .await
+        {
             warn!("failed to attest rotated ACME account: {err:?}");
         }
 
@@ -488,7 +516,7 @@ impl DistributedCertBot {
         // Before the lock, never under it: registration takes the same lock.
         self.ensure_acme_account(&configs).await?;
         let rotation_lock = self.acquire_acme_lock("reconcile CAA records")?;
-        let result = self.do_set_caa_all(configs).await;
+        let result = self.do_set_caa_all(configs, &rotation_lock).await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
         }
@@ -523,7 +551,11 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    async fn do_set_caa_all(&self, configs: Vec<ZtDomainConfig>) -> Result<()> {
+    async fn do_set_caa_all(
+        &self,
+        configs: Vec<ZtDomainConfig>,
+        lock: &CertRenewLock,
+    ) -> Result<()> {
         let total = configs.len();
         let mut failed = Vec::new();
         let mut skipped = 0usize;
@@ -537,7 +569,7 @@ impl DistributedCertBot {
                 skipped += 1;
                 continue;
             }
-            match self.set_caa(&domain, &config).await {
+            match self.set_caa(&domain, &config, lock).await {
                 Ok(()) => info!("cert[{domain}]: CAA records reconciled"),
                 Err(err) => {
                     error!("cert[{domain}]: failed to set CAA records: {err:?}");
@@ -573,7 +605,12 @@ impl DistributedCertBot {
     ///
     /// The written CAA value pins `accounturi` to the global ACME account, which
     /// the caller has already registered; see [`Self::ensure_acme_account`].
-    async fn set_caa(&self, domain: &str, config: &ZtDomainConfig) -> Result<()> {
+    async fn set_caa(
+        &self,
+        domain: &str,
+        config: &ZtDomainConfig,
+        lock: &CertRenewLock,
+    ) -> Result<()> {
         // Load only. This runs under the ACME lock, which is not reentrant, so
         // registering here would refuse the run that took it -- and the caller
         // has already registered the account before taking it. Nothing under
@@ -586,6 +623,7 @@ impl DistributedCertBot {
             .await
             .context("failed to initialize ACME client")?
             .context("no shared ACME account is registered for this cluster")?;
+        self.ensure_rotation_lock_held(lock)?;
         acme_client
             .set_caa_records(&[domain.to_string()])
             .await
@@ -639,11 +677,13 @@ impl DistributedCertBot {
 
         // Perform renewal or initial issuance
         let result = if cert_data.is_some() {
-            self.do_renew(domain, &config).await
+            self.do_renew(domain, &config, &lock).await
         } else {
             // No existing certificate, request new one
             info!("no existing certificate, requesting new one");
-            self.do_request_new(domain, &config).await.map(|_| true)
+            self.do_request_new(domain, &config, &lock)
+                .await
+                .map(|_| true)
         };
 
         // Release lock regardless of result
@@ -654,7 +694,12 @@ impl DistributedCertBot {
         result
     }
 
-    async fn do_request_new(&self, domain: &str, config: &ZtDomainConfig) -> Result<()> {
+    async fn do_request_new(
+        &self,
+        domain: &str,
+        config: &ZtDomainConfig,
+        lock: &CertRenewLock,
+    ) -> Result<()> {
         let acme_client = self.get_or_create_acme_client(domain, config).await?;
 
         // Generate new key pair (always use new key for security)
@@ -679,11 +724,11 @@ impl DistributedCertBot {
         let not_after = get_cert_expiry(&cert_pem).context("failed to parse certificate expiry")?;
 
         // Save certificate to KvStore
-        self.save_cert_to_kvstore(domain, &cert_pem, &key_pem, not_after)?;
+        self.save_cert_to_kvstore(domain, lock, &cert_pem, &key_pem, not_after)?;
         info!("new certificate obtained from ACME, saved to KvStore");
 
         // Generate and save attestation
-        self.generate_and_save_attestation(domain, &public_key_der)
+        self.generate_and_save_attestation(domain, lock, &public_key_der)
             .await?;
 
         // Load into memory cert store
@@ -703,7 +748,12 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    async fn do_renew(&self, domain: &str, config: &ZtDomainConfig) -> Result<bool> {
+    async fn do_renew(
+        &self,
+        domain: &str,
+        config: &ZtDomainConfig,
+        lock: &CertRenewLock,
+    ) -> Result<bool> {
         let acme_client = self.get_or_create_acme_client(domain, config).await?;
 
         // Generate new key pair (always use new key for each renewal)
@@ -735,11 +785,11 @@ impl DistributedCertBot {
             get_cert_expiry(&new_cert_pem).context("failed to parse certificate expiry")?;
 
         // Save to KvStore
-        self.save_cert_to_kvstore(domain, &new_cert_pem, &key_pem, not_after)?;
+        self.save_cert_to_kvstore(domain, lock, &new_cert_pem, &key_pem, not_after)?;
         info!("renewed certificate saved to KvStore");
 
         // Generate and save attestation
-        self.generate_and_save_attestation(domain, &public_key_der)
+        self.generate_and_save_attestation(domain, lock, &public_key_der)
             .await?;
 
         // Load into memory cert store
@@ -785,7 +835,7 @@ impl DistributedCertBot {
         // lock and look again before spending a registration.
         let rotation_lock = self.acquire_acme_lock("register the shared ACME account")?;
         let client = self
-            .register_or_adopt_account(domain, config, &acme_url)
+            .register_or_adopt_account(domain, config, &acme_url, &rotation_lock)
             .await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
@@ -846,6 +896,7 @@ impl DistributedCertBot {
         domain: &str,
         config: &ZtDomainConfig,
         acme_url: &str,
+        lock: &CertRenewLock,
     ) -> Result<AcmeClient> {
         if let Some(client) = self
             .load_stored_acme_client(domain, config, acme_url)
@@ -866,20 +917,25 @@ impl DistributedCertBot {
             .context("failed to dump ACME credentials")?;
 
         // Save global ACME credentials to KvStore
+        self.ensure_rotation_lock_held(lock)?;
         self.kv_store.save_acme_credentials(&CertCredentials {
             acme_credentials: creds_json.clone(),
         })?;
 
         // Generate and save ACME account attestation
         if let Some(account_uri) = extract_account_uri(&creds_json) {
-            self.generate_and_save_acme_attestation(&account_uri)
+            self.generate_and_save_acme_attestation(lock, &account_uri)
                 .await?;
         }
 
         Ok(client)
     }
 
-    async fn generate_and_save_acme_attestation(&self, account_uri: &str) -> Result<()> {
+    async fn generate_and_save_acme_attestation(
+        &self,
+        lock: &CertRenewLock,
+        account_uri: &str,
+    ) -> Result<()> {
         let agent = match crate::dstack_agent() {
             Ok(a) => a,
             Err(err) => {
@@ -929,6 +985,7 @@ impl DistributedCertBot {
             generated_at: now_secs(),
         };
 
+        self.ensure_rotation_lock_held(lock)?;
         self.kv_store.save_acme_attestation(&attestation)?;
         info!("ACME account attestation saved to KvStore");
         Ok(())
@@ -937,6 +994,7 @@ impl DistributedCertBot {
     fn save_cert_to_kvstore(
         &self,
         domain: &str,
+        lock: &CertRenewLock,
         cert_pem: &str,
         key_pem: &str,
         not_after: u64,
@@ -948,12 +1006,14 @@ impl DistributedCertBot {
             issued_by: self.kv_store.my_node_id(),
             issued_at: now_secs(),
         };
+        self.ensure_cert_lock_held(domain, lock)?;
         self.kv_store.save_cert_data(domain, &cert_data)
     }
 
     async fn generate_and_save_attestation(
         &self,
         domain: &str,
+        lock: &CertRenewLock,
         public_key_der: &[u8],
     ) -> Result<()> {
         let agent = match crate::dstack_agent() {
@@ -1005,6 +1065,7 @@ impl DistributedCertBot {
             generated_at: now_secs(),
         };
 
+        self.ensure_cert_lock_held(domain, lock)?;
         self.kv_store.save_cert_attestation(domain, &attestation)?;
         info!(domain, "attestation saved to KvStore");
         Ok(())
@@ -1155,6 +1216,39 @@ mod tests {
         assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
     }
 
+    /// A renewal that outlived its lease, or lost it to a force release, may
+    /// be racing a successor; its certificate must not overwrite theirs.
+    #[test]
+    fn a_holder_that_lost_its_lease_does_not_save_its_certificate() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        let domain = "example.com";
+
+        let stale = certbot
+            .try_acquire_cert_lock(domain)
+            .expect("renewal lock should be free");
+        certbot
+            .kv_store
+            .force_release_cert_lock(domain)
+            .expect("force release should succeed");
+        let successor = certbot
+            .try_acquire_cert_lock(domain)
+            .expect("renewal lock should be free after the force release");
+
+        assert!(certbot
+            .save_cert_to_kvstore(domain, &stale, "stale", "stale", 0)
+            .is_err());
+        assert!(certbot.kv_store.get_cert_data(domain).is_none());
+
+        certbot
+            .save_cert_to_kvstore(domain, &successor, "cert", "key", 0)
+            .expect("the current holder saves");
+        assert_eq!(
+            certbot.kv_store.get_cert_data(domain).map(|c| c.cert_pem),
+            Some("cert".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn set_caa_all_succeeds_without_configured_domains() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -1290,12 +1384,16 @@ mod tests {
         // The account that appeared while this call waited is registered at a
         // different ACME directory than the one this run is configured for.
         save_credentials_for(&certbot, "https://acme.test/directory");
+        let lock = certbot
+            .try_acquire_rotation_lock()
+            .expect("rotation lock should be free");
 
         let err = match certbot
             .register_or_adopt_account(
                 "app.example.com",
                 &test_zt_domain_config(),
                 DEFAULT_ACME_URL,
+                &lock,
             )
             .await
         {
