@@ -3580,6 +3580,8 @@ mod tests {
         manifest.id = "vm-1".into();
         let workdir = app.work_dir("vm-1").unwrap();
         workdir.put_manifest(&manifest).unwrap();
+        // An existing data disk, so the launch does not need qemu-img.
+        fs::write(workdir.hda_path(), b"").unwrap();
         let request = VmConfiguration {
             compose_file: r#"{"manifest_version":2,"name":"test","runner":"none"}"#.into(),
             ..Default::default()
