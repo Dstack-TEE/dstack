@@ -23,6 +23,7 @@ cd formal && lake build
 | `Guest.EventLog` | `cc-eventlog/src/runtime_events.rs`, `tdx.rs: validate_v2_preimages` | V1 preimages are injective for colon-free names (`RuntimeEvent::validate`); V2 JSON is injective; replay binds the log |
 | `Guest.BootTrace` | `dstack-util/src/system_setup.rs` boot sequence | event order; keys requested only after `boot-mr-done`; every config value used is measured |
 | `Guest.MrConfig`, `InstanceId`, `EnvFile`, `Policy` | `mr_config.rs`, `config_id_verifier.rs`, instance-id derivation, `parse_env_file.rs`, compose requirement checks | injective encodings; exact verifier acceptance conditions; env round trip; fail-closed checks |
+| `Vmm.Lifecycle`, `Safety`, `Traces` | `vmm/src/app.rs` (start, stop, removal, reloads, guest power-off, auto-restart), `main_service.rs` RPCs, `app/workdir.rs`, `supervisor.rs: deploy` (#1609–#1614) | one VM id, async ops as steps between awaits, crash and boot reload: removal holding the lock blocks deploys; one running process; deletion only with nothing running and netd released; recovery stops only marked or missing workdirs; reload never removes a VM being created; power-off never cancels a later start; counterexamples: a deploy can land while removing, cancellation at `deploy` breaks single-process, the reload RPC's start overrides an acknowledged stop |
 
 Each module header lists the functions it mirrors, its assumptions, and what it
 leaves out. Several Rust unit tests are restated as `example`s.
