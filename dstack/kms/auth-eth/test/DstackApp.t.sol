@@ -442,6 +442,37 @@ contract DstackAppTest is Test {
         return (result.authorized, result.rejectionReason);
     }
 
+    function test_TcbPolicyIsPerPlatformWhenRequired() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        info.tcbStatus = "";
+        vm.startPrank(owner);
+        app.addComposeHashAtEpochs(0, 0, info.composeHash);
+        app.addDeviceAtEpochs(0, 0, info.deviceId);
+        string[] memory statuses = new string[](1);
+        app.setTcbPolicy("dstack-aws-nitro-tpm", statuses, new string[](0));
+        vm.stopPrank();
+        AuthorizationRequest memory request = appRequest(info, OptionalUint256(true, 0), keccak256("app_get_key"));
+        request.teeVariant = "dstack-aws-nitro-tpm";
+
+        // The TCB is not checked until required.
+        assertTrue(app.authorizeApp(request).authorized);
+        vm.prank(owner);
+        app.setRequireTcbUpToDate(true);
+
+        // A platform without a TCB can be admitted by its rule, while the
+        // others and legacy callers still need UpToDate.
+        assertTrue(app.authorizeApp(request).authorized);
+        request.teeVariant = "dstack-tdx";
+        assertEq(app.authorizeApp(request).rejectionReason, "TCB status is not up to date");
+        (bool allowed, string memory reason) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "TCB status is not up to date");
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        app.setTcbPolicy("dstack-tdx", statuses, new string[](0));
+    }
+
     function test_TeeVariantsAreUnrestrictedUntilRestrictedAndCoverEveryEpoch() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);

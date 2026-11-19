@@ -10,6 +10,7 @@ import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
 import "./TeeVariantPolicy.sol";
+import "./TcbPolicy.sol";
 import "./IAppEpochManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
@@ -61,6 +62,9 @@ contract DstackApp is
     // Allowed launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket), at every app epoch.
     EnumerableSet.Bytes32Set private _launchTickets;
 
+    // The TCB each TEE platform must report when {requireTcbUpToDate}.
+    TcbPolicy.Policy private _tcbPolicy;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
@@ -74,6 +78,7 @@ contract DstackApp is
     event AllowAnyTeeVariantSet(bool allowAny);
     event AllowedTeeVariantsSet(string[] teeVariants);
     event RequireTcbUpToDateSet(bool requireUpToDate);
+    event TcbPolicySet(string teeVariant, string[] allowedTcbStatuses, string[] allowedAdvisoryIds);
     event RequireLaunchTicketSet(bool required);
     event LaunchTicketAdded(bytes32 indexed ticketHash, string label);
     event LaunchTicketRemoved(bytes32 indexed ticketHash);
@@ -280,6 +285,31 @@ contract DstackApp is
         _emitPolicy("require-tcb-up-to-date", bytes32(0), _requireUpToDate);
     }
 
+    /// @notice The TCB statuses and advisory IDs {setTcbPolicy} accepts on a TEE platform, named as the KMS
+    /// reports it. Empty statuses: the platform must report "UpToDate", with advisories unchecked.
+    function tcbPolicy(string calldata teeVariant)
+        external
+        view
+        returns (string[] memory allowedTcbStatuses, string[] memory allowedAdvisoryIds)
+    {
+        return TcbPolicy.get(_tcbPolicy, teeVariant);
+    }
+
+    /// @notice Accept only these TCB statuses and advisory IDs on a TEE platform; empty statuses clear the rule.
+    /// Covers every app epoch.
+    function setTcbPolicy(
+        string calldata teeVariant,
+        string[] calldata allowedTcbStatuses,
+        string[] calldata allowedAdvisoryIds
+    )
+        external
+        onlyOwner
+    {
+        TcbPolicy.set(_tcbPolicy, teeVariant, allowedTcbStatuses, allowedAdvisoryIds);
+        emit TcbPolicySet(teeVariant, allowedTcbStatuses, allowedAdvisoryIds);
+        _emitPolicy("tcb-policy", keccak256(bytes(teeVariant)), allowedTcbStatuses.length != 0);
+    }
+
     function setRequireLaunchTicket(bool required) external onlyOwner {
         requireLaunchTicket = required;
         emit RequireLaunchTicketSet(required);
@@ -347,7 +377,7 @@ contract DstackApp is
         if (currentAppEpoch != 0) return (false, "App epoch requires epoch-aware authorization");
         // Legacy callers report no platform and no launch ticket, so only a policy
         // restricting neither admits them.
-        return _authorizeApp(bootInfo, allowAnyTeeVariant(), 0, bytes32(0));
+        return _authorizeApp(bootInfo, "", allowAnyTeeVariant(), 0, bytes32(0));
     }
 
     /// Decide the request at the selected app epoch; the KMS fills gateway and root fields.
@@ -365,6 +395,7 @@ contract DstackApp is
         uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : currentAppEpoch;
         (result.authorized, result.rejectionReason) = _authorizeApp(
             request.appInfo,
+            request.teeVariant,
             TeeVariantPolicy.admits(_teeVariants, request.teeVariant),
             appEpoch,
             request.launchTicketHash
@@ -373,6 +404,7 @@ contract DstackApp is
 
     function _authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
+        string memory teeVariant,
         bool teeVariantAllowed,
         uint256 appEpoch,
         bytes32 launchTicketHash
@@ -385,11 +417,8 @@ contract DstackApp is
             return (false, "Invalid launch ticket");
         }
         if (appEpoch > currentAppEpoch) return (false, "Requested app epoch is not active");
-        // Optionally require TCB status to be up to date
-        if (
-            requireTcbUpToDate
-                && keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))
-        ) {
+        // Optionally require the TCB the platform's rule accepts
+        if (requireTcbUpToDate && !TcbPolicy.admits(_tcbPolicy, teeVariant, bootInfo.tcbStatus, bootInfo.advisoryIds)) {
             return (false, "TCB status is not up to date");
         }
 
@@ -434,5 +463,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[42] private __gap;
+    uint256[41] private __gap;
 }

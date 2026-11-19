@@ -30,6 +30,10 @@ library TeeVariantPolicy {
         return known && (policy.allowed >> index) & 1 == 1;
     }
 
+    function isKnown(string calldata teeVariant) internal pure returns (bool known) {
+        (known,) = _indexOf(teeVariant);
+    }
+
     /// Returns the stored mask, a canonical value for audit events.
     function setAllowed(Policy storage policy, string[] calldata teeVariants) internal returns (uint64) {
         uint64 allowed = 0;

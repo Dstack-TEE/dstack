@@ -11,6 +11,7 @@ import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
 import "./TeeVariantPolicy.sol";
 import "./DstackApp.sol";
+import "./TcbPolicy.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
@@ -102,6 +103,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Allowed KMS launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket).
     EnumerableSet.Bytes32Set private _kmsLaunchTickets;
 
+    // The TCB each TEE platform must report for a KMS instance.
+    TcbPolicy.Policy private _tcbPolicy;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     error InvalidEpochCaPubkey();
@@ -137,6 +141,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     event AllowAnyTeeVariantSet(bool allowAny);
     event AllowedTeeVariantsSet(string[] teeVariants);
+    event TcbPolicySet(string teeVariant, string[] allowedTcbStatuses, string[] allowedAdvisoryIds);
     event RequireKmsLaunchTicketSet(bool required);
     event KmsLaunchTicketAdded(bytes32 indexed ticketHash, string label);
     event KmsLaunchTicketRemoved(bytes32 indexed ticketHash);
@@ -324,6 +329,31 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         uint64 mask = TeeVariantPolicy.setAllowed(_teeVariants, teeVariants);
         emit AllowedTeeVariantsSet(teeVariants);
         _emitPolicy(keccak256("allowed-tee-variants"), bytes32(uint256(mask)), true);
+    }
+
+    /// @notice The TCB statuses and advisory IDs {setTcbPolicy} accepts on a TEE platform, named as the KMS
+    /// reports it. Empty statuses: the platform must report "UpToDate", with advisories unchecked.
+    function tcbPolicy(string calldata teeVariant)
+        external
+        view
+        returns (string[] memory allowedTcbStatuses, string[] memory allowedAdvisoryIds)
+    {
+        return TcbPolicy.get(_tcbPolicy, teeVariant);
+    }
+
+    /// @notice Accept only these TCB statuses and advisory IDs on a TEE platform; empty statuses clear the rule.
+    /// Covers every root epoch.
+    function setTcbPolicy(
+        string calldata teeVariant,
+        string[] calldata allowedTcbStatuses,
+        string[] calldata allowedAdvisoryIds
+    )
+        external
+        onlyOwner
+    {
+        TcbPolicy.set(_tcbPolicy, teeVariant, allowedTcbStatuses, allowedAdvisoryIds);
+        emit TcbPolicySet(teeVariant, allowedTcbStatuses, allowedAdvisoryIds);
+        _emitPolicy(keccak256("tcb-policy"), keccak256(bytes(teeVariant)), allowedTcbStatuses.length != 0);
     }
 
     function setRequireKmsLaunchTicket(bool required) external onlyOwner {
@@ -670,8 +700,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        (result.authorized, result.rejectionReason) =
-            _kmsPolicy(request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), selectedRootEpoch);
+        (result.authorized, result.rejectionReason) = _kmsPolicy(
+            request.appInfo,
+            request.teeVariant,
+            TeeVariantPolicy.admits(_teeVariants, request.teeVariant),
+            selectedRootEpoch
+        );
     }
 
     // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
@@ -683,11 +717,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return (false, "Root epoch requires epoch-aware authorization");
         }
         // Legacy callers report no platform, so only an unrestricted policy admits them.
-        return _kmsPolicy(bootInfo, allowAnyTeeVariant(), 0);
+        return _kmsPolicy(bootInfo, "", allowAnyTeeVariant(), 0);
     }
 
     function _kmsPolicy(
         AppInfo memory bootInfo,
+        string memory teeVariant,
         bool teeVariantAllowed,
         uint256 selectedRootEpoch
     )
@@ -695,8 +730,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         view
         returns (bool, string memory)
     {
-        // Check if the TCB status is up to date
-        if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
+        // Check the TCB the platform's rule accepts
+        if (!TcbPolicy.admits(_tcbPolicy, teeVariant, bootInfo.tcbStatus, bootInfo.advisoryIds)) {
             return (false, "TCB status is not up to date");
         }
 
@@ -747,7 +782,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[40] private __gap;
+    uint256[39] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

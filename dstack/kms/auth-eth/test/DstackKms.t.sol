@@ -504,6 +504,73 @@ contract DstackKmsTest is Test {
         return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
     }
 
+    function test_TcbPolicyIsPerPlatform() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
+        vm.stopPrank();
+        AuthorizationRequest memory request = AuthorizationRequest(
+            info,
+            keccak256("kms_serve"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-amd-sev-snp",
+            bytes32(0)
+        );
+
+        // Without a rule, every platform must be UpToDate.
+        request.appInfo.tcbStatus = "";
+        assertEq(kms.authorizeKms(request).rejectionReason, "TCB status is not up to date");
+
+        string[] memory statuses = new string[](2);
+        statuses[0] = "UpToDate";
+        statuses[1] = "OutOfDate";
+        string[] memory advisories = new string[](1);
+        advisories[0] = "AMD-SB-1";
+        vm.prank(owner);
+        kms.setTcbPolicy("dstack-amd-sev-snp", statuses, advisories);
+        (string[] memory gotStatuses, string[] memory gotAdvisories) = kms.tcbPolicy("dstack-amd-sev-snp");
+        assertEq(gotStatuses.length, 2);
+        assertEq(gotAdvisories[0], "AMD-SB-1");
+
+        // The rule accepts its statuses with its advisories only.
+        assertEq(kms.authorizeKms(request).rejectionReason, "TCB status is not up to date");
+        request.appInfo.tcbStatus = "OutOfDate";
+        request.appInfo.advisoryIds = advisories;
+        assertTrue(kms.authorizeKms(request).authorized);
+        string[] memory other = new string[](2);
+        other[0] = "AMD-SB-1";
+        other[1] = "AMD-SB-2";
+        request.appInfo.advisoryIds = other;
+        assertEq(kms.authorizeKms(request).rejectionReason, "TCB status is not up to date");
+
+        // Other platforms and legacy callers keep the default.
+        request.appInfo.advisoryIds = advisories;
+        request.teeVariant = "dstack-tdx";
+        assertEq(kms.authorizeKms(request).rejectionReason, "TCB status is not up to date");
+        (bool allowed,) = kms.isKmsAllowed(request.appInfo);
+        assertFalse(allowed);
+
+        // Empty statuses clear the rule; unknown platforms and outsiders are refused.
+        vm.startPrank(owner);
+        kms.setTcbPolicy("dstack-amd-sev-snp", new string[](0), new string[](0));
+        vm.expectRevert("advisories without statuses");
+        kms.setTcbPolicy("dstack-amd-sev-snp", new string[](0), advisories);
+        vm.expectRevert("unknown TEE variant");
+        kms.setTcbPolicy("dstack-unknown", statuses, advisories);
+        vm.stopPrank();
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertEq(kms.authorizeKms(request).rejectionReason, "TCB status is not up to date");
+        (gotStatuses, gotAdvisories) = kms.tcbPolicy("dstack-amd-sev-snp");
+        assertEq(gotStatuses.length + gotAdvisories.length, 0);
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.setTcbPolicy("dstack-amd-sev-snp", statuses, advisories);
+    }
+
     function test_TeeVariantsRestrictKmsAndApps() public {
         IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
         assertTrue(kms.allowAnyTeeVariant());

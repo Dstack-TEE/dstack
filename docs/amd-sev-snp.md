@@ -145,8 +145,10 @@ reported TCB is the one the VCEK certifies, and the committed TCB bounds a
 firmware rollback. `BootInfo.tcb_status` is `UpToDate` when every listed
 bulletin is met, `OutOfDate` otherwise, and empty when none is listed for the
 product. `DstackKms` accepts only `UpToDate` from a KMS instance, as does
-`DstackApp` with `requireTcbUpToDate`, so list the bulletins before you deploy
-SEV-SNP. No report field shows firmware that was downgraded and upgraded again
+`DstackApp` with `requireTcbUpToDate`, unless the contract owner sets another
+rule for `dstack-amd-sev-snp` with `setTcbPolicy` (see
+[On-chain governance](./onchain-governance.md)). List the bulletins before you
+deploy SEV-SNP. No report field shows firmware that was downgraded and upgraded again
 while the guest ran, as long as the committed TCB stayed at the minimum.
 
 ## KMS key-release policy
