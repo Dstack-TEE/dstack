@@ -450,14 +450,18 @@ pub struct VerifiedAmdSnpReport {
 }
 
 impl VerifiedAmdSnpReport {
-    /// The TCB status against `requirements` rather than the verifier's own.
-    /// Fails when they cannot judge the report.
+    /// The TCB status against `requirements`, or the verifier's own for a CPU
+    /// they do not list. Fails when neither lists it.
     pub fn assess(&self, requirements: &[AmdSnpTcbRequirement]) -> Result<&'static str> {
         let cpuid = self
             .cpuid
             .context("amd sev-snp report v2 does not name its CPU")?;
+        let own = ["UpToDate", "OutOfDate"]
+            .into_iter()
+            .find(|status| *status == self.tcb_status);
         self.tcb_info
             .assess(cpuid, requirements)
+            .or(own)
             .with_context(|| format!("no minimum TCB is listed for CPUID {cpuid}"))
     }
 }
@@ -1592,7 +1596,32 @@ mod tests {
             launch: tcb(1, 2, 3, 3),
             ..info
         };
-        assert_eq!(old_launch.assess(milan, &[met]), Some("OutOfDate"));
+        assert_eq!(old_launch.assess(milan, &[met.clone()]), Some("OutOfDate"));
+
+        // Another list decides for the CPUs it names; the verifier's own
+        // verdict stands for the rest.
+        let report = |tcb_status: &str| VerifiedAmdSnpReport {
+            cpuid: Some(milan),
+            measurement: [0; 48],
+            report_data: [0; 64],
+            host_data: [0; 32],
+            chip_id: [0; 64],
+            tcb_info: info,
+            tcb_status: tcb_status.into(),
+        };
+        let unmet = requirement(milan, tcb(1, 2, 3, 5));
+        for (own, other, merged) in [
+            ("", None, None),
+            ("", Some(&met), Some("UpToDate")),
+            ("UpToDate", None, Some("UpToDate")),
+            ("UpToDate", Some(&met), Some("UpToDate")),
+            ("UpToDate", Some(&unmet), Some("OutOfDate")),
+            ("OutOfDate", Some(&met), Some("UpToDate")),
+            ("OutOfDate", None, Some("OutOfDate")),
+        ] {
+            let other = other.map(std::slice::from_ref).unwrap_or_default();
+            assert_eq!(report(own).assess(other).ok(), merged, "{own:?} {other:?}");
+        }
     }
 
     #[test]

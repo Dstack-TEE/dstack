@@ -159,24 +159,35 @@ accepts only `UpToDate` from a KMS instance, as does `DstackApp` with
 `requireTcbUpToDate`.
 
 The KMS reads the list from its auth API when it authorizes an SEV-SNP
-attestation, reusing it for a second, and does not take one from `kms.toml`.
-Its verdict on its own attestation is reused for an hour, like the rest of its
-boot info. Publish the list where the auth API reads it:
+attestation, reusing it for a second. Its verdict on its own attestation is
+reused for an hour, like the rest of its boot info. Publish the list where the
+auth API reads it:
 
 - With on-chain governance, publish it in `DstackKms` with
   `setSevSnpTcbRequirements` (see [On-chain governance](./onchain-governance.md)).
 - With `dstack-auth`, list the entries under `sevSnpTcbRequirements` (see
   [dstack-auth operations](./dstack-auth-operations.md)).
 
-The KMS refuses a request it cannot judge, with the reason, instead of calling
-the TCB out of date: when the auth API does not serve the list or serves none,
-when the list does not parse, when it has no entry for the report's CPU, and
-when the report predates the CPUID fields (version 2). Publish the list before
-you deploy SEV-SNP. The dev backend publishes none and judges nothing.
+A KMS can cover CPUs governance does not list: `sev_snp_tcb_requirements_file`
+under `[core.attestation]` names a file with the same JSON, read at startup.
+The published list takes precedence: the file decides only for a CPU the
+published list has no entry for, and cannot raise or lower a published minimum.
+Governance does not see the file, so a KMS that carries one vouches by itself
+for the CPUs governance leaves out, its own included. Write the file in the
+KMS's compose file, like `kms.toml`, so that it is part of the measurement
+governance allows.
 
-`dstack-verifier` does not read the auth API: configure the same entries in
-`[[attestation.sev_snp_tcb_requirements]]` of `dstack-verifier.toml`. It reports
-an empty status for a CPU without an entry.
+The KMS refuses a request it cannot judge, with the reason, instead of calling
+the TCB out of date: when the auth API does not serve the list, when the list
+does not parse, when neither list has an entry for the report's CPU, and when
+the report predates the CPUID fields (version 2). The dev backend publishes
+none, which leaves the KMS's own list.
+
+`dstack-verifier` does not read the auth API: give it the same JSON in the file
+`attestation.sev_snp_tcb_requirements_file` names, which a compose file can
+carry inline (see the [verifier README](../dstack/verifier/README.md)). It
+reads the file at startup, and reports an empty status without one and for a
+CPU without an entry.
 
 No report field shows firmware that was downgraded and upgraded again
 while the guest ran, as long as the committed TCB stayed at the minimum.
@@ -243,5 +254,4 @@ AMD signatures.
 - **`no minimum TCB is listed for CPUID ...`:** publish an entry for that CPU.
   The error names the `cpuid` the entry needs.
 - **`failed to read the SEV-SNP TCB requirements from the auth API`:** the auth
-  API predates the route, the contract predates `sevSnpTcbRequirements`, or no
-  list is published.
+  API predates the route, or the contract predates `sevSnpTcbRequirements`.

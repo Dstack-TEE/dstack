@@ -1308,7 +1308,7 @@ mod tests {
                     host_data: mr_config.to_snp_host_data(),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
-                    // A KMS configures no list, so its verifier judges nothing.
+                    // This KMS lists no minimum of its own.
                     tcb_status: String::new(),
                 },
             ),
@@ -1769,13 +1769,22 @@ mod tests {
 
     #[rocket::async_test]
     async fn sev_snp_tcb_is_judged_against_governances_requirements() {
+        use ra_tls::attestation::DstackVerifiedReport;
         use serde_json::json;
         use upgrade_authority::tests::{serve_with_status, webhook};
 
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&input).unwrap();
-        // A Milan (`00a00f11`) whose TCB is all zeros.
-        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        // A Milan (`00a00f11`) whose TCB is all zeros, with the verdict of this
+        // KMS's own list: none, met or unmet.
+        let attestation = |own: &str| {
+            let mut attestation = verified_snp_attestation(measurement, [0xab; 64]);
+            let DstackVerifiedReport::DstackAmdSevSnp(report) = &mut attestation.report else {
+                panic!("not an SEV-SNP attestation");
+            };
+            report.tcb_status = own.into();
+            attestation
+        };
         let vm_config = snp_vm_config(&input, &valid_snp_mr_config());
         let published = |cpuid: &str, bootloader: u8| {
             let requirements = json!([{
@@ -1784,25 +1793,30 @@ mod tests {
             let body = json!({ "requirements": requirements.to_string() });
             (200, body.to_string())
         };
-        let none = (200, json!({ "requirements": "" }).to_string());
+        let none = || (200, json!({ "requirements": "" }).to_string());
         let unparsable = (200, json!({ "requirements": "[{}]" }).to_string());
+        let unlisted = Err("no minimum TCB is listed for CPUID 00a00f11");
         // Each case has its own backend: the list is cached per backend.
-        for (response, expected) in [
-            (published("00a00f11", 0), Ok("UpToDate")),
-            (published("00a00f11", 1), Ok("OutOfDate")),
+        for (own, response, expected) in [
+            ("", published("00a00f11", 0), Ok("UpToDate")),
+            ("", published("00a00f11", 1), Ok("OutOfDate")),
             // A report nothing can judge is refused, not called out of date.
-            (
-                published("00a00f12", 0),
-                Err("no minimum TCB is listed for CPUID 00a00f11"),
-            ),
-            (none, Err("none are published")),
-            ((404, String::new()), Err("returned 404")),
-            ((503, String::new()), Err("returned 503")),
-            (unparsable, Err("missing field")),
+            ("", published("00a00f12", 0), unlisted),
+            ("", none(), unlisted),
+            // This KMS's list covers a CPU governance does not name, and
+            // gives way where it does.
+            ("UpToDate", none(), Ok("UpToDate")),
+            ("OutOfDate", published("00a00f12", 0), Ok("OutOfDate")),
+            ("UpToDate", published("00a00f11", 1), Ok("OutOfDate")),
+            ("OutOfDate", published("00a00f11", 0), Ok("UpToDate")),
+            // The auth API must answer, whatever this KMS lists.
+            ("UpToDate", (404, String::new()), Err("returned 404")),
+            ("UpToDate", (503, String::new()), Err("returned 503")),
+            ("UpToDate", unparsable, Err("missing field")),
         ] {
             let (url, server) = serve_with_status(vec![response]);
             let judged = webhook(url)
-                .boot_info(&attestation, false, &vm_config)
+                .boot_info(&attestation(own), false, &vm_config)
                 .await;
             match (judged, expected) {
                 (Ok(info), Ok(status)) => assert_eq!(info.tcb_status, status),
@@ -1820,8 +1834,9 @@ mod tests {
             gateway_app_id: String::new(),
         };
         let dev = crate::config::AuthApi::Dev { dev };
+        let attestation = attestation("UpToDate");
         let info = dev.boot_info(&attestation, false, &vm_config).await;
-        assert_eq!(info.unwrap().tcb_status, "");
+        assert_eq!(info.unwrap().tcb_status, "UpToDate");
     }
 
     #[test]

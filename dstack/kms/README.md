@@ -345,9 +345,10 @@ KMS callers do not fetch contract metadata to decide which policy to use.
 
 Before authorizing an SEV-SNP attestation, the KMS reads
 `GET /sevSnpTcbRequirements`, reusing the answer for a second. `requirements` is
-the JSON list of minimum TCBs it judges the TCB status against. It refuses
-the request when it cannot read the list or the list has no entry for the
-report's CPU. See
+the JSON list of minimum TCBs it judges the TCB status against; the list
+`core.attestation.sev_snp_tcb_requirements_file` names decides for a CPU the
+published one does not cover. The KMS refuses the request when it cannot read the published list or
+neither has an entry for the report's CPU. See
 [AMD SEV-SNP](../../docs/amd-sev-snp.md).
 
 `requestedAppEpoch` selects the application's own key epoch, independently of KMS

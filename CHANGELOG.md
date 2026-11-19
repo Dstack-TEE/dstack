@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SEV-SNP request, its own self-authorization included, while it cannot:
   upgrade `DstackKms` and the auth API, then publish the list with
   `setSevSnpTcbRequirements` (or `sevSnpTcbRequirements` for `dstack-auth`)
-  before upgrading the KMS. A host whose firmware still emits version 2
+  before upgrading the KMS. A KMS can cover the CPUs governance leaves out
+  with `core.attestation.sev_snp_tcb_requirements_file`, and `dstack-verifier`
+  judges against the same JSON in `attestation.sev_snp_tcb_requirements_file`. A host whose firmware still emits version 2
   reports, which do not name the CPU, is refused. See
   [AMD SEV-SNP](docs/amd-sev-snp.md).
 

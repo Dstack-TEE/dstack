@@ -130,8 +130,8 @@ struct Allowlist {
     /// when set, deny any reported advisory ID that is not listed; an empty
     /// list denies any advisory. Absent: advisories are not checked.
     allowed_advisory_ids: Option<Vec<String>>,
-    /// the minimum TCB of each CPU the KMS judges an SEV-SNP TCB against; it
-    /// refuses a CPU without one.
+    /// the minimum TCB of each CPU the KMS judges an SEV-SNP TCB against; for
+    /// a CPU without one it falls back to its own list.
     sev_snp_tcb_requirements: Vec<serde_json::Value>,
     kms_contract_addr: String,
     gateway_app_id: String,
