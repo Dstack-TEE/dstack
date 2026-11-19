@@ -397,25 +397,21 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (appImplementation == address(0)) revert AppImplementationNotSet();
         if (initialOwner == address(0)) revert InvalidOwnerAddress();
 
-        bytes memory initData = abi.encodeWithSelector(
-            bytes4(keccak256("initialize(address,bool,bool,bool,bytes32,bytes32)")),
-            initialOwner,
-            disableUpgrades,
-            requireTcbUpToDate,
-            allowAnyDevice,
-            initialDeviceId,
-            initialComposeHash
-        );
-
-        // `appImplementation` deploys an ERC1967Proxy of itself, whose
-        // constructor delegatecalls into its initializer. The owner sets `appImplementation` via
-        // setAppImplementation; safety here rests on owner trust, not on a
-        // structural reentrancy impossibility — a malicious owner could in
-        // principle install an impl whose `initialize` reenters this contract.
-        // See docs/specification.md §1 for the owner trust scope and §6.1 for
-        // the malicious-registered-app threat model.
+        // `appImplementation` deploys an uninitialized ERC1967Proxy of itself,
+        // which this contract initializes in the same transaction. The owner
+        // sets `appImplementation` via setAppImplementation; safety here rests
+        // on owner trust, not on a structural reentrancy impossibility — a
+        // malicious owner could in principle install an impl whose
+        // `deployProxy` or `initialize` reenters this contract, or whose
+        // `deployProxy` returns an existing contract. See
+        // docs/specification.md §1 for the owner trust scope and §6.1 for the
+        // malicious-registered-app threat model.
         // slither-disable-next-line reentrancy-benign,reentrancy-events
-        appId = DstackApp(appImplementation).deployProxy(initData);
+        appId = DstackApp(appImplementation).deployProxy();
+        DstackApp(appId)
+            .initialize(
+                initialOwner, disableUpgrades, requireTcbUpToDate, allowAnyDevice, initialDeviceId, initialComposeHash
+            );
         registerApp(appId);
         emit AppDeployedViaFactory(appId, msg.sender);
     }

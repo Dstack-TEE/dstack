@@ -25,11 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as unavailable collateral until it serves the CRL too.
 
 - **`DstackKms` deploys apps through `appImplementation`.** The app proxy is
-  now created by `DstackApp.deployProxy`, which keeps the proxy's creation code
-  out of `DstackKms`, close to the 24 KB contract size limit. After upgrading
-  `DstackKms`, point `setAppImplementation` at a current `DstackApp`, as
-  `Upgrade.s.sol:UpgradeKms` now does. With a released `DstackApp` there,
-  `deployAndRegisterApp` reverts.
+  now created by `DstackApp.deployProxy` and initialized by `DstackKms`, which
+  keeps the proxy's creation code out of `DstackKms`, close to the 24 KB
+  contract size limit. After upgrading `DstackKms`, point `setAppImplementation`
+  at a current `DstackApp`, as `Upgrade.s.sol:UpgradeKms` now does. With a
+  released `DstackApp` there, `deployAndRegisterApp` reverts.
 
 ### Changed
 

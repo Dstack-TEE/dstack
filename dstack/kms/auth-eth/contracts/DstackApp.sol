@@ -410,11 +410,11 @@ contract DstackApp is
         return (true, "");
     }
 
-    /// @notice Deploy a proxy of this implementation, initialized with `initData`. {DstackKms} deploys apps
-    /// through its `appImplementation`, so it does not carry the proxy's creation code. Anyone may call it, as
-    /// anyone may deploy a proxy themselves; it refuses to run through a proxy.
-    function deployProxy(bytes calldata initData) external notDelegated returns (address) {
-        return address(new ERC1967Proxy(address(this), initData));
+    /// @notice Deploy an uninitialized proxy of this implementation. {DstackKms} deploys apps through its
+    /// `appImplementation` and initializes them, so it does not carry the proxy's creation code. Anyone may call
+    /// it, as anyone may deploy a proxy themselves; it refuses to run through a proxy.
+    function deployProxy() external notDelegated returns (address) {
+        return address(new ERC1967Proxy(address(this), ""));
     }
 
     /// Advance only from the epoch the owner intended, rejecting stale transactions.
