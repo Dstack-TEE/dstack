@@ -109,6 +109,7 @@ Hex values are compared case-insensitively, with or without a `0x` prefix.
 | `appImplementation` | No | Informational, reported by `GET /` as `appImplementation` and `appAuthImplementation`. |
 | `allowedTcbStatuses` | No | When set, deny unless the verifier-derived `tcbStatus` is listed; `[]` denies everything. **Absent: not checked.** See [TCB and advisory policy](#tcb-and-advisory-policy). |
 | `allowedAdvisoryIds` | No | When set, deny any reported advisory ID that is not listed; `[]` denies any advisory. **Absent: not checked.** |
+| `sevSnpTcbRequirements` | No | The minimum TCB of each CPU the KMS judges an SEV-SNP TCB against, as the entries described in [AMD SEV-SNP](./amd-sev-snp.md). **Absent: the KMS refuses every SEV-SNP request.** |
 | `kms.mrAggregated` | Yes | Allowed KMS early aggregate MR values (boot-mr-done). Empty denies every KMS. |
 | `kms.devices` | No | Allowed KMS device IDs. Empty denies all unless `kms.allowAnyDevice` is true. |
 | `kms.allowAnyDevice` | No | If true, skip the device ID check for KMS |

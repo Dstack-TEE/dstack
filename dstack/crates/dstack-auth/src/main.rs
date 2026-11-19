@@ -130,6 +130,9 @@ struct Allowlist {
     /// when set, deny any reported advisory ID that is not listed; an empty
     /// list denies any advisory. Absent: advisories are not checked.
     allowed_advisory_ids: Option<Vec<String>>,
+    /// the minimum TCB of each CPU the KMS judges an SEV-SNP TCB against; it
+    /// refuses a CPU without one.
+    sev_snp_tcb_requirements: Vec<serde_json::Value>,
     kms_contract_addr: String,
     gateway_app_id: String,
     /// informational, reported by `GET /`.
@@ -524,6 +527,13 @@ fn app_epoch(app_id: &str, cli: &State<Cli>) -> Result<Json<serde_json::Value>, 
     Ok(Json(json!({ "currentAppEpoch": app.current_app_epoch })))
 }
 
+/// the KMS parses the list itself, as it does one read from `DstackKms`.
+#[get("/sevSnpTcbRequirements")]
+fn sev_snp_tcb_requirements(cli: &State<Cli>) -> Json<serde_json::Value> {
+    let requirements = json!(load(&cli.config).sev_snp_tcb_requirements).to_string();
+    Json(json!({ "requirements": requirements }))
+}
+
 /// load the allowlist, failing closed (deny-all) if it's missing or invalid.
 fn load(path: &PathBuf) -> Allowlist {
     match std::fs::read_to_string(path) {
@@ -613,7 +623,8 @@ fn server(cli: Cli) -> rocket::Rocket<rocket::Build> {
             boot_kms,
             authorize_app,
             authorize_kms,
-            app_epoch
+            app_epoch,
+            sev_snp_tcb_requirements
         ],
     )
 }
@@ -857,6 +868,28 @@ mod tests {
             .await;
         assert_eq!(response.status(), Status::Ok, "{route}");
         response.into_json().await.unwrap()
+    }
+
+    #[rocket::async_test]
+    async fn sev_snp_tcb_requirements_are_served_as_the_json_the_kms_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist.json");
+        let client = client_for(&path).await;
+        let entry =
+            json!({"cpuid": "00a00f11", "bootloader": 1, "tee": 0, "snp": 0, "microcode": 0});
+        for (policy, served) in [
+            (json!({"sevSnpTcbRequirements": [entry]}), json!([entry])),
+            (json!({}), json!([])),
+        ] {
+            std::fs::write(&path, policy.to_string()).unwrap();
+            let response = client.get("/sevSnpTcbRequirements").dispatch().await;
+            let response: serde_json::Value = response.into_json().await.unwrap();
+            let requirements = response["requirements"].as_str().unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(requirements).unwrap(),
+                served
+            );
+        }
     }
 
     async fn client_for(path: &std::path::Path) -> rocket::local::asynchronous::Client {
