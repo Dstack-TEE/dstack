@@ -11,7 +11,8 @@ forge script script/Deploy.s.sol:DeployScript --broadcast --rpc-url $RPC_URL
 ```
 
 ### DeployKmsOnly
-Deploys only DstackKms (requires APP_IMPLEMENTATION):
+Deploys only DstackKms (requires APP_IMPLEMENTATION, a `DstackApp` with
+`deployProxy`; with an older one, `deployAndRegisterApp` reverts):
 ```bash
 APP_IMPLEMENTATION=0x... forge script script/Deploy.s.sol:DeployKmsOnly --broadcast --rpc-url $RPC_URL
 ```
@@ -359,6 +360,13 @@ Upgrade a live proxy to the current `contracts/DstackKms.sol` /
 KMS_CONTRACT_ADDR=0x... \
 forge script script/Upgrade.s.sol:UpgradeKms --broadcast --rpc-url $RPC_URL --ffi
 ```
+
+`DstackKms` deploys apps through its `appImplementation`, which must be a
+`DstackApp` with `deployProxy`. The script sets it in the same upgrade call:
+to `APP_IMPLEMENTATION` if set, otherwise to a newly deployed `DstackApp`, so
+the upgrade replaces whatever implementation was set before. If you upgrade
+another way, also call `setAppImplementation`; until then,
+`deployAndRegisterApp` reverts.
 
 #### Upgrade App
 ```bash

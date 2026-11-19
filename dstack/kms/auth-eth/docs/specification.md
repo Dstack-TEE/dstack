@@ -105,8 +105,9 @@ Signature: `deployAndRegisterApp(address initialOwner, bool disableUpgrades, boo
 - **pre**: `appImplementation != address(0)`; `initialOwner != address(0)`.
 - **post**:
   - `registeredApps[appId] == true`.
-  - `appId` is a freshly-deployed ERC1967 proxy whose implementation is
-    `appImplementation`.
+  - `appId` is the address `appImplementation.deployProxy()` returned: a
+    freshly-deployed ERC1967 proxy of `appImplementation` when that is a
+    `DstackApp` (an assumption on the owner-set implementation, see §5.2).
   - The proxy is initialized: `DstackApp(appId).owner() == initialOwner`;
     `DstackApp(appId).requireTcbUpToDate() == requireTcbUpToDate`;
     `DstackApp(appId).allowAnyDevice() == allowAnyDevice`;
@@ -295,14 +296,19 @@ KMS calls `IAppAuth(b.appId).isAppAllowed(b)` after confirming
 
 ### 5.2 KMS ↔ Proxy (factory deploy)
 
-`deployAndRegisterApp` calls `new ERC1967Proxy(appImplementation, initData)`.
-The proxy constructor delegatecalls into the implementation's initialize
-function. Assumptions:
+`deployAndRegisterApp` calls `DstackApp(appImplementation).deployProxy()`,
+which runs `new ERC1967Proxy(address(this), "")` and refuses to run through a
+proxy, then calls `initialize` on the new proxy itself, so the app's initial
+`PolicyChanged` events name the KMS as `actor`. Assumptions:
 
-- The constructor runs `initialize` exactly once on the new proxy.
+- `deployProxy` returns a new, uninitialized proxy, and `initialize` runs
+  exactly once on it, in the same transaction.
 - `appImplementation` is a contract conforming to `DstackApp`'s storage
-  layout. Setting it to anything else is the owner's prerogative; the
-  spec does not constrain it beyond non-zero.
+  layout and exposing `deployProxy`. Setting it to anything else is the
+  owner's prerogative; the spec does not constrain it beyond non-zero. Such
+  an implementation could reenter the KMS from `deployProxy` or
+  `initialize`, or return an existing contract, which the KMS would then
+  register.
 
 ### 5.3 App ↔ Proxy (upgrade authorization)
 

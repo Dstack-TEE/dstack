@@ -13,6 +13,9 @@ import "../contracts/DstackApp.sol";
 
 // Production upgrade path: upgrade the live DstackKms proxy to the current
 // `contracts/DstackKms.sol` implementation. Use this for routine upgrades.
+// DstackKms deploys apps through `appImplementation`, so the upgrade also
+// points it at a current DstackApp implementation: APP_IMPLEMENTATION if set,
+// otherwise a newly deployed one.
 contract UpgradeKms is Script {
     function run() external {
         address kmsProxy = vm.envAddress("KMS_CONTRACT_ADDR");
@@ -21,9 +24,12 @@ contract UpgradeKms is Script {
         console.log("Proxy address:", kmsProxy);
 
         vm.startBroadcast();
-        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", "");
+        address appImpl = vm.envOr("APP_IMPLEMENTATION", address(0));
+        if (appImpl == address(0)) appImpl = address(new DstackApp());
+        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", abi.encodeCall(DstackKms.setAppImplementation, (appImpl)));
         vm.stopBroadcast();
 
+        console.log("DstackApp implementation:", appImpl);
         console.log("Success: DstackKms upgraded.");
     }
 }

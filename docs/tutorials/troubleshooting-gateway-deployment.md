@@ -35,7 +35,9 @@ If `deployAndRegisterApp` reverts, check:
      "appImplementation()(address)" \
      --rpc-url "$ETH_RPC_URL"
    ```
-   Should return a non-zero address.
+   Should return a non-zero address, of a `DstackApp` that has `deployProxy`.
+   A `DstackApp` from v0.6.5 or earlier has none, and `deployAndRegisterApp`
+   reverts without a reason until the owner sets a current one.
 
 2. **Insufficient funds:** Your wallet needs Sepolia ETH for gas
    ```bash
