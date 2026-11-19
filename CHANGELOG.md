@@ -60,8 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   envelope the guest could not decrypt at boot. Pass both epochs
   `GetSealedEnvPubKey` returns.
 - sdk/rust (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` changed from `String` to `Option<String>` because the server emits null on non-TDX backends; new public fields on `TlsKeyConfig`, `EventLog` and `InfoResponse` break struct-literal construction
+- sdk/rust (breaking): `TappdTcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now
+  `Option<String>` to support non-TDX guests. Persisted Borsh values must be
+  decoded with the old layout before re-encoding. Rust v0 now requires an
+  agent with the `Version` RPC (dstack 0.5.7 or newer) to request Ed25519 keys,
+  certificate validity overrides, or application info in TLS certificates.
+  Default requests are unchanged.
+- sdk/js (breaking): v0 and Tappd `TcbInfo` measurement fields `mrtd` and
+  `rtmr0`-`rtmr3` are typed as `string | null`, matching non-TDX responses.
+  Check for `null` before using them as hex strings.
 - sdk/python (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now `Optional[str]`
-- sdk/go (breaking): `AppCompose.InitScript` and `AppCompose.SwapSize` changed to the named types `*InitScripts` and `*SwapSize`
+- sdk/go (breaking): `AppCompose.InitScript` and `AppCompose.SwapSize` changed to the named types `*InitScripts` and `*SwapSize`. Explicit empty compose slices now encode as `[]`; use nil to reproduce hashes that omitted them.
 
 ### Removed
 
