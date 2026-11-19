@@ -223,6 +223,22 @@ func optionalString(name string, raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
+// defaultUint32Field reads a proto3 uint32 field. An omitted field has the
+// protobuf zero default, while an explicit JSON null is not a numeric value.
+func defaultUint32Field(name string, raw json.RawMessage) (uint32, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, fmt.Errorf("malformed %s in response: expected a uint32, got null", name)
+	}
+	var value uint32
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, fmt.Errorf("malformed %s in response: %w", name, err)
+	}
+	return value, nil
+}
+
 // requireString reads a string field the response is meaningless without.
 //
 // A bundle's vendor and format are what a caller switches on to pick a
@@ -482,16 +498,24 @@ func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm st
 	}
 
 	var response struct {
-		Key            *string    `json:"key"`
-		PublicKey      *string    `json:"public_key"`
-		SignatureChain *[]*string `json:"signature_chain"`
-		RootEpoch      uint32     `json:"root_epoch"`
-		AppEpoch       uint32     `json:"app_epoch"`
+		Key            *string         `json:"key"`
+		PublicKey      *string         `json:"public_key"`
+		SignatureChain *[]*string      `json:"signature_chain"`
+		RootEpoch      json.RawMessage `json:"root_epoch"`
+		AppEpoch       json.RawMessage `json:"app_epoch"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
 
+	responseRootEpoch, err := defaultUint32Field("root_epoch", response.RootEpoch)
+	if err != nil {
+		return nil, err
+	}
+	responseAppEpoch, err := defaultUint32Field("app_epoch", response.AppEpoch)
+	if err != nil {
+		return nil, err
+	}
 	key, err := requireHexField("key", response.Key)
 	if err != nil {
 		return nil, err
@@ -512,15 +536,15 @@ func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm st
 		}
 	}
 
-	if (rootEpoch != nil && response.RootEpoch != *rootEpoch) || (appEpoch != nil && response.AppEpoch != *appEpoch) {
+	if (rootEpoch != nil && responseRootEpoch != *rootEpoch) || (appEpoch != nil && responseAppEpoch != *appEpoch) {
 		return nil, fmt.Errorf("GetKey returned different epochs than requested")
 	}
 	return &GetKeyV1Response{
 		Key:            key,
 		PublicKey:      publicKey,
 		SignatureChain: chain,
-		RootEpoch:      response.RootEpoch,
-		AppEpoch:       response.AppEpoch,
+		RootEpoch:      responseRootEpoch,
+		AppEpoch:       responseAppEpoch,
 	}, nil
 }
 
