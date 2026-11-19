@@ -187,8 +187,9 @@ async fn run_external(state: AppState, figment: Figment) -> Result<()> {
         // Where `ScopeFairing` rewrites a denied request.
         .mount("/", dstack_api_auth::routes())
         // Before `ScopeFairing`, so a refused request is logged under the path
-        // it asked for rather than the 401 route it was rewritten to.
-        .attach(AccessLog::new("external"))
+        // it asked for rather than the 401 route it was rewritten to. The
+        // query is kept: tokens travel in the header, never in the query.
+        .attach(AccessLog::with_query("external"))
         .attach(ScopeFairing::new(state.clone()))
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
@@ -206,7 +207,7 @@ async fn run_external(state: AppState, figment: Figment) -> Result<()> {
 async fn run_guest_api(state: AppState, figment: Figment) -> Result<()> {
     let rocket = rocket::custom(figment)
         .mount("/api", ra_rpc::prpc_routes!(AppState, GuestApiHandler))
-        .attach(AccessLog::new("guest-api"))
+        .attach(AccessLog::with_query("guest-api"))
         .manage(state);
 
     let ignite = rocket
