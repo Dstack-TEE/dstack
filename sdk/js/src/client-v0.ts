@@ -7,7 +7,7 @@
 // changes again -- see `DstackClientV0` for why.
 
 import fs from 'fs'
-import { send_rpc_request } from './send-rpc-request'
+import { validateTimeoutMs, send_rpc_request } from './send-rpc-request'
 import {
   to_hex, throwOnRpcError, resolveDstackEndpoint, type Hex,
   from_hex, require_string, to_list,
@@ -183,6 +183,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   protected versionPath = '/Version'
 
   constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
+    validateTimeoutMs(options.timeoutMs)
     this.endpoint = resolveDstackEndpoint(endpoint)
     this.timeoutMs = options.timeoutMs
   }

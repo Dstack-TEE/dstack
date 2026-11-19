@@ -5,7 +5,7 @@
 // The `dstack.guest.v1` surface: the recommended client, and what the
 // unsuffixed `DstackClient` names since 0.6.0.
 
-import { send_rpc_request } from './send-rpc-request'
+import { validateTimeoutMs, send_rpc_request } from './send-rpc-request'
 import {
   to_hex, throwOnRpcError, resolveDstackEndpoint,
   decode_hex, from_hex, require_string, to_list,
@@ -287,6 +287,7 @@ export class DstackClientV1 {
   protected timeoutMs?: number
 
   constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
+    validateTimeoutMs(options.timeoutMs)
     this.endpoint = resolveDstackEndpoint(endpoint)
     this.timeoutMs = options.timeoutMs
   }

@@ -54,6 +54,12 @@ describe('tappd routes and transport', () => {
     } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
   })
 
+  it.each([0, -1, 1.5, NaN, Infinity, 2 ** 31])('rejects unsupported timeoutMs %s', timeoutMs => {
+    for (const Client of [DstackClient, DstackClientV0, TappdClient]) {
+      expect(() => new Client('http://localhost', { timeoutMs })).toThrow(RangeError)
+    }
+  })
+
   it('honors client timeouts', async () => {
     const server = http.createServer(() => {})
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
