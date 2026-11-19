@@ -24,4 +24,5 @@ pem.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
+time.workspace = true
 tokio = { workspace = true, features = ["full"] }

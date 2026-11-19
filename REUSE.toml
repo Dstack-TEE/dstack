@@ -108,6 +108,7 @@ path = [
     "dstack/dstack-attest/tests/sev_snp_attestation.bin",
     "dstack/dstack-attest/tests/sev_snp_ask.pem",
     "dstack/dstack-attest/tests/sev_snp_vcek.pem",
+    "dstack/sev-snp-qvl/testdata/amd-milan.crl",
     "dstack/nsm-attest/tests/nitro_attestation.bin",
     "dstack/nsm-qvl/tests/nitro_attestation.bin",
     "dstack/nsm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",

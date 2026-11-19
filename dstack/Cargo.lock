@@ -7419,6 +7419,7 @@ dependencies = [
  "rustls-pki-types",
  "rustls-webpki",
  "sev",
+ "time",
  "tokio",
  "x509-parser 0.16.0",
 ]

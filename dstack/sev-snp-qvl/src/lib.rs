@@ -38,6 +38,8 @@ const AMD_KDS_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AMD_KDS_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const AMD_KDS_CA_CACHE_CAPACITY: u64 = 16;
 const AMD_KDS_VCEK_CACHE_CAPACITY: u64 = 1024;
+/// AMD reissues each CRL every few weeks; refetch well within that.
+const AMD_KDS_CRL_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// Verification could not obtain its required AMD endorsement collateral.
 /// This is not evidence that a quote is cryptographically invalid.
@@ -178,16 +180,27 @@ impl QuoteVerifier {
         }]
     }
 
+    /// Verify offline. This does not check AMD's CRL; `fetch_and_verify` does.
     pub fn verify(
         &self,
         report: &[u8],
         cert_chain: &[Vec<u8>],
         expected_report_data: &[u8; 64],
     ) -> Result<VerifiedAmdSnpReport> {
+        let (_, _, verified) = self.verify_supplied(report, cert_chain, expected_report_data)?;
+        Ok(verified)
+    }
+
+    fn verify_supplied(
+        &self,
+        report: &[u8],
+        cert_chain: &[Vec<u8>],
+        expected_report_data: &[u8; 64],
+    ) -> Result<(AmdSnpProduct, CertBytes, VerifiedAmdSnpReport)> {
         let (ask, vcek) = normalize_ask_vcek_certs(cert_chain)?;
-        let verified = verify_amd_snp_attestation_with_certs_and_arks(
+        let (product, verified) = verify_amd_snp_attestation_with_certs_and_arks(
             report,
-            ask,
+            ask.clone(),
             vcek,
             |product| (self.ark(product), self.uses_external_root(product)),
             &self.tcb_requirements,
@@ -195,7 +208,24 @@ impl QuoteVerifier {
         if &verified.report_data != expected_report_data {
             bail!("amd sev-snp report_data mismatch");
         }
-        Ok(verified)
+        Ok((product, ask, verified))
+    }
+
+    /// Reject an ASK that the product's CRL, signed by its pinned ARK, revokes.
+    async fn check_ask_not_revoked(
+        &self,
+        kds_client: &AmdKdsClient,
+        product: AmdSnpProduct,
+        ask: &CertBytes,
+    ) -> Result<()> {
+        let crl = kds_client.fetch_crl(product).await?;
+        verify_ask_not_revoked(
+            &self.ark(product),
+            ask,
+            &crl,
+            x509_parser::time::ASN1Time::now(),
+        )
+        .with_context(|| format!("amd sev-snp {} crl check failed", product.kds_name()))
     }
 
     pub async fn fetch_and_verify(
@@ -206,7 +236,11 @@ impl QuoteVerifier {
         expected_report_data: &[u8; 64],
     ) -> Result<VerifiedAmdSnpReport> {
         if !cert_chain.is_empty() {
-            return self.verify(report, cert_chain, expected_report_data);
+            let (product, ask, verified) =
+                self.verify_supplied(report, cert_chain, expected_report_data)?;
+            self.check_ask_not_revoked(kds_client, product, &ask)
+                .await?;
+            return Ok(verified);
         }
         let report_obj = decode_amd_snp_report(report)?;
         let mut errors = Vec::new();
@@ -220,12 +254,14 @@ impl QuoteVerifier {
                     report,
                     product,
                     self.ark(product),
-                    collateral.ask,
+                    collateral.ask.clone(),
                     collateral.vcek,
                     self.uses_external_root(product),
                     &self.tcb_requirements,
                 ) {
                     Ok(verified) if &verified.report_data == expected_report_data => {
+                        self.check_ask_not_revoked(kds_client, product, &collateral.ask)
+                            .await?;
                         return Ok(verified);
                     }
                     Ok(_) => bail!("amd sev-snp report_data mismatch"),
@@ -417,6 +453,7 @@ pub struct AmdKdsClient {
     http_client: reqwest::Client,
     ca_cache: Cache<AmdKdsCaCacheKey, (CertBytes, CertBytes)>,
     vcek_cache: Cache<AmdKdsVcekCacheKey, CertBytes>,
+    crl_cache: Cache<AmdKdsCaCacheKey, Vec<u8>>,
 }
 
 impl AmdKdsClient {
@@ -436,6 +473,10 @@ impl AmdKdsClient {
             http_client,
             ca_cache: Cache::new(AMD_KDS_CA_CACHE_CAPACITY),
             vcek_cache: Cache::new(AMD_KDS_VCEK_CACHE_CAPACITY),
+            crl_cache: Cache::builder()
+                .max_capacity(AMD_KDS_CA_CACHE_CAPACITY)
+                .time_to_live(AMD_KDS_CRL_CACHE_TTL)
+                .build(),
         })
     }
 
@@ -470,6 +511,16 @@ impl AmdKdsClient {
                 let chain = self.fetch_url(&url, "cert_chain").await?;
                 let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
                 Ok::<_, anyhow::Error>((product.builtin_ark(), ask))
+            })
+            .await
+            .map_err(|err| SharedFetchError(err).into())
+    }
+
+    async fn fetch_crl(&self, product: AmdSnpProduct) -> Result<Vec<u8>> {
+        self.crl_cache
+            .try_get_with(AmdKdsCaCacheKey { product }, async {
+                let url = join_amd_kds_url(&self.base_url, &format!("{}/crl", product.kds_name()));
+                self.fetch_url(&url, "crl").await
             })
             .await
             .map_err(|err| SharedFetchError(err).into())
@@ -619,6 +670,7 @@ fn verify_amd_snp_attestation_with_certs(
         |product| (product.builtin_ark(), false),
         &[],
     )
+    .map(|(_, verified)| verified)
 }
 
 fn verify_amd_snp_attestation_with_certs_and_arks(
@@ -627,7 +679,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
     vcek_bytes: CertBytes,
     ark_for_product: impl Fn(AmdSnpProduct) -> (CertBytes, bool),
     tcb_requirements: &[AmdSnpTcbRequirement],
-) -> Result<VerifiedAmdSnpReport> {
+) -> Result<(AmdSnpProduct, VerifiedAmdSnpReport)> {
     let report = decode_amd_snp_report(report_bytes)?;
     let mut errors = Vec::new();
     for product in amd_snp_product_candidates_for_report(&report)? {
@@ -641,7 +693,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
             external_root,
             tcb_requirements,
         ) {
-            Ok(verified) => return Ok(verified),
+            Ok(verified) => return Ok((product, verified)),
             Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
         }
     }
@@ -805,6 +857,22 @@ fn verify_certificate_signature(
     issuer_der: &[u8],
     certificate: &x509_parser::certificate::X509Certificate<'_>,
 ) -> Result<()> {
+    verify_signed_data(
+        issuer_der,
+        &certificate.signature_algorithm,
+        &certificate.tbs_certificate.signature,
+        certificate.tbs_certificate.as_ref(),
+        certificate.signature_value.data.as_ref(),
+    )
+}
+
+fn verify_signed_data(
+    issuer_der: &[u8],
+    signature_algorithm: &x509_parser::x509::AlgorithmIdentifier<'_>,
+    tbs_signature_algorithm: &x509_parser::x509::AlgorithmIdentifier<'_>,
+    message: &[u8],
+    signature: &[u8],
+) -> Result<()> {
     use rustls_pki_types::CertificateDer;
     const RSA_PSS_OID: &str = "1.2.840.113549.1.1.10";
     const ECDSA_SHA384_OID: &str = "1.2.840.10045.4.3.3";
@@ -812,15 +880,15 @@ fn verify_certificate_signature(
     const MGF1_OID: &str = "1.2.840.113549.1.1.8";
 
     anyhow::ensure!(
-        certificate.signature_algorithm == certificate.tbs_certificate.signature,
-        "certificate signatureAlgorithm does not match TBSCertificate signature"
+        signature_algorithm == tbs_signature_algorithm,
+        "outer signatureAlgorithm does not match the signed one"
     );
-    let oid = certificate.signature_algorithm.algorithm.to_id_string();
+    let oid = signature_algorithm.algorithm.to_id_string();
     let algorithm = match oid.as_str() {
         RSA_PSS_OID => {
             use x509_parser::signature_algorithm::SignatureAlgorithm;
             let SignatureAlgorithm::RSASSA_PSS(params) =
-                SignatureAlgorithm::try_from(&certificate.signature_algorithm)
+                SignatureAlgorithm::try_from(signature_algorithm)
                     .context("invalid RSA-PSS signature parameters")?
             else {
                 bail!("invalid RSA-PSS signature parameters");
@@ -834,27 +902,69 @@ fn verify_certificate_signature(
                     && mask.hash.to_id_string() == SHA384_OID
                     && params.salt_length() == 48
                     && params.trailer_field() == 1,
-                "RSA-PSS certificate signature must use SHA-384, MGF1-SHA384, and a 48-byte salt"
+                "RSA-PSS signature must use SHA-384, MGF1-SHA384, and a 48-byte salt"
             );
             webpki::ring::RSA_PSS_2048_8192_SHA384_LEGACY_KEY
         }
         ECDSA_SHA384_OID => {
             anyhow::ensure!(
-                certificate.signature_algorithm.parameters.is_none(),
+                signature_algorithm.parameters.is_none(),
                 "ECDSA-SHA384 signature parameters must be absent"
             );
             webpki::ring::ECDSA_P384_SHA384
         }
-        _ => bail!("unsupported certificate signature algorithm: {oid}"),
+        _ => bail!("unsupported signature algorithm: {oid}"),
     };
     let issuer_der = CertificateDer::from(issuer_der);
     let issuer = webpki::EndEntityCert::try_from(&issuer_der)
         .context("failed to parse certificate issuer")?;
-    let message = certificate.tbs_certificate.as_ref();
-    let signature = certificate.signature_value.data.as_ref();
     issuer
         .verify_signature(algorithm, message, signature)
-        .context("invalid certificate signature")?;
+        .context("invalid signature")?;
+    Ok(())
+}
+
+/// Check the ASK against the product CRL: signed by the pinned ARK and current
+/// at `now`. AMD's CRL revokes ASKs; VCEKs are retired through TCB updates.
+fn verify_ask_not_revoked(
+    ark: &CertBytes,
+    ask: &CertBytes,
+    crl_der: &[u8],
+    now: x509_parser::time::ASN1Time,
+) -> Result<()> {
+    use x509_parser::prelude::{CertificateRevocationList, FromDer, X509Certificate};
+
+    let ark_der = certificate_der(ark)?;
+    let ask_der = certificate_der(ask)?;
+    let (_, ark) = X509Certificate::from_der(&ark_der).context("failed to parse ARK X.509")?;
+    let (_, ask) = X509Certificate::from_der(&ask_der).context("failed to parse ASK X.509")?;
+    let (rest, crl) =
+        CertificateRevocationList::from_der(crl_der).context("failed to parse CRL")?;
+    anyhow::ensure!(rest.is_empty(), "trailing data after CRL");
+    anyhow::ensure!(
+        crl.issuer() == ark.subject(),
+        "CRL is not issued by the ARK"
+    );
+    verify_signed_data(
+        &ark_der,
+        &crl.signature_algorithm,
+        &crl.tbs_cert_list.signature,
+        crl.tbs_cert_list.as_ref(),
+        crl.signature_value.data.as_ref(),
+    )
+    .context("CRL signature verification failed")?;
+    let next_update = crl.next_update().context("CRL has no nextUpdate")?;
+    anyhow::ensure!(
+        crl.last_update() <= now && now < next_update,
+        "CRL is not current: valid from {} to {next_update}",
+        crl.last_update()
+    );
+    if crl
+        .iter_revoked_certificates()
+        .any(|revoked| revoked.serial() == &ask.tbs_certificate.serial)
+    {
+        bail!("ASK is revoked");
+    }
     Ok(())
 }
 
@@ -1273,6 +1383,102 @@ mod tests {
             };
             let err = check(&turin_vcek(CHIP_ID[..8].to_vec(), Some(5)), &no_fmc);
             assert!(err.contains("missing reported FMC"), "{err}");
+        }
+    }
+
+    mod crl {
+        use super::*;
+        use rcgen::{
+            BasicConstraints, CertificateParams, CertificateRevocationListParams, DnType, IsCa,
+            KeyIdMethod, KeyPair, KeyUsagePurpose, RevokedCertParams, SerialNumber,
+            PKCS_ECDSA_P384_SHA384,
+        };
+        use time::{Duration, OffsetDateTime};
+        use x509_parser::time::ASN1Time;
+
+        /// AMD's Milan CRL, valid from 2026-10-27 to 2026-12-09.
+        const AMD_MILAN_CRL: &[u8] = include_bytes!("../testdata/amd-milan.crl");
+
+        fn pem(bytes: &[u8]) -> CertBytes {
+            CertBytes {
+                bytes: bytes.to_vec(),
+                encoding: CertEncoding::Pem,
+            }
+        }
+
+        fn at(timestamp: i64) -> ASN1Time {
+            ASN1Time::from_timestamp(timestamp).unwrap()
+        }
+
+        #[test]
+        fn amd_crl_verifies_against_the_builtin_ark() {
+            let ark = pem(builtin::milan::ARK);
+            let ask = pem(builtin::milan::ASK);
+            let current = at(1_794_000_000); // 2026-11-07
+            verify_ask_not_revoked(&ark, &ask, AMD_MILAN_CRL, current).unwrap();
+
+            let expired = at(1_797_000_000); // 2026-12-11
+            let err = verify_ask_not_revoked(&ark, &ask, AMD_MILAN_CRL, expired).unwrap_err();
+            assert!(format!("{err:#}").contains("not current"), "{err:#}");
+
+            let genoa = pem(builtin::genoa::ARK);
+            let err = verify_ask_not_revoked(&genoa, &ask, AMD_MILAN_CRL, current).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("not issued by the ARK"),
+                "{err:#}"
+            );
+
+            let mut tampered = AMD_MILAN_CRL.to_vec();
+            let last = tampered.len() - 1;
+            tampered[last] ^= 1;
+            let err = verify_ask_not_revoked(&ark, &ask, &tampered, current).unwrap_err();
+            assert!(format!("{err:#}").contains("signature"), "{err:#}");
+        }
+
+        #[test]
+        fn a_revoked_ask_is_rejected() {
+            let ca = |name: &str| {
+                let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+                params.distinguished_name.push(DnType::CommonName, name);
+                params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+                params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+                params.serial_number = Some(SerialNumber::from(7));
+                (
+                    params,
+                    KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap(),
+                )
+            };
+            let (ark_params, ark_key) = ca("ARK");
+            let ark = ark_params.self_signed(&ark_key).unwrap();
+            let (ask_params, ask_key) = ca("ASK");
+            let ask = ask_params.signed_by(&ask_key, &ark, &ark_key).unwrap();
+            let now = OffsetDateTime::now_utc();
+            let crl = |revoked_certs| {
+                CertificateRevocationListParams {
+                    this_update: now - Duration::days(1),
+                    next_update: now + Duration::days(1),
+                    crl_number: SerialNumber::from(1),
+                    issuing_distribution_point: None,
+                    revoked_certs,
+                    key_identifier_method: KeyIdMethod::Sha256,
+                }
+                .signed_by(&ark, &ark_key)
+                .unwrap()
+                .der()
+                .to_vec()
+            };
+            let (ark, ask) = (pem(ark.pem().as_bytes()), pem(ask.pem().as_bytes()));
+            let now = ASN1Time::now();
+
+            verify_ask_not_revoked(&ark, &ask, &crl(vec![]), now).unwrap();
+            let revoked = crl(vec![RevokedCertParams {
+                serial_number: SerialNumber::from(7),
+                revocation_time: OffsetDateTime::now_utc(),
+                reason_code: None,
+                invalidity_date: None,
+            }]);
+            let err = verify_ask_not_revoked(&ark, &ask, &revoked, now).unwrap_err();
+            assert!(format!("{err:#}").contains("ASK is revoked"), "{err:#}");
         }
     }
 

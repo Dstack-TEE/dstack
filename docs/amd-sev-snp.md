@@ -129,6 +129,12 @@ no quote-bound runtime measurement register.
 The verifier supports the AMD Milan, Genoa, and Turin KDS product families.
 Bergamo and Siena are handled through AMD's canonical Genoa KDS product path.
 
+The verifier also fetches the product family's CRL from KDS
+(`<amd_kds>/<product>/crl`). It requires the CRL to be signed by the pinned ARK
+and current, and rejects a revoked ASK. This applies whether the evidence
+carries its certificates or the verifier fetches them, so a KDS mirror must
+serve the CRL too.
+
 AMD publishes no TCB status for SNP, so the verifier judges the report against
 the bulletins configured in `sev_snp_tcb_requirements` (`[core.attestation]` in
 `kms.toml`, `[attestation]` in `dstack-verifier.toml`; keep the two identical).

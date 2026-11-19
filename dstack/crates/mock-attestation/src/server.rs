@@ -67,6 +67,7 @@ pub fn router(state: Arc<MockCollateralState>) -> Router {
         .route("/tdx/certification/v4/tcb", get(tcb_info))
         .route("/tdx/certification/v4/qe/identity", get(qe_identity))
         .route("/vcek/v1/Milan/cert_chain", get(sev_ca_chain))
+        .route("/vcek/v1/Milan/crl", get(sev_crl))
         .route("/vcek/v1/Milan/{chip_id}", get(sev_vcek))
         .route("/tpm/aia/root.pem", get(tpm_root))
         .route("/tpm/aia/intermediate.der", get(tpm_intermediate))
@@ -136,6 +137,10 @@ async fn qe_identity(State(state): State<Arc<MockCollateralState>>) -> impl Into
 
 async fn sev_ca_chain(State(state): State<Arc<MockCollateralState>>) -> impl IntoResponse {
     binary(state.sev_snp.ca_chain_pem(), None)
+}
+
+async fn sev_crl(State(state): State<Arc<MockCollateralState>>) -> impl IntoResponse {
+    binary(state.sev_snp.crl_der(), None)
 }
 
 async fn sev_vcek(State(state): State<Arc<MockCollateralState>>) -> impl IntoResponse {
@@ -276,13 +281,17 @@ mod tests {
 
         let sev_evidence = state.sev_snp.attest([0x43; 64]).unwrap();
         let kds = sev_snp_qvl::AmdKdsClient::with_base_url(format!("{base}/vcek/v1")).unwrap();
-        sev_snp_qvl::QuoteVerifier::new_with_root(
+        let sev_verifier = sev_snp_qvl::QuoteVerifier::new_with_root(
             sev_snp_qvl::AmdSnpProduct::Milan,
             state.sev_snp.root_ca_pem().into_bytes(),
-        )
-        .fetch_and_verify(&kds, &sev_evidence.report, &[], &[0x43; 64])
-        .await
-        .unwrap();
+        );
+        // Fetched and supplied certificates are both checked against the CRL.
+        for cert_chain in [&[][..], &sev_evidence.cert_chain] {
+            sev_verifier
+                .fetch_and_verify(&kds, &sev_evidence.report, cert_chain, &[0x43; 64])
+                .await
+                .unwrap();
+        }
         task.abort();
     }
 
