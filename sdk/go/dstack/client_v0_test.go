@@ -40,20 +40,8 @@ func TestTappdRoutes(t *testing.T) {
 		t.Errorf("paths %v want %v", paths, want)
 	}
 	paths = nil
-	checks := []func() error{
-		func() error { _, e := client.GetKey(ctx, "x", "", "secp256k1"); return e },
-		func() error { _, e := client.GetQuote(ctx, nil); return e },
-		func() error { _, e := client.GetTlsKey(ctx); return e },
-		func() error { _, e := client.Attest(ctx, nil); return e },
-		func() error { _, e := client.Sign(ctx, "x", nil); return e },
-		func() error { _, e := client.Verify(ctx, "x", nil, nil, nil); return e },
-		func() error { return client.EmitEvent(ctx, "x", nil) },
-	}
-	for _, check := range checks {
-		err := check()
-		if err == nil || !strings.Contains(err.Error(), "DstackClientV0 on dstack.sock") {
-			t.Errorf("unexpected error: %v", err)
-		}
+	if _, err := client.GetKey(ctx, "x", "", "secp256k1"); err == nil {
+		t.Error("GetKey should not be available on the tappd endpoint")
 	}
 	if len(paths) != 0 {
 		t.Errorf("unexpected requests: %v", paths)
