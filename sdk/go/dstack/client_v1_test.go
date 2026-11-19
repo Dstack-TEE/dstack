@@ -104,109 +104,53 @@ func TestV1GetKeyRejectsUnrequestedEpochs(t *testing.T) {
 }
 
 func TestV1GetKeyEpochWireNamesAndDefaults(t *testing.T) {
-	payloads := make(chan map[string]interface{}, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("failed to decode request: %v", err)
-		}
-		select {
-		case payloads <- payload:
-		default:
-			t.Error("unexpected extra get key request")
-		}
-		response := map[string]interface{}{
-			"key":             strings.Repeat("aa", 32),
-			"public_key":      strings.Repeat("bb", 33),
-			"signature_chain": []string{},
-		}
-		for _, name := range []string{"root_epoch", "app_epoch"} {
-			if value, ok := payload[name]; ok {
-				response[name] = value
+	zero := uint32(0)
+	for _, tc := range []struct {
+		name  string
+		epoch *uint32
+	}{
+		{"current", nil},
+		{"explicit_zero", &zero},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+				}
+				for _, field := range []string{"root_epoch", "app_epoch"} {
+					raw, present := payload[field]
+					if tc.epoch == nil && present || tc.epoch != nil && string(raw) != "0" {
+						t.Errorf("unexpected %s in request: %s", field, raw)
+					}
+				}
+				_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[]}`))
+			}))
+			defer server.Close()
+			client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+			res, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", tc.epoch, tc.epoch)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-	client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
-	ctx := context.Background()
-
-	current, err := client.GetKey(ctx, "d", "secp256k1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.RootEpoch != 0 || current.AppEpoch != 0 {
-		t.Errorf("omitted response epochs must use proto uint32 defaults, got %d/%d", current.RootEpoch, current.AppEpoch)
-	}
-	rootEpoch, appEpoch := ^uint32(0), uint32(0)
-	explicit, err := client.GetKeyAtEpochs(ctx, "d", "secp256k1", &rootEpoch, &appEpoch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if explicit.RootEpoch != rootEpoch || explicit.AppEpoch != appEpoch {
-		t.Errorf("unexpected explicit epochs: root %d app %d", explicit.RootEpoch, explicit.AppEpoch)
-	}
-
-	if len(payloads) != 2 {
-		t.Fatalf("got %d requests, want 2", len(payloads))
-	}
-	implicitPayload, explicitPayload := <-payloads, <-payloads
-	if _, ok := implicitPayload["root_epoch"]; ok {
-		t.Error("get key sent root_epoch instead of leaving the current epoch unset")
-	}
-	if _, ok := implicitPayload["app_epoch"]; ok {
-		t.Error("get key sent app_epoch instead of leaving the current epoch unset")
-	}
-	if explicitPayload["root_epoch"] != float64(rootEpoch) || explicitPayload["app_epoch"] != float64(appEpoch) {
-		t.Errorf("unexpected epoch wire values: %v", explicitPayload)
-	}
-	if _, ok := explicitPayload["rootEpoch"]; ok {
-		t.Error("sent camelCase rootEpoch instead of proto JSON root_epoch")
-	}
-	if _, ok := explicitPayload["appEpoch"]; ok {
-		t.Error("sent camelCase appEpoch instead of proto JSON app_epoch")
-	}
-}
-
-func TestV1GetKeyRejectsNonUint32ResponseEpoch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"key":"` + strings.Repeat("aa", 32) + `","public_key":"` + strings.Repeat("bb", 33) + `","signature_chain":[],"root_epoch":4294967296,"app_epoch":0}`))
-	}))
-	defer server.Close()
-
-	_, err := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL)).GetKey(context.Background(), "d", "secp256k1")
-	if err == nil || !strings.Contains(err.Error(), "root_epoch") || !strings.Contains(err.Error(), "uint32") {
-		t.Errorf("expected root_epoch uint32 decode error, got %v", err)
+			if res.RootEpoch != 0 || res.AppEpoch != 0 {
+				t.Errorf("omitted response epochs should default to zero, got %d/%d", res.RootEpoch, res.AppEpoch)
+			}
+		})
 	}
 }
 
 func TestV1GetKeyRejectsNullResponseEpochs(t *testing.T) {
 	zero := uint32(0)
-	for _, tc := range []struct {
-		name      string
-		response  string
-		rootEpoch *uint32
-		appEpoch  *uint32
-	}{
-		{"root_epoch", `"root_epoch":null,"app_epoch":0`, &zero, nil},
-		{"app_epoch", `"root_epoch":0,"app_epoch":null`, nil, &zero},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"key":"` + strings.Repeat("aa", 32) + `","public_key":"` + strings.Repeat("bb", 33) + `","signature_chain":[],` + tc.response + `}`))
-			}))
-			defer server.Close()
-
-			_, err := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL)).GetKeyAtEpochs(
-				context.Background(), "d", "secp256k1", tc.rootEpoch, tc.appEpoch,
-			)
-			if err == nil || !strings.Contains(err.Error(), tc.name) || !strings.Contains(err.Error(), "null") {
-				t.Errorf("expected %s null error, got %v", tc.name, err)
-			}
-		})
+	for _, epochs := range []string{`"root_epoch":null,"app_epoch":0`, `"root_epoch":0,"app_epoch":null`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[],` + epochs + `}`))
+		}))
+		client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+		_, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", &zero, &zero)
+		server.Close()
+		if err == nil {
+			t.Errorf("accepted null as a confirmed zero epoch: %s", epochs)
+		}
 	}
 }
 

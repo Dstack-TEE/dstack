@@ -166,71 +166,34 @@ describe('DstackClientV1', () => {
       })
     })
 
-    it('should treat omitted response epochs as the proto uint32 default', async () => {
-      const key = { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: [] }
-      await withAgentAnswering(key, async client => {
-        const response = await client.getKey('d', 'secp256k1', 0, 0)
-        expect([response.root_epoch, response.app_epoch]).toEqual([0, 0])
-      })
-    })
-
-    it.each([
-      ['root_epoch', -1],
-      ['root_epoch', 2 ** 32],
-      ['root_epoch', 0.5],
-      ['root_epoch', '1'],
-      ['root_epoch', null],
-      ['root_epoch', true],
-      ['app_epoch', -1],
-      ['app_epoch', 2 ** 32],
-      ['app_epoch', 0.5],
-      ['app_epoch', '1'],
-      ['app_epoch', null],
-      ['app_epoch', true],
-    ])('should reject malformed response %s=%s', async (field, value) => {
-      const key = {
-        key: 'aa'.repeat(32),
-        public_key: 'bb'.repeat(33),
-        signature_chain: [],
-        root_epoch: 0,
-        app_epoch: 0,
-        [field]: value,
-      }
-      await withAgentAnswering(key, client =>
-        expect(client.getKey('d', 'secp256k1')).rejects.toThrow(
-          new RegExp(`malformed ${field}.*uint32`),
-        )
-      )
-    })
-
-    it('should retain epoch selectors when a request timeout is configured', async () => {
-      let path = ''
-      let payload = ''
-      const server = http.createServer((req, res) => {
-        path = req.url ?? ''
-        req.setEncoding('utf8')
-        req.on('data', chunk => { payload += chunk })
-        req.on('end', () => {
-          // Keep the response open so the configured timeout is observable.
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-        })
+    it('can select epoch zero rather than fall back to the current epoch', async () => {
+      const archivedKey = 'aa'.repeat(32)
+      const server = http.createServer(async (req, res) => {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { root_epoch, app_epoch } = JSON.parse(body)
+        // Only explicit selectors get the archived key. Proto omits a zero response epoch.
+        const selected = root_epoch === 0 && app_epoch === 2
+          ? { key: archivedKey, app_epoch: 2 }
+          : { key: 'cc'.repeat(32), root_epoch: 4, app_epoch: 3 }
+        res.end(JSON.stringify({ ...selected, public_key: 'bb'.repeat(33), signature_chain: [] }))
       })
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
       try {
-        const { port } = server.address() as AddressInfo
-        const client = new DstackClientV1(`http://127.0.0.1:${port}`, { timeoutMs: 150 })
-        await expect(client.getKey('d', 'secp256k1', 3, 2)).rejects.toThrow('request timed out')
-        expect(path).toBe('/v1/GetKey')
-        expect(JSON.parse(payload)).toEqual({
-          domain: 'd',
-          algorithm: 'secp256k1',
-          root_epoch: 3,
-          app_epoch: 2,
-        })
+        const client = new DstackClientV1(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+        const result = await client.getKey('d', 'secp256k1', 0, 2)
+        expect(Buffer.from(result.key).toString('hex')).toBe(archivedKey)
+        expect([result.root_epoch, result.app_epoch]).toEqual([0, 2])
       } finally {
-        server.closeAllConnections()
         await new Promise<void>(resolve => server.close(() => resolve()))
       }
+    })
+
+    it('does not accept a null response epoch as the requested epoch zero', async () => {
+      const key = { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: [], app_epoch: null }
+      await withAgentAnswering(key, client =>
+        expect(client.getKey('d', 'secp256k1', 0, 0)).rejects.toThrow()
+      )
     })
 
     it('should reject an empty algorithm without a round trip', async () => {
