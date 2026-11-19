@@ -35,7 +35,7 @@ describe('tappd routes and transport', () => {
     try {
       const client = new TappdClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
       await client.info(); await client.version()
-      for (const call of [() => client.getKey(), () => client.getQuote('x'), () => client.getTlsKey(), () => client.attest('x'), () => client.sign('x', 'x'), () => client.verify('x', 'x', 'x', 'x'), () => client.emitEvent('x', 'x')]) {
+      for (const call of [() => client.getKey('d', '', 'secp256k1'), () => client.getQuote('x'), () => client.getTlsKey(), () => client.attest('x'), () => client.sign('x', 'x'), () => client.verify('x', 'x', 'x', 'x'), () => client.emitEvent('x', 'x')]) {
         await expect(call()).rejects.toThrow(/DstackClient.*dstack\.sock/)
       }
       expect(paths).toEqual(['/prpc/Tappd.Info', '/prpc/Tappd.Version'])
