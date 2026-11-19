@@ -244,7 +244,16 @@ async fn run_watchdog(port: u16) {
     let probe_url = format!("http://localhost:{port}/prpc/Worker.Version");
     // Built once: the loop runs every few seconds for the process's lifetime,
     // and a fresh client per tick leaks a connection pool each time.
-    let client = reqwest::Client::new();
+    // Idle connections are not pooled: the server drops a keep-alive
+    // connection after 15s without a request, which races the heartbeat and
+    // fails the probe with a connection reset.
+    let client = match reqwest::Client::builder().pool_max_idle_per_host(0).build() {
+        Ok(client) => client,
+        Err(err) => {
+            error!("failed to build health-check client: {err}");
+            return pending::<()>().await;
+        }
+    };
     loop {
         interval.tick().await;
 
