@@ -6,12 +6,14 @@ use anyhow::Result;
 use p384::ecdsa::{signature::DigestSigner, Signature as P384Signature, SigningKey};
 use p384::pkcs8::DecodePrivateKey;
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, CertifiedKey, DnType, IsCa, KeyPair,
-    KeyUsagePurpose,
+    BasicConstraints, Certificate, CertificateParams, CertifiedKey, CustomExtension, DnType, IsCa,
+    KeyPair, KeyUsagePurpose,
 };
 use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha384};
 use time::{Duration, OffsetDateTime};
+
+const CHIP_ID: [u8; 64] = [0x33; 64];
 
 pub struct SevSnpGenerator {
     root: Certificate,
@@ -49,6 +51,20 @@ impl SevSnpGenerator {
         let vcek_key = crate::p384_key(&seed, "sev-vcek")?;
         let mut params = base_params("Mock AMD VCEK")?;
         params.key_usages.push(KeyUsagePurpose::DigitalSignature);
+        // hwID, then blSPL/teeSPL/snpSPL/ucodeSPL matching the report's zero reported_tcb.
+        let hw_id = [&[0x04, 0x40][..], &CHIP_ID].concat();
+        params
+            .custom_extensions
+            .push(CustomExtension::from_oid_content(
+                &[1, 3, 6, 1, 4, 1, 3704, 1, 4],
+                hw_id,
+            ));
+        params.custom_extensions.extend([1, 2, 3, 8].map(|spl| {
+            CustomExtension::from_oid_content(
+                &[1, 3, 6, 1, 4, 1, 3704, 1, 3, spl],
+                vec![0x02, 0x01, 0x00],
+            )
+        }));
         let vcek = params.signed_by(&vcek_key, &ask, &ask_key)?;
         Ok(Self {
             root,
@@ -100,15 +116,20 @@ impl SevSnpGenerator {
         encoded[0x50..0x90].copy_from_slice(&report_data);
         encoded[0x90..0xc0].copy_from_slice(&measurement);
         encoded[0xc0..0xe0].copy_from_slice(&host_data);
-        encoded[0x1a0..0x1e0].fill(0x33);
-        let signing_key = SigningKey::from_pkcs8_pem(&self.vcek_key.serialize_pem())?;
-        let signature: P384Signature =
-            signing_key.sign_digest(Sha384::new_with_prefix(&encoded[..0x2a0]));
-        write_amd_signature(&mut encoded[0x2a0..], &signature);
+        encoded[0x1a0..0x1e0].copy_from_slice(&CHIP_ID);
+        self.sign(&mut encoded)?;
         Ok(SevSnpEvidence {
             report: encoded,
             cert_chain: vec![self.ask.pem().into_bytes(), self.vcek.pem().into_bytes()],
         })
+    }
+
+    fn sign(&self, report: &mut [u8]) -> Result<()> {
+        let signing_key = SigningKey::from_pkcs8_pem(&self.vcek_key.serialize_pem())?;
+        let signature: P384Signature =
+            signing_key.sign_digest(Sha384::new_with_prefix(&report[..0x2a0]));
+        write_amd_signature(&mut report[0x2a0..], &signature);
+        Ok(())
     }
 }
 
@@ -187,5 +208,16 @@ mod tests {
         assert!(verifier
             .verify(&evidence.report, &evidence.cert_chain, &[0x24; 64])
             .is_err());
+
+        // A validly signed report must still match the VCEK's chip and TCB.
+        for (offset, expected_err) in [(0x1a0, "hwID"), (0x180, "blSPL")] {
+            let mut forged = evidence.report.clone();
+            forged[offset] ^= 1;
+            generator.sign(&mut forged).unwrap();
+            let err = verifier
+                .verify(&forged, &evidence.cert_chain, &report_data)
+                .unwrap_err();
+            assert!(format!("{err:#}").contains(expected_err), "{err:#}");
+        }
     }
 }

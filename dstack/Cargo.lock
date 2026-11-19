@@ -7414,6 +7414,7 @@ dependencies = [
  "hex",
  "moka",
  "pem 3.0.6",
+ "rcgen 0.13.2",
  "reqwest",
  "rustls-pki-types",
  "rustls-webpki",

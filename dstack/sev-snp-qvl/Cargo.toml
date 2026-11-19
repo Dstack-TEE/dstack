@@ -23,4 +23,5 @@ rustls-webpki = { workspace = true, features = ["ring"] }
 pem.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 tokio = { workspace = true, features = ["full"] }
