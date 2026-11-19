@@ -358,6 +358,8 @@ mod tests {
         };
         let json = serde_json::to_string(&response).expect("serializes");
         assert!(json.contains(r#""signature_chain":["aabb","cc"]"#));
+        assert!(json.contains(r#""root_epoch":3"#));
+        assert!(json.contains(r#""app_epoch":2"#));
 
         let decoded: GetKeyResponse = serde_json::from_str(&json).expect("deserializes");
         assert_eq!(decoded.key, response.key);
@@ -370,6 +372,7 @@ mod tests {
         let json = r#"{"key":"01","public_key":"02","signature_chain":[]}"#;
         let decoded: GetKeyResponse = serde_json::from_str(json).expect("deserializes");
         assert!(decoded.signature_chain.is_empty());
+        assert_eq!((decoded.root_epoch, decoded.app_epoch), (0, 0));
 
         let reencoded = serde_json::to_string(&decoded).expect("serializes");
         assert!(reencoded.contains(r#""signature_chain":[]"#));
@@ -381,6 +384,45 @@ mod tests {
         let err = serde_json::from_str::<GetKeyResponse>(json)
             .expect_err("a non-hex element fails the whole field");
         assert!(err.to_string().contains("Invalid character"), "{err}");
+    }
+
+    #[test]
+    fn get_key_epochs_are_uint32_on_the_wire() {
+        let response = |root_epoch: serde_json::Value, app_epoch: serde_json::Value| {
+            serde_json::json!({
+                "key": "01",
+                "public_key": "02",
+                "signature_chain": [],
+                "root_epoch": root_epoch,
+                "app_epoch": app_epoch,
+            })
+        };
+        let max: GetKeyResponse = serde_json::from_value(response(
+            serde_json::json!(u32::MAX),
+            serde_json::json!(u32::MAX),
+        ))
+        .expect("uint32 maximum deserializes");
+        assert_eq!((max.root_epoch, max.app_epoch), (u32::MAX, u32::MAX));
+
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("1"),
+            serde_json::json!(true),
+            serde_json::json!(4_294_967_296u64),
+        ] {
+            assert!(serde_json::from_value::<GetKeyResponse>(response(
+                value.clone(),
+                serde_json::json!(0),
+            ))
+            .is_err());
+            assert!(serde_json::from_value::<GetKeyResponse>(response(
+                serde_json::json!(0),
+                value,
+            ))
+            .is_err());
+        }
     }
 
     #[test]
