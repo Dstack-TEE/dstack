@@ -450,21 +450,23 @@ async fn an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed
 
 #[test]
 fn configured_tcb_requirements_judge_the_real_report() {
-    use dstack_attest::attestation::SevSnpTcbRequirement;
+    use dstack_attest::attestation::sev_snp_tcb_requirements_from_json;
 
     let reported = verified_fixture_report().tcb_info.reported;
     // The fixture's CPU is Milan.
-    let requirement = |cpuid: &str, microcode: u8| SevSnpTcbRequirement {
-        cpuid: cpuid.into(),
-        bootloader: reported.bootloader,
-        tee: reported.tee,
-        snp: reported.snp,
-        microcode,
-        fmc: None,
+    let requirement = |cpuid: &str, microcode: u8| {
+        serde_json::json!([{
+            "cpuid": cpuid,
+            "bootloader": reported.bootloader,
+            "tee": reported.tee,
+            "snp": reported.snp,
+            "microcode": microcode,
+        }])
+        .to_string()
     };
-    let verify = |requirements: &[SevSnpTcbRequirement]| {
+    let verify = |requirements: &str| {
         sev_snp_qvl::QuoteVerifier::new_prod()
-            .with_tcb_requirements(requirements.iter().map(|r| r.try_into().unwrap()).collect())
+            .with_tcb_requirements(sev_snp_tcb_requirements_from_json(requirements).unwrap())
             .verify(
                 &fixture_report(),
                 &[SEV_ASK_PEM.to_vec(), SEV_VCEK_PEM.to_vec()],
@@ -474,15 +476,15 @@ fn configured_tcb_requirements_judge_the_real_report() {
             .tcb_status
     };
 
-    assert_eq!(verify(&[]), "");
+    assert_eq!(verify("[]"), "");
     assert_eq!(
-        verify(&[requirement("00a00f11", reported.microcode)]),
+        verify(&requirement("00a00f11", reported.microcode)),
         "UpToDate"
     );
     assert_eq!(
-        verify(&[requirement("00a00f11", reported.microcode + 1)]),
+        verify(&requirement("00a00f11", reported.microcode + 1)),
         "OutOfDate"
     );
     // Milan-X's minimum says nothing about Milan.
-    assert_eq!(verify(&[requirement("00a00f12", reported.microcode)]), "");
+    assert_eq!(verify(&requirement("00a00f12", reported.microcode)), "");
 }

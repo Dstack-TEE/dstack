@@ -154,7 +154,7 @@ mod tests {
             urls: Default::default(),
             root_ca,
             allowed_collateral_hosts: None,
-            sev_snp_tcb_requirements: Vec::new(),
+            sev_snp_tcb_requirements_file: None,
         })
     }
 
