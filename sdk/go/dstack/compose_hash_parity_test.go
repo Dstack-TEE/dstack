@@ -40,6 +40,27 @@ func TestZeroComposePointers(t *testing.T) {
 	}
 }
 
+func TestTypedComposeListsDistinguishNilFromEmpty(t *testing.T) {
+	compose := AppCompose{Runner: "bash", PortPolicy: &PortPolicy{}}
+	check := func(canonical string) {
+		t.Helper()
+		got, err := GetComposeHash(compose)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := sha256.Sum256([]byte(canonical)); got != hex.EncodeToString(want[:]) {
+			data, _ := json.Marshal(compose)
+			t.Errorf("got %s, want hash of %s; marshaled %s", got, canonical, data)
+		}
+	}
+	check(`{"port_policy":{},"runner":"bash"}`)
+	compose.Features = []string{}
+	compose.AllowedEnvs = []string{}
+	compose.VerityVolumes = []VerityVolume{}
+	compose.PortPolicy.Ports = []PortAttrs{}
+	check(`{"allowed_envs":[],"features":[],"port_policy":{"ports":[]},"runner":"bash","verity_volumes":[]}`)
+}
+
 // Every field the guest's AppCompose can carry, with a non-default value.
 //
 // A closed struct drops what it does not know, and what this package computes
@@ -183,6 +204,38 @@ func TestAnUnknownFieldStillReachesTheHash(t *testing.T) {
 	if want := hashOfRawJSON(t, withUnknown); got != want {
 		reencoded, _ := json.Marshal(compose)
 		t.Fatalf("an unknown field was dropped.\n got=%s\nwant=%s\nre-encoded: %s", got, want, reencoded)
+	}
+}
+
+func TestCaseVariantKeysRemainExtras(t *testing.T) {
+	// RUNNER and REGISTRY must neither create nor overwrite a typed field.
+	const raw = `{"RUNNER":"bash","docker_config":{"registry":"exact","REGISTRY":"other"}}`
+	var compose AppCompose
+	if err := json.Unmarshal([]byte(raw), &compose); err != nil {
+		t.Fatal(err)
+	}
+	if compose.Runner != "" || compose.Extra["RUNNER"] != "bash" {
+		t.Errorf("runner = %q, RUNNER = %v", compose.Runner, compose.Extra["RUNNER"])
+	}
+	docker := compose.DockerConfig
+	if docker.Registry != "exact" || docker.Extra["REGISTRY"] != "other" {
+		t.Errorf("registry = %q, REGISTRY = %v", docker.Registry, docker.Extra["REGISTRY"])
+	}
+	got, err := GetComposeHash(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := hashOfRawJSON(t, raw); got != want {
+		t.Errorf("got %s want %s", got, want)
+	}
+
+	// An unknown key need not have the type of its lowercase counterpart.
+	if err := json.Unmarshal([]byte(`{"requirements":{"gpu_policy":{"ATTEST_GPU":"future"}}}`), &compose); err != nil {
+		t.Fatal(err)
+	}
+	gpu := compose.Requirements.GpuPolicy
+	if gpu.AttestGpu != nil || gpu.Extra["ATTEST_GPU"] != "future" {
+		t.Errorf("attest_gpu = %v, ATTEST_GPU = %v", gpu.AttestGpu, gpu.Extra["ATTEST_GPU"])
 	}
 }
 

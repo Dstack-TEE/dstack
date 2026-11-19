@@ -122,6 +122,7 @@ class AppCompose:
 
     def __init__(
         self,
+        /,
         runner: str,
         manifest_version: Optional[Union[int, str]] = None,
         name: Optional[str] = None,
@@ -192,13 +193,18 @@ class AppCompose:
         self.pre_launch_script = pre_launch_script
         self._explicit_nulls: set[str] = set()
 
-        # Add any additional fields
+        # Keep public extras writable as attributes, but never let a manifest
+        # field replace a method or become part of the object's private state.
+        self._reserved_fields: Dict[str, Any] = {}
         for key, value in kwargs.items():
-            setattr(self, key, value)
+            if key.startswith("_") or hasattr(type(self), key):
+                self._reserved_fields[key] = value
+            else:
+                setattr(self, key, value)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
-        result: Dict[str, Any] = {}
+        result = dict(self._reserved_fields)
 
         # Add all attributes that are not None
         for attr_name in dir(self):

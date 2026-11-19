@@ -539,6 +539,26 @@ def test_dict_and_typed_requirements_match():
     assert get_compose_hash(manifest) == get_compose_hash(AppCompose(**manifest))
 
 
+@pytest.mark.parametrize("normalize", [False, True])
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("_meta", {"release": 2}),
+        ("_explicit_nulls", []),
+        ("__dict__", "metadata"),
+        ("to_dict", None),
+        ("self", 1),
+    ],
+)
+def test_python_attribute_names_hash_as_manifest_fields(key, value, normalize):
+    manifest = {"runner": "bash", key: value}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    expected = hashlib.sha256(canonical.encode()).hexdigest()
+
+    assert get_compose_hash(manifest, normalize=normalize) == expected
+    assert get_compose_hash(AppCompose(**manifest), normalize=normalize) == expected
+
+
 def test_hashing_a_dict_does_not_consume_it():
     """Hashing is a question, not a transaction.
 

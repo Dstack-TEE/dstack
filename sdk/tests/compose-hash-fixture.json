@@ -2,6 +2,53 @@
   "description": "Canonical SDK compose hashes. The per-case normalize flag defaults to false. Explicit null is kept for Option fields without skip_serializing_if and omitted for Option fields with it; non-Option nulls pass through, false is omitted for is_false fields and otherwise kept.",
   "cases": [
     {
+      "name": "server_valid_compact_manifest",
+      "app_compose": {
+        "allowed_envs": [],
+        "docker_compose_file": "services:\n  web:\n    image: nginx\n",
+        "key_provider": "none",
+        "key_provider_id": "",
+        "manifest_version": 2,
+        "name": "example",
+        "runner": "docker-compose"
+      },
+      "sha256": "57e019ac8ed2e7c1d1f2b1cf7f22e4d1b48222e9426007e9d6da42e424c71a33"
+    },
+    {
+      "name": "unknown_object_keys_in_lexical_order",
+      "app_compose": {
+        "runner": "docker-compose",
+        "name": "example",
+        "manifest_version": 2,
+        "future": {
+          "2": "two",
+          "constructor": { "z": 1, "a": 2 },
+          "10": "ten"
+        }
+      },
+      "sha256": "e040023034db42c6456e2ff179811990046535bc8f4b069925c3f0b979c68560"
+    },
+    {
+      "name": "unknown_underscore_field",
+      "app_compose": {
+        "runner": "docker-compose",
+        "name": "example",
+        "manifest_version": 2,
+        "_meta": "release"
+      },
+      "sha256": "6fde6231022099bc3513852ee96bca8788b73e32c2946b3b5ab76b8077c1136b"
+    },
+    {
+      "name": "unknown_case_variant_field",
+      "app_compose": {
+        "runner": "docker-compose",
+        "name": "example",
+        "manifest_version": 2,
+        "Public_logs": true
+      },
+      "sha256": "8f6d612ec1cf44f9bbe2398db6d298a08a84444dd8149e7361fa1a46c122fd21"
+    },
+    {
       "name": "docker_config_null",
       "app_compose": {
         "runner": "docker-compose",

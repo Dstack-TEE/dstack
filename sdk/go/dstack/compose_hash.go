@@ -96,7 +96,7 @@ type PortAttrs struct {
 
 // PortPolicy is the per-port policy consumed by the gateway.
 type PortPolicy struct {
-	Ports        []PortAttrs            `json:"ports,omitempty"`
+	Ports        []PortAttrs            `json:"ports,omitzero"`
 	RestrictMode bool                   `json:"restrict_mode,omitempty"`
 	Extra        map[string]interface{} `json:"-"`
 }
@@ -187,7 +187,7 @@ type AppCompose struct {
 	runnerPresent           bool
 	ManifestVersion         interface{}     `json:"manifest_version,omitempty"`
 	Name                    string          `json:"name,omitempty"`
-	Features                []string        `json:"features,omitempty"` // Deprecated
+	Features                []string        `json:"features,omitzero"` // Deprecated
 	Runner                  string          `json:"runner"`
 	Snapshotter             string          `json:"snapshotter,omitempty"`
 	DockerComposeFile       string          `json:"docker_compose_file,omitempty"`
@@ -201,7 +201,7 @@ type AppCompose struct {
 	LocalKeyProviderEnabled *bool           `json:"local_key_provider_enabled,omitempty"`
 	KeyProvider             KeyProviderKind `json:"key_provider,omitempty"`
 	KeyProviderID           string          `json:"key_provider_id,omitempty"` // hex string
-	AllowedEnvs             []string        `json:"allowed_envs,omitempty"`
+	AllowedEnvs             []string        `json:"allowed_envs,omitzero"`
 	NoInstanceID            *bool           `json:"no_instance_id,omitempty"`
 	SecureTime              *bool           `json:"secure_time,omitempty"`
 	Requirements            *Requirements   `json:"requirements,omitempty"`
@@ -212,7 +212,7 @@ type AppCompose struct {
 	SwapSize        *SwapSize      `json:"swap_size,omitempty"`
 	EventLogVersion *uint32        `json:"event_log_version,omitempty"`
 	PortPolicy      *PortPolicy    `json:"port_policy,omitempty"`
-	VerityVolumes   []VerityVolume `json:"verity_volumes,omitempty"`
+	VerityVolumes   []VerityVolume `json:"verity_volumes,omitzero"`
 	BashScript      string         `json:"bash_script,omitempty"`       // Legacy
 	PreLaunchScript string         `json:"pre_launch_script,omitempty"` // Legacy
 
@@ -395,27 +395,41 @@ func marshalWithExtra(declared interface{}, extra map[string]interface{}) ([]byt
 
 // unmarshalWithExtra fills `declared` and collects everything it did not claim.
 func unmarshalWithExtra(data []byte, declared interface{}, known map[string]struct{}) (map[string]interface{}, error) {
-	if err := json.Unmarshal(data, declared); err != nil {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
 		return nil, err
 	}
-	var all map[string]interface{}
-	if err := json.Unmarshal(data, &all); err != nil {
+	// encoding/json also matches struct tags case-insensitively. Only exact
+	// wire names belong to the typed object; everything else is an Extra.
+	typed := make(map[string]json.RawMessage)
+	for key, raw := range all {
+		if _, ok := known[key]; ok {
+			typed[key] = raw
+		}
+	}
+	filtered, err := json.Marshal(typed)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(filtered, declared); err != nil {
 		return nil, err
 	}
 	encoded, err := json.Marshal(declared)
 	if err != nil {
 		return nil, err
 	}
-	var emitted map[string]interface{}
+	var emitted map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &emitted); err != nil {
 		return nil, err
 	}
 	var extra map[string]interface{}
-	for key, value := range all {
-		if _, ok := known[key]; ok {
-			if _, present := emitted[key]; present && value != nil {
-				continue
-			}
+	for key, raw := range all {
+		if _, present := emitted[key]; present && string(raw) != "null" {
+			continue
+		}
+		var value interface{}
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, err
 		}
 		if extra == nil {
 			extra = map[string]interface{}{}

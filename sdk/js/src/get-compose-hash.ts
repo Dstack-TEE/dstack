@@ -11,30 +11,6 @@ interface SortableObject {
 }
 interface SortableArray extends Array<SortableValue> {}
 
-/**
- * Recursively sorts object keys lexicographically.
- * This is crucial for deterministic JSON.stringify in JavaScript.
- * @param obj The object to sort.
- * @returns A new object with sorted keys, or the original value if not an object.
- */
-function sortObject(obj: SortableValue): SortableValue {
-  if (obj === undefined || obj === null) {
-    return obj;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(sortObject);
-  } else if (obj && typeof obj === "object" && obj.constructor === Object) {
-    return Object.keys(obj)
-      .sort()
-      .reduce((result: SortableObject, key) => {
-        const value = (obj as SortableObject)[key];
-        result[key] = sortObject(value);
-        return result;
-      }, {});
-  }
-  return obj;
-}
-
 export type KeyProviderKind = "none" | "kms" | "local" | "tpm" | "sev-snp";
 export type RequirementPlatform =
   | "dstack-tdx"
@@ -139,22 +115,19 @@ function preprocessAppCompose(dic: AppCompose): AppCompose {
   return obj;
 }
 
-/**
- * Deterministic JSON serialization following cross-language standards.
- * - Recursively sorts object keys lexicographically
- * - Compact output (no spaces)
- * - Handles special values (NaN, Infinity) by converting them to null
- * - UTF-8 encoding (default in JavaScript)
- */
-function toDeterministicJson(dic: AppCompose): string {
-  const ordered = sortObject(dic);
-  return JSON.stringify(ordered, (key, value) => {
-    // Convert NaN and Infinity to null for deterministic output
-    if (typeof value === 'number' && (isNaN(value) || !isFinite(value))) {
-      return null;
-    }
-    return value;
-  }); // Omit the 'space' argument for compact output
+// Emit entries directly: JSON.stringify on a sorted object would still move
+// integer-like keys to the front in numeric order ("2" before "10").
+function toDeterministicJson(value: SortableValue): string {
+  if (Array.isArray(value)) {
+    return '[' + Array.from(value, toDeterministicJson).join(',') + ']';
+  }
+  if (value !== null && typeof value === 'object') {
+    const fields = Object.keys(value).sort()
+      .filter(key => value[key] !== undefined)
+      .map(key => JSON.stringify(key) + ':' + toDeterministicJson(value[key]));
+    return '{' + fields.join(',') + '}';
+  }
+  return JSON.stringify(value ?? null);
 }
 
 function serializeFields(appCompose: AppCompose): AppCompose {
