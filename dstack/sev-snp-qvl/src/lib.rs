@@ -615,7 +615,7 @@ fn verify_amd_snp_attestation_with_cert_chain(
     (&vcek, &report).verify().map_err(|err| {
         anyhow::anyhow!("amd sev-snp report signature verification failed: {err:?}")
     })?;
-    verify_vcek_binds_report(&vcek_bytes, &report, product)?;
+    verify_vcek_binds_report(&vcek, &report, product)?;
     validate_amd_snp_report_policy(&report)?;
 
     let parsed = parsed_amd_snp_report_from_report(&report)?;
@@ -639,14 +639,17 @@ fn verify_amd_snp_attestation_with_cert_chain(
 /// one chip or an old TCB could sign a report claiming another chip or a newer
 /// TCB.
 fn verify_vcek_binds_report(
-    vcek: &CertBytes,
+    vcek: &Certificate,
     report: &AttestationReport,
     product: AmdSnpProduct,
 ) -> Result<()> {
     use x509_parser::der_parser::der::{parse_der_integer, parse_der_octetstring};
     use x509_parser::prelude::{FromDer, X509Certificate};
 
-    let vcek_der = certificate_der(vcek)?;
+    // Read the extensions from the certificate whose signature was verified.
+    let vcek_der = vcek
+        .to_der()
+        .map_err(|err| anyhow!("failed to encode VCEK: {err}"))?;
     let (_, vcek) = X509Certificate::from_der(&vcek_der).context("failed to parse VCEK X.509")?;
     let extension = |oid: &str| -> Result<&[u8]> {
         let mut values = vcek
@@ -660,27 +663,32 @@ fn verify_vcek_binds_report(
             _ => bail!("VCEK has duplicate extension {oid}"),
         }
     };
-    let spl = |oid: &str| -> Result<u8> {
-        let (rest, value) =
-            parse_der_integer(extension(oid)?).context("invalid VCEK SPL extension")?;
-        anyhow::ensure!(rest.is_empty(), "trailing data in VCEK SPL extension");
-        Ok(u8::try_from(value.as_u32()?)?)
+    let spl = |oid: &str, name: &str| -> Result<u8> {
+        let parsed = parse_der_integer(extension(oid)?)
+            .ok()
+            .filter(|(rest, _)| rest.is_empty())
+            .and_then(|(_, value)| u8::try_from(value.as_u32().ok()?).ok());
+        parsed.with_context(|| format!("invalid VCEK {name} extension"))
     };
 
-    // Turin VCEKs carry only the first 8 bytes of CHIP_ID, as in the KDS URL.
-    let hw_id_len = match product {
-        AmdSnpProduct::Turin => 8,
-        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => 64,
+    if report.chip_id.0 == [0; 64] {
+        bail!("amd sev-snp report masks CHIP_ID, so it cannot be bound to its VCEK");
+    }
+    // Turin VCEKs may carry only the first 8 bytes of CHIP_ID, as in the KDS
+    // URL. Older VCEKs store the raw hwID; newer ones wrap it in a DER OCTET
+    // STRING.
+    let hw_id_lens: &[usize] = match product {
+        AmdSnpProduct::Turin => &[8, 64],
+        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => &[64],
     };
-    // Older VCEKs store the raw hwID; newer ones wrap it in a DER OCTET STRING.
     let hw_id = match extension("1.3.6.1.4.1.3704.1.4")? {
-        raw if raw.len() == hw_id_len => raw,
+        raw if hw_id_lens.contains(&raw.len()) => raw,
         der => match parse_der_octetstring(der) {
             Ok(([], value)) => value.as_slice()?,
             _ => bail!("invalid VCEK hwID extension"),
         },
     };
-    if report.chip_id.get(..hw_id_len) != Some(hw_id) {
+    if !hw_id_lens.contains(&hw_id.len()) || report.chip_id.0[..hw_id.len()] != *hw_id {
         bail!("VCEK hwID does not match the report chip_id");
     }
 
@@ -698,7 +706,7 @@ fn verify_vcek_binds_report(
         expected.push(("1.3.6.1.4.1.3704.1.3.9", "fmcSPL", fmc));
     }
     for (oid, name, reported) in expected {
-        let certified = spl(oid)?;
+        let certified = spl(oid, name)?;
         if certified != reported {
             bail!("VCEK {name} {certified} does not match the report reported_tcb {reported}");
         }
@@ -1092,6 +1100,119 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], &[u8])>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod vcek_binding {
+        use super::*;
+        use rcgen::{CertificateParams, CustomExtension, KeyPair, PKCS_ECDSA_P384_SHA384};
+
+        const CHIP_ID: [u8; 64] = [0xab; 64];
+
+        /// A DER INTEGER, as AMD encodes SPLs.
+        fn spl(value: u8) -> Vec<u8> {
+            match value {
+                0..0x80 => vec![0x02, 0x01, value],
+                _ => vec![0x02, 0x02, 0x00, value],
+            }
+        }
+
+        /// A VCEK with these (OID suffix, value) extensions under 1.3.6.1.4.1.3704.1.
+        fn vcek(extensions: &[(&[u64], Vec<u8>)]) -> Certificate {
+            let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+            for (suffix, value) in extensions {
+                let oid = [&[1, 3, 6, 1, 4, 1, 3704, 1][..], suffix].concat();
+                params
+                    .custom_extensions
+                    .push(CustomExtension::from_oid_content(&oid, value.clone()));
+            }
+            let key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+            Certificate::from_der(params.self_signed(&key).unwrap().der()).unwrap()
+        }
+
+        fn turin_vcek(hw_id: Vec<u8>, fmc: Option<u8>) -> Certificate {
+            let mut extensions: Vec<(&[u64], Vec<u8>)> = vec![
+                (&[4], hw_id),
+                (&[3, 1], spl(1)),
+                (&[3, 2], spl(2)),
+                (&[3, 3], spl(3)),
+                (&[3, 8], spl(200)),
+            ];
+            extensions.extend(fmc.map(|fmc| (&[3, 9][..], spl(fmc))));
+            vcek(&extensions)
+        }
+
+        fn turin_report() -> AttestationReport {
+            let mut report = AttestationReport {
+                reported_tcb: TcbVersion {
+                    fmc: Some(5),
+                    bootloader: 1,
+                    tee: 2,
+                    snp: 3,
+                    microcode: 200,
+                },
+                ..Default::default()
+            };
+            report.chip_id.0 = CHIP_ID;
+            report
+        }
+
+        fn check(vcek: &Certificate, report: &AttestationReport) -> String {
+            match verify_vcek_binds_report(vcek, report, AmdSnpProduct::Turin) {
+                Ok(()) => String::new(),
+                Err(err) => format!("{err:#}"),
+            }
+        }
+
+        #[test]
+        fn turin_accepts_an_8_or_64_byte_hw_id_in_either_encoding() {
+            let report = turin_report();
+            for hw_id in [
+                CHIP_ID[..8].to_vec(),
+                [&[0x04, 0x08][..], &CHIP_ID[..8]].concat(),
+                CHIP_ID.to_vec(),
+                [&[0x04, 0x40][..], &CHIP_ID].concat(),
+            ] {
+                assert_eq!(check(&turin_vcek(hw_id, Some(5)), &report), "");
+            }
+        }
+
+        #[test]
+        fn turin_rejects_a_mismatched_or_incomplete_vcek() {
+            let report = turin_report();
+            let other_chip = [0xcd; 8].to_vec();
+            for (vcek, expected) in [
+                (turin_vcek(other_chip, Some(5)), "hwID does not match"),
+                (
+                    turin_vcek(CHIP_ID[..4].to_vec(), Some(5)),
+                    "invalid VCEK hwID",
+                ),
+                (
+                    turin_vcek(CHIP_ID[..8].to_vec(), Some(6)),
+                    "fmcSPL 6 does not match",
+                ),
+                (
+                    turin_vcek(CHIP_ID[..8].to_vec(), None),
+                    "missing extension 1.3.6.1.4.1.3704.1.3.9",
+                ),
+                (vcek(&[(&[4], CHIP_ID[..8].to_vec())]), "missing extension"),
+            ] {
+                let err = check(&vcek, &report);
+                assert!(err.contains(expected), "{err}");
+            }
+
+            let mut masked = report;
+            masked.chip_id.0 = [0; 64];
+            assert!(check(&turin_vcek(vec![0; 8], Some(5)), &masked).contains("masks CHIP_ID"));
+            let no_fmc = AttestationReport {
+                reported_tcb: TcbVersion {
+                    fmc: None,
+                    ..report.reported_tcb
+                },
+                ..report
+            };
+            let err = check(&turin_vcek(CHIP_ID[..8].to_vec(), Some(5)), &no_fmc);
+            assert!(err.contains("missing reported FMC"), "{err}");
+        }
+    }
 
     fn tcb(bootloader: u8, tee: u8, snp: u8, microcode: u8) -> AmdSnpTcbVersion {
         AmdSnpTcbVersion {
