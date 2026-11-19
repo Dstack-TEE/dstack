@@ -464,7 +464,7 @@ fn configured_tcb_requirements_judge_the_real_report() {
     };
     let verify = |requirements: &[SevSnpTcbRequirement]| {
         sev_snp_qvl::QuoteVerifier::new_prod()
-            .with_tcb_requirements(requirements.iter().map(Into::into).collect())
+            .with_tcb_requirements(requirements.iter().map(|r| r.try_into().unwrap()).collect())
             .verify(
                 &fixture_report(),
                 &[SEV_ASK_PEM.to_vec(), SEV_VCEK_PEM.to_vec()],

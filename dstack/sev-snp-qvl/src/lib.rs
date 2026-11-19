@@ -294,7 +294,7 @@ impl From<TcbVersion> for AmdSnpTcbVersion {
 
 impl AmdSnpTcbVersion {
     /// Whether every SVN is at least the one in `min`.
-    pub fn meets(&self, min: &AmdSnpTcbVersion) -> bool {
+    fn meets(&self, min: &AmdSnpTcbVersion) -> bool {
         self.bootloader >= min.bootloader
             && self.tee >= min.tee
             && self.snp >= min.snp
@@ -1306,7 +1306,10 @@ mod tests {
         let assess =
             |requirements: &[AmdSnpTcbRequirement]| info.assess(AmdSnpProduct::Milan, requirements);
         assert_eq!(assess(&[]), (String::new(), vec![]));
-        assert_eq!(assess(std::slice::from_ref(&other)), (String::new(), vec![]));
+        assert_eq!(
+            assess(std::slice::from_ref(&other)),
+            (String::new(), vec![])
+        );
         assert_eq!(assess(&[met.clone(), other]), ("UpToDate".into(), vec![]));
         assert_eq!(
             assess(&[met, unmet]),

@@ -131,14 +131,17 @@ Bergamo and Siena are handled through AMD's canonical Genoa KDS product path.
 
 AMD publishes no TCB status for SNP, so the verifier judges the report against
 the bulletins configured in `sev_snp_tcb_requirements` (`[core.attestation]` in
-`kms.toml`). Each one names an AMD security bulletin and the minimum TCB that
-fixes it on one product family. A bulletin whose minimum the reported,
+`kms.toml`, `[attestation]` in `dstack-verifier.toml`; keep the two identical).
+Each one names an AMD security bulletin and the minimum TCB that fixes it on one
+product family; Turin entries also set `fmc`. A bulletin whose minimum the reported,
 committed or launch TCB does not meet appears in `BootInfo.advisory_ids`. The
 reported TCB is the one the VCEK certifies, and the committed TCB bounds a
 firmware rollback. `BootInfo.tcb_status` is `UpToDate` when every listed
 bulletin is met, `OutOfDate` otherwise, and empty when none is listed for the
-product. The on-chain policy accepts only `UpToDate`, so list the bulletins
-before you deploy SEV-SNP.
+product. `DstackKms` accepts only `UpToDate` from a KMS instance, as does
+`DstackApp` with `requireTcbUpToDate`, so list the bulletins before you deploy
+SEV-SNP. No report field shows firmware that was downgraded and upgraded again
+while the guest ran, as long as the committed TCB stayed at the minimum.
 
 ## KMS key-release policy
 

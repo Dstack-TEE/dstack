@@ -810,8 +810,6 @@ impl CvmVerifier {
         // verify_sev_launch has checked that vm_config.os_image_hash commits to
         // the supplied sha256sum.txt and measurement.snp.cbor material.
         vm_config.os_image_hash = binding.os_image_hash;
-        details.tcb_status = Some(report.tcb_status.clone());
-        details.advisory_ids = report.advisory_ids.clone();
         Ok(())
     }
 

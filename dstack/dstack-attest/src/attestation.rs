@@ -80,7 +80,7 @@ pub struct SevSnpTcbRequirement {
     pub fmc: Option<u8>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SevSnpProduct {
     Milan,
@@ -88,9 +88,22 @@ pub enum SevSnpProduct {
     Turin,
 }
 
-impl From<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
-    fn from(value: &SevSnpTcbRequirement) -> Self {
-        Self {
+impl TryFrom<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &SevSnpTcbRequirement) -> Result<Self> {
+        anyhow::ensure!(
+            !value.advisory_id.trim().is_empty(),
+            "sev_snp_tcb_requirements entry has an empty advisory_id"
+        );
+        // Only Turin has an FMC SVN: a Turin entry without one would pass any
+        // FMC, and a Milan or Genoa entry with one would fail every report.
+        anyhow::ensure!(
+            matches!(value.product, SevSnpProduct::Turin) == value.fmc.is_some(),
+            "sev_snp_tcb_requirements {}: set fmc for turin, and only for turin",
+            value.advisory_id
+        );
+        Ok(Self {
             product: match value.product {
                 SevSnpProduct::Milan => sev_snp_qvl::AmdSnpProduct::Milan,
                 SevSnpProduct::Genoa => sev_snp_qvl::AmdSnpProduct::Genoa,
@@ -104,8 +117,25 @@ impl From<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
                 snp: value.snp,
                 microcode: value.microcode,
             },
-        }
+        })
     }
+}
+
+fn sev_snp_tcb_requirements(
+    requirements: &[SevSnpTcbRequirement],
+) -> Result<Vec<sev_snp_qvl::AmdSnpTcbRequirement>> {
+    let mut seen = std::collections::HashSet::new();
+    requirements
+        .iter()
+        .map(|requirement| {
+            anyhow::ensure!(
+                seen.insert((requirement.product, requirement.advisory_id.as_str())),
+                "sev_snp_tcb_requirements lists {} twice for one product",
+                requirement.advisory_id
+            );
+            requirement.try_into()
+        })
+        .collect()
 }
 
 pub struct AttestationVerifier {
@@ -202,13 +232,8 @@ impl AttestationVerifier {
             gcp_tpm,
             aws_nitro_enclave: nsm(aws_nitro_enclave.as_deref(), "AWS Nitro Enclave")?,
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
-            sev_snp: sev_snp.with_tcb_requirements(
-                config
-                    .sev_snp_tcb_requirements
-                    .iter()
-                    .map(Into::into)
-                    .collect(),
-            ),
+            sev_snp: sev_snp
+                .with_tcb_requirements(sev_snp_tcb_requirements(&config.sev_snp_tcb_requirements)?),
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
             allowed_collateral_hosts: config
                 .allowed_collateral_hosts
@@ -2744,6 +2769,49 @@ mod tests {
     fn production_attestation_verifier_loads_all_safe_defaults() {
         AttestationVerifier::load(&AttestationVerifierConfig::default())
             .expect("production roots and URLs must load");
+    }
+
+    #[test]
+    fn sev_snp_tcb_requirements_are_checked_during_load() {
+        let requirement = |product, advisory_id: &str, fmc| SevSnpTcbRequirement {
+            product,
+            advisory_id: advisory_id.into(),
+            bootloader: 1,
+            tee: 1,
+            snp: 1,
+            microcode: 1,
+            fmc,
+        };
+        let load = |requirements: Vec<SevSnpTcbRequirement>| {
+            AttestationVerifier::load(&AttestationVerifierConfig {
+                sev_snp_tcb_requirements: requirements,
+                ..Default::default()
+            })
+            .err()
+            .map(|err| err.to_string())
+        };
+        let milan = requirement(SevSnpProduct::Milan, "AMD-SB-1", None);
+        let turin = requirement(SevSnpProduct::Turin, "AMD-SB-1", Some(1));
+        assert_eq!(load(vec![milan.clone(), turin.clone()]), None);
+
+        for (requirements, expected) in [
+            (
+                vec![requirement(SevSnpProduct::Turin, "AMD-SB-2", None)],
+                "only for turin",
+            ),
+            (
+                vec![requirement(SevSnpProduct::Genoa, "AMD-SB-2", Some(1))],
+                "only for turin",
+            ),
+            (
+                vec![requirement(SevSnpProduct::Milan, " ", None)],
+                "empty advisory_id",
+            ),
+            (vec![milan.clone(), milan], "twice"),
+        ] {
+            let error = load(requirements).unwrap_or_default();
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
