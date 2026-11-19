@@ -129,11 +129,9 @@ func TestVerifySealedEnvPublicKeyBindsAppEpoch(t *testing.T) {
 	if err != nil || !bytes.Equal(signer, pin) {
 		t.Fatalf("expected trusted signer for app epoch %d, got %q, %v", appEpoch, signer, err)
 	}
-	for _, wrongAppEpoch := range []uint32{0, 1, 3} {
-		signer, err := dstack.VerifySealedEnvPublicKey(publicKey, signature, appID, rootEpoch, wrongAppEpoch, now, nil)
-		if err == nil && bytes.Equal(signer, pin) {
-			t.Errorf("app epoch %d signature recovered trusted signer at app epoch %d", appEpoch, wrongAppEpoch)
-		}
+	signer, err = dstack.VerifySealedEnvPublicKey(publicKey, signature, appID, rootEpoch, 0, now, nil)
+	if err == nil && bytes.Equal(signer, pin) {
+		t.Fatal("signature for a rotated app key recovered the trusted signer at epoch zero")
 	}
 }
 

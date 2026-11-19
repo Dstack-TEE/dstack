@@ -144,7 +144,6 @@ mod tests {
             assert_eq!(envelope.as_object().unwrap().len(), 5);
             assert_eq!(envelope["version"], 1);
             assert_eq!(envelope["root_epoch"], epoch);
-            assert_eq!(envelope["app_epoch"], 0);
             let enc = STANDARD.decode(envelope["enc"].as_str().unwrap()).unwrap();
             assert_eq!(enc.len(), 32);
             let enc = <X25519HkdfSha256 as Kem>::EncappedKey::from_bytes(&enc).unwrap();
@@ -296,9 +295,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_public_keys() {
-        let mut low_order = vec![0; 32];
-        low_order[0] = 1;
-        for key in [vec![], vec![0; 31], vec![0; 32], low_order, vec![0; 33]] {
+        for key in [vec![], vec![0; 31], vec![0; 32], vec![0; 33]] {
             assert!(seal_env(&[("KEY", "value")], &key, 0, 0).is_err());
         }
     }

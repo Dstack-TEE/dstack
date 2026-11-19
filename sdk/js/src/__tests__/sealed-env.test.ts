@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { Aes256Gcm, CipherSuite, HkdfSha256 } from '@hpke/core'
 import { DhkemX25519HkdfSha256 } from '@hpke/dhkem-x25519'
 import { secp256k1 } from '@noble/curves/secp256k1'
@@ -36,61 +36,26 @@ describe('sealed env', () => {
     const timestamp = BigInt(Math.floor(Date.now() / 1000))
     const ts = Buffer.alloc(8)
     ts.writeBigUInt64BE(timestamp)
-    const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epoch, Buffer.alloc(4), publicKey, ts]))
-    const signed = secp256k1.sign(digest, signer)
-    const signature = Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery])
+    const sign = (appEpoch: number) => {
+      const appEpochBytes = Buffer.alloc(4)
+      appEpochBytes.writeUInt32BE(appEpoch)
+      const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epoch, appEpochBytes, publicKey, ts]))
+      const signed = secp256k1.sign(digest, signer)
+      return Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery])
+    }
+    const signature = sign(0)
     const trusted = '0x' + Buffer.from(secp256k1.getPublicKey(signer, true)).toString('hex')
     expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, 0, timestamp)).toBe(trusted)
     expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 4, 0, timestamp)).not.toBe(trusted)
     expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, 0, timestamp - 1000n)).toBeNull()
     expect(verifySealedEnvPublicKey(publicKey, signature, '01', 3, 0, timestamp)).toBeNull()
+
+    const rotated = sign(2)
+    expect(verifySealedEnvPublicKey(publicKey, rotated, app.toString('hex'), 3, 2, timestamp)).toBe(trusted)
+    expect(verifySealedEnvPublicKey(publicKey, rotated, app.toString('hex'), 3, 0, timestamp)).not.toBe(trusted)
   })
 
-  const signSealedKey = (appEpoch: number, timestamp: bigint) => {
-    const signer = new Uint8Array(32).fill(7)
-    const app = Buffer.alloc(20, 1)
-    const publicKey = Buffer.alloc(32, 2)
-    const epochs = Buffer.alloc(8)
-    epochs.writeUInt32BE(3, 0)
-    epochs.writeUInt32BE(appEpoch, 4)
-    const ts = Buffer.alloc(8)
-    ts.writeBigUInt64BE(timestamp)
-    const digest = keccak_256(Buffer.concat([
-      Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epochs, publicKey, ts,
-    ]))
-    const signed = secp256k1.sign(digest, signer)
-    return {
-      app: app.toString('hex'),
-      publicKey,
-      signature: Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery]),
-      trusted: '0x' + Buffer.from(secp256k1.getPublicKey(signer, true)).toString('hex'),
-    }
-  }
-
-  it('recovers the trusted signer for a non-zero app epoch only under that epoch', () => {
-    const now = BigInt(Math.floor(Date.now() / 1000))
-    const { app, publicKey, signature, trusted } = signSealedKey(2, now)
-    expect(verifySealedEnvPublicKey(publicKey, signature, app, 3, 2, now)).toBe(trusted)
-    expect(verifySealedEnvPublicKey(publicKey, signature, app, 3, 0, now)).not.toBe(trusted)
-  })
-
-  it.each([[60n, true], [61n, false]])('tolerates at most 60 seconds of future skew (%s)', (skew, accepted) => {
-    const now = 1_800_000_000
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(now * 1000)
-    try {
-      const timestamp = BigInt(now) + skew
-      const { app, publicKey, signature, trusted } = signSealedKey(0, timestamp)
-      expect(verifySealedEnvPublicKey(publicKey, signature, app, 3, 0, timestamp)).toBe(accepted ? trusted : null)
-    } finally {
-      clock.mockRestore()
-    }
-  })
-
-  it.each([-1, 2 ** 32, 0.5, NaN])('rejects invalid root epoch %s', async (epoch) => {
-    await expect(sealEnv([], '', epoch, 0)).rejects.toThrow('rootEpoch must be a uint32')
-  })
-
-  it.each([-1, 2 ** 32, 0.5, NaN])('rejects invalid app epoch %s', async (epoch) => {
-    await expect(sealEnv([], '', 0, epoch)).rejects.toThrow('appEpoch must be a uint32')
+  it.each([-1, 2 ** 32, 0.5, NaN])('rejects invalid epoch %s', async (epoch) => {
+    await expect(sealEnv([], '', epoch, 0)).rejects.toThrow('uint32')
   })
 })

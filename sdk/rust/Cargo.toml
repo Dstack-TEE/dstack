@@ -38,8 +38,6 @@ edition = "2021"
 license = "MIT"
 description = "This crate provides a rust client for communicating with dstack"
 authors = ["Encifher <encifher@rizelabs.io>"]
-# This integration test consumes fixtures shared outside the published crate.
-exclude = ["tests/sealed_env_fixtures.rs"]
 
 [dependencies]
 base64.workspace = true
