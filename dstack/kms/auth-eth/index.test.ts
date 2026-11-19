@@ -883,6 +883,20 @@ describe('GET /app/:appId', () => {
   });
 });
 
+describe('GET /sevSnpTcbRequirements', () => {
+  it('serves the contract value, and fails closed when it cannot be read', async () => {
+    const url = 'http://localhost/sevSnpTcbRequirements';
+    mockReadContract.mockResolvedValueOnce('[]');
+    const response = await appFetch(new Request(url));
+    expect(await response.json()).toEqual({ requirements: '[]' });
+    expect(mockReadContract).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: 'sevSnpTcbRequirements', blockNumber: 98n }),
+    );
+    mockReadContract.mockRejectedValueOnce(new Error('execution reverted'));
+    expect((await appFetch(new Request(url))).status).toBe(503);
+  });
+});
+
 describe('POST /authorizeApp', () => {
   const appInfo = {
     teeVariant: 'dstack-amd-sev-snp', appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),

@@ -210,6 +210,7 @@ contract GetKmsSettings is BaseQueryScript {
         console.log("Gateway App ID:", kms.gatewayAppId());
         console.log("App Implementation:", kms.appImplementation());
         logTeeVariants(kms.allowAnyTeeVariant(), kms.allowedTeeVariants());
+        console.log("SEV-SNP TCB Requirements:", kms.sevSnpTcbRequirements());
 
         // Get KMS info
         (bytes memory k256Pubkey, bytes memory caPubkey, bytes memory quote, bytes memory eventlog) = kms.kmsInfo();

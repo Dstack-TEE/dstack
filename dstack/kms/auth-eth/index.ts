@@ -176,6 +176,7 @@ const DSTACK_KMS_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'address' }]
   },
+  { name: 'sevSnpTcbRequirements', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'string' }] },
   {
     name: 'rootEpochCount',
     type: 'function',
@@ -400,6 +401,13 @@ export class EthereumBackend {
     return epoch;
   }
 
+  async getSevSnpTcbRequirements(): Promise<string> {
+    return await this.client.readContract({
+      address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'sevSnpTcbRequirements',
+      blockNumber: await this.resolveBlock(),
+    });
+  }
+
   async getGatewayAppId(blockNumber?: bigint): Promise<string> {
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
@@ -522,6 +530,17 @@ app.get('/app/:appId', async (c) => {
   if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
   try {
     return c.json({ currentAppEpoch: await ethereum.getAppEpoch(appId) });
+  } catch {
+    return c.json({ error: 'authorization backend unavailable' }, 503);
+  }
+});
+
+// The JSON list the KMS judges an SEV-SNP TCB against; empty when governance
+// sets none. The KMS refuses SEV-SNP requests then, as it does while the
+// contract predates the list.
+app.get('/sevSnpTcbRequirements', async (c) => {
+  try {
+    return c.json({ requirements: await ethereum.getSevSnpTcbRequirements() });
   } catch {
     return c.json({ error: 'authorization backend unavailable' }, 503);
   }
