@@ -129,11 +129,19 @@ no quote-bound runtime measurement register.
 The verifier supports the AMD Milan, Genoa, and Turin KDS product families.
 Bergamo and Siena are handled through AMD's canonical Genoa KDS product path.
 
-`BootInfo.tcb_status` is `UpToDate` only when the current, reported, committed,
-and launch TCB versions agree; otherwise it is `OutOfDate`. Authorization
-policy should remain strict for non-up-to-date TCB values. The verifier
-currently reports an explicit empty advisory-ID list because the SNP report
-and VCEK evidence do not directly carry an advisory list.
+AMD publishes no TCB status for SNP, so the verifier judges the report against
+the bulletins configured in `sev_snp_tcb_requirements` (`[core.attestation]` in
+`kms.toml`, `[attestation]` in `dstack-verifier.toml`; keep the two identical).
+Each one names an AMD security bulletin and the minimum TCB that fixes it on one
+product family; Turin entries also set `fmc`. A bulletin whose minimum the reported,
+committed or launch TCB does not meet appears in `BootInfo.advisory_ids`. The
+reported TCB is the one the VCEK certifies, and the committed TCB bounds a
+firmware rollback. `BootInfo.tcb_status` is `UpToDate` when every listed
+bulletin is met, `OutOfDate` otherwise, and empty when none is listed for the
+product. `DstackKms` accepts only `UpToDate` from a KMS instance, as does
+`DstackApp` with `requireTcbUpToDate`, so list the bulletins before you deploy
+SEV-SNP. No report field shows firmware that was downgraded and upgraded again
+while the guest ran, as long as the committed TCB stayed at the minimum.
 
 ## KMS key-release policy
 
@@ -191,5 +199,7 @@ AMD signatures.
   availability. Do not disable certificate or signature verification.
 - **Attestation succeeds but key release fails:** check both the external auth
   response and `core.sev_snp_key_release`; either gate can deny the request.
-- **TCB is `OutOfDate`:** update platform firmware and re-evaluate the reported,
-  committed, current, and launch TCB versions before changing auth policy.
+- **TCB is `OutOfDate`:** `advisory_ids` names the bulletins the TCB misses.
+  Update the platform firmware before changing the auth policy.
+- **TCB status is empty:** no `sev_snp_tcb_requirements` entry is listed for the
+  report's product family.

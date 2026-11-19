@@ -43,12 +43,11 @@ pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<Stri
         DstackVerifiedReport::DstackGcpTdx { tdx_report, .. } => {
             (tdx_report.status.clone(), tdx_report.advisory_ids.clone())
         }
-        // SNP has no upstream status string; it is derived by comparing the
-        // report's TCB versions, so read it from `tcb_info` rather than a field.
-        DstackVerifiedReport::DstackAmdSevSnp(report) => (
-            report.tcb_info.tcb_status().to_string(),
-            report.advisory_ids.clone(),
-        ),
+        // SNP has no vendor status; the verifier judges it against its
+        // configured TCB requirements.
+        DstackVerifiedReport::DstackAmdSevSnp(report) => {
+            (report.tcb_status.clone(), report.advisory_ids.clone())
+        }
         // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
         // is normalized to "UpToDate" so the verifier's policy boot info matches
         // the KMS bootAuth payload and passes the shared "UpToDate" auth gate.
@@ -811,8 +810,6 @@ impl CvmVerifier {
         // verify_sev_launch has checked that vm_config.os_image_hash commits to
         // the supplied sha256sum.txt and measurement.snp.cbor material.
         vm_config.os_image_hash = binding.os_image_hash;
-        details.tcb_status = Some(report.tcb_info.tcb_status().to_string());
-        details.advisory_ids = report.advisory_ids.clone();
         Ok(())
     }
 
@@ -1187,13 +1184,14 @@ mod tests {
         }
     }
 
-    fn snp_report(tcb_info: AmdSnpTcbInfo, advisory_ids: &[&str]) -> VerifiedAmdSnpReport {
+    fn snp_report(tcb_status: &str, advisory_ids: &[&str]) -> VerifiedAmdSnpReport {
         VerifiedAmdSnpReport {
             measurement: [0; 48],
             report_data: [0; 64],
             host_data: [0; 32],
             chip_id: [0; 64],
-            tcb_info,
+            tcb_info: AmdSnpTcbInfo::default(),
+            tcb_status: tcb_status.into(),
             advisory_ids: advisory_ids.iter().map(|id| id.to_string()).collect(),
         }
     }
@@ -1253,13 +1251,6 @@ mod tests {
         let advisories = ["INTEL-SA-00001", "INTEL-SA-00002"];
         let expected_advisories: Vec<String> = advisories.iter().map(|id| id.to_string()).collect();
 
-        // SNP derives its status by comparing TCB versions rather than reading
-        // a field, so cover both the equal (UpToDate) and unequal (OutOfDate)
-        // shapes.
-        let snp_up_to_date = AmdSnpTcbInfo::default();
-        let mut snp_out_of_date = AmdSnpTcbInfo::default();
-        snp_out_of_date.current.microcode = 1;
-
         let rows: [(&str, VerifiedAttestation, &str, Vec<String>); 7] = [
             (
                 "tdx-up-to-date",
@@ -1316,27 +1307,27 @@ mod tests {
                 expected_advisories.clone(),
             ),
             (
-                "sev-snp-matching-tcb-versions-are-up-to-date",
+                "sev-snp-up-to-date",
                 verified_attestation(
                     AttestationQuote::DstackAmdSevSnp(SnpQuote {
                         report: Vec::new(),
                         cert_chain: Vec::new(),
                         mr_config: String::new(),
                     }),
-                    DstackVerifiedReport::DstackAmdSevSnp(snp_report(snp_up_to_date, &[])),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report("UpToDate", &[])),
                 ),
                 "UpToDate",
                 Vec::new(),
             ),
             (
-                "sev-snp-mismatched-tcb-versions-are-out-of-date",
+                "sev-snp-out-of-date-carries-advisories",
                 verified_attestation(
                     AttestationQuote::DstackAmdSevSnp(SnpQuote {
                         report: Vec::new(),
                         cert_chain: Vec::new(),
                         mr_config: String::new(),
                     }),
-                    DstackVerifiedReport::DstackAmdSevSnp(snp_report(snp_out_of_date, &advisories)),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report("OutOfDate", &advisories)),
                 ),
                 "OutOfDate",
                 expected_advisories.clone(),
