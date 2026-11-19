@@ -606,7 +606,8 @@ impl RpcHandler {
         self.ensure_self_allowed(Operation::KmsExportKeys)
             .await
             .context("KMS self authorization failed")?;
-        let info = build_boot_info_for_attestation(att, false, &request.vm_config)?;
+        let auth_api = &self.state.config.auth_api;
+        let info = auth_api.boot_info(att, false, &request.vm_config).await?;
         let result = async {
             self.ensure_kms_allowed(att, &info, &request.vm_config, &request.launch_ticket)
                 .await?;
@@ -737,7 +738,13 @@ impl RpcHandler {
         let boot_info = self
             .state
             .self_boot_info
-            .try_get_with((), local_kms_boot_info(&self.state.attestation_verifier))
+            .try_get_with(
+                (),
+                local_kms_boot_info(
+                    &self.state.config.auth_api,
+                    &self.state.attestation_verifier,
+                ),
+            )
             .await
             .map_err(|err| anyhow!("{err:#}"))
             .context("Failed to load cached self boot info")?;
@@ -894,7 +901,8 @@ impl KmsRpc for RpcHandler {
         self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
-        let boot_info = build_boot_info_for_attestation(att, false, &request.vm_config)?;
+        let auth_api = &self.state.config.auth_api;
+        let boot_info = auth_api.boot_info(att, false, &request.vm_config).await?;
         let result = async {
             let BootConfig {
                 boot_info,
@@ -1127,7 +1135,10 @@ impl KmsRpc for RpcHandler {
             .verify_with_ra_pubkey(&csr.pubkey, &self.state.attestation_verifier)
             .await
             .context("Quote verification failed")?;
-        let boot_info = build_boot_info_for_attestation(&attestation, true, &request.vm_config)?;
+        let auth_api = &self.state.config.auth_api;
+        let boot_info = auth_api
+            .boot_info(&attestation, true, &request.vm_config)
+            .await?;
         let result = async {
             let app_info = self
                 .ensure_app_attestation_allowed(
@@ -1289,13 +1300,16 @@ mod tests {
             config,
             report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
                 dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    cpuid: Some(dstack_attest::amd_sev_snp::AmdSnpCpuid::from_eax(
+                        0x00a0_0f11,
+                    )),
                     measurement,
                     report_data: [0x42; 64],
                     host_data: mr_config.to_snp_host_data(),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
-                    tcb_status: "UpToDate".into(),
-                    advisory_ids: Vec::new(),
+                    // A KMS configures no list, so its verifier judges nothing.
+                    tcb_status: String::new(),
                 },
             ),
         }
@@ -1751,6 +1765,63 @@ mod tests {
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
         let vm_config = snp_vm_config(&input, &mr_config);
         build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap()
+    }
+
+    #[rocket::async_test]
+    async fn sev_snp_tcb_is_judged_against_governances_requirements() {
+        use serde_json::json;
+        use upgrade_authority::tests::{serve_with_status, webhook};
+
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        // A Milan (`00a00f11`) whose TCB is all zeros.
+        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let vm_config = snp_vm_config(&input, &valid_snp_mr_config());
+        let published = |cpuid: &str, bootloader: u8| {
+            let requirements = json!([{
+                "cpuid": cpuid, "bootloader": bootloader, "tee": 0, "snp": 0, "microcode": 0,
+            }]);
+            let body = json!({ "requirements": requirements.to_string() });
+            (200, body.to_string())
+        };
+        let none = (200, json!({ "requirements": "" }).to_string());
+        let unparsable = (200, json!({ "requirements": "[{}]" }).to_string());
+        // Each case has its own backend: the list is cached per backend.
+        for (response, expected) in [
+            (published("00a00f11", 0), Ok("UpToDate")),
+            (published("00a00f11", 1), Ok("OutOfDate")),
+            // A report nothing can judge is refused, not called out of date.
+            (
+                published("00a00f12", 0),
+                Err("no minimum TCB is listed for CPUID 00a00f11"),
+            ),
+            (none, Err("none are published")),
+            ((404, String::new()), Err("returned 404")),
+            ((503, String::new()), Err("returned 503")),
+            (unparsable, Err("missing field")),
+        ] {
+            let (url, server) = serve_with_status(vec![response]);
+            let judged = webhook(url)
+                .boot_info(&attestation, false, &vm_config)
+                .await;
+            match (judged, expected) {
+                (Ok(info), Ok(status)) => assert_eq!(info.tcb_status, status),
+                (Err(err), Err(reason)) => {
+                    let err = format!("{err:#}");
+                    assert!(err.contains(reason), "{err}");
+                }
+                (judged, expected) => panic!("expected {expected:?}, got {judged:?}"),
+            }
+            assert_eq!(server.join().unwrap()[0].0, "/sevSnpTcbRequirements");
+        }
+
+        // The dev backend publishes none and leaves the verifier's status.
+        let dev = crate::config::Dev {
+            gateway_app_id: String::new(),
+        };
+        let dev = crate::config::AuthApi::Dev { dev };
+        let info = dev.boot_info(&attestation, false, &vm_config).await;
+        assert_eq!(info.unwrap().tcb_status, "");
     }
 
     #[test]
@@ -2229,6 +2300,8 @@ mod tests {
         assert_eq!(caller_check["operation"], "kms_import_keys");
         assert_eq!(caller_check["requestedRootEpoch"], 0);
         assert_eq!(caller_check["appId"], hex::encode([0x11; 20]));
+        // Judged against the list the auth API publishes: the verifier's own status is empty.
+        assert_eq!(caller_check["tcbStatus"], "UpToDate");
         assert!(metrics.contains(&key_releases("rpc", 1)), "{metrics}");
         assert!(metrics.contains(&key_releases("admin", 0)), "{metrics}");
 
@@ -2410,6 +2483,7 @@ mod tests {
             assert_eq!(self_check["operation"], "kms_serve");
             assert_eq!(route, "/authorizeApp");
             assert_eq!(check["operation"], "app_get_key");
+            assert_eq!(check["tcbStatus"], "UpToDate");
             assert_eq!(
                 check.get("requestedRootEpoch"),
                 requested_root.map(Into::into).as_ref()

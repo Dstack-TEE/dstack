@@ -35,15 +35,15 @@ insecure_allow_external_trust_anchors = false
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
 
 # AMD SEV-SNP has no vendor TCB status: a report is `UpToDate` only when its
-# reported, committed and launch TCBs meet every bulletin listed for its product.
-# A bulletin it misses is reported in `advisory_ids` and makes it `OutOfDate`.
-# With none listed for its product, the status is empty and the default auth
-# policy rejects it. Take the minimum TCBs from AMD's security bulletins, and
-# keep the KMS and dstack-verifier lists identical. Turin entries also set `fmc`.
+# reported, committed and launch TCBs meet the minimum listed for its CPU, and
+# `OutOfDate` when one does not. With none listed for its CPU, the status is
+# empty. Name the CPU by CPUID
+# Fn0000_0001 EAX, as AMD's security bulletins print it, and take the highest
+# SVNs they require of it. Keep the list identical to the one the KMS reads from
+# its auth API. Family 1Ah (Turin) entries also set `fmc`.
 # [[attestation.sev_snp_tcb_requirements]]
-# product = "milan"  # milan, genoa or turin
-# advisory_id = "AMD-SB-XXXX"
+# cpuid = "00a00f11"  # Milan; Milan-X is 00a00f12
 # bootloader = 0
 # tee = 0
-# snp = 0
-# microcode = 0
+# snp = 27
+# microcode = 222

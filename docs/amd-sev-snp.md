@@ -135,18 +135,50 @@ and current, and rejects a revoked ASK. This applies whether the evidence
 carries its certificates or the verifier fetches them, so a KDS mirror must
 serve the CRL too.
 
-AMD publishes no TCB status for SNP, so the verifier judges the report against
-the bulletins configured in `sev_snp_tcb_requirements` (`[core.attestation]` in
-`kms.toml`, `[attestation]` in `dstack-verifier.toml`; keep the two identical).
-Each one names an AMD security bulletin and the minimum TCB that fixes it on one
-product family; Turin entries also set `fmc`. A bulletin whose minimum the reported,
-committed or launch TCB does not meet appears in `BootInfo.advisory_ids`. The
-reported TCB is the one the VCEK certifies, and the committed TCB bounds a
-firmware rollback. `BootInfo.tcb_status` is `UpToDate` when every listed
-bulletin is met, `OutOfDate` otherwise, and empty when none is listed for the
-product. `DstackKms` accepts only `UpToDate` from a KMS instance, as does
-`DstackApp` with `requireTcbUpToDate`, so list the bulletins before you deploy
-SEV-SNP. No report field shows firmware that was downgraded and upgraded again
+AMD publishes no TCB status for SNP, so a report is judged against a list of
+minimum TCBs, one per CPU. An entry names the CPU by CPUID Fn0000_0001 EAX, as
+AMD's security bulletins print it, and gives the highest SVNs those bulletins
+require of it; family 1Ah (Turin) entries also set `fmc`. This one is Milan
+after AMD-SB-3020 and AMD-SB-3027:
+
+```json
+[{"cpuid":"00a00f11","bootloader":0,"tee":0,"snp":27,"microcode":222}]
+```
+
+A product family is too coarse a key: Milan (`00a00f11`) and Milan-X
+(`00a00f12`) differ only in stepping and carry different microcode SVNs, as do
+Genoa (`00a10f11`), Genoa-X (`00a10f12`) and Bergamo/Siena (`00aa0f02`). A
+bulletin that lists only a microcode patch level implies the SVN: it is the
+level's low byte, as the bulletins that state both show.
+
+`BootInfo.tcb_status` is `UpToDate` when the reported, committed and launch
+TCBs all meet the entry for the report's CPU, and `OutOfDate` when one does
+not. The reported TCB is the one the VCEK certifies, and the committed TCB
+bounds a firmware rollback. SEV-SNP reports no advisory IDs. `DstackKms`
+accepts only `UpToDate` from a KMS instance, as does `DstackApp` with
+`requireTcbUpToDate`.
+
+The KMS reads the list from its auth API when it authorizes an SEV-SNP
+attestation, reusing it for a second, and does not take one from `kms.toml`.
+Its verdict on its own attestation is reused for an hour, like the rest of its
+boot info. Publish the list where the auth API reads it:
+
+- With on-chain governance, publish it in `DstackKms` with
+  `setSevSnpTcbRequirements` (see [On-chain governance](./onchain-governance.md)).
+- With `dstack-auth`, list the entries under `sevSnpTcbRequirements` (see
+  [dstack-auth operations](./dstack-auth-operations.md)).
+
+The KMS refuses a request it cannot judge, with the reason, instead of calling
+the TCB out of date: when the auth API does not serve the list or serves none,
+when the list does not parse, when it has no entry for the report's CPU, and
+when the report predates the CPUID fields (version 2). Publish the list before
+you deploy SEV-SNP. The dev backend publishes none and judges nothing.
+
+`dstack-verifier` does not read the auth API: configure the same entries in
+`[[attestation.sev_snp_tcb_requirements]]` of `dstack-verifier.toml`. It reports
+an empty status for a CPU without an entry.
+
+No report field shows firmware that was downgraded and upgraded again
 while the guest ran, as long as the committed TCB stayed at the minimum.
 
 ## KMS key-release policy
@@ -206,7 +238,10 @@ AMD signatures.
   availability. Do not disable certificate or signature verification.
 - **Attestation succeeds but key release fails:** check both the external auth
   response and `core.sev_snp_key_release`; either gate can deny the request.
-- **TCB is `OutOfDate`:** `advisory_ids` names the bulletins the TCB misses.
+- **TCB is `OutOfDate`:** the TCB is below the minimum published for its CPU.
   Update the platform firmware before changing the auth policy.
-- **TCB status is empty:** no `sev_snp_tcb_requirements` entry is listed for the
-  report's product family.
+- **`no minimum TCB is listed for CPUID ...`:** publish an entry for that CPU.
+  The error names the `cpuid` the entry needs.
+- **`failed to read the SEV-SNP TCB requirements from the auth API`:** the auth
+  API predates the route, the contract predates `sevSnpTcbRequirements`, or no
+  list is published.
