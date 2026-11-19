@@ -233,6 +233,17 @@ function to_string(value: unknown, field: string): string {
   return require_string(value, field)
 }
 
+/** Decode an optional proto uint32 scalar, whose absent wire default is zero. */
+function to_uint32(value: unknown, field: string): number {
+  if (value === undefined) {
+    return 0
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new Error(`the agent returned a malformed ${field}: expected a uint32`)
+  }
+  return value
+}
+
 /**
  * Decode the bundles a v1 RPC returned.
  *
@@ -352,13 +363,22 @@ export class DstackClientV1 {
     if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff)) {
       throw new Error('rootEpoch must be a uint32')
     }
-    if (appEpoch !== undefined && (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff)) throw new Error('appEpoch must be a uint32')
+    if (appEpoch !== undefined && (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff)) {
+      throw new Error('appEpoch must be a uint32')
+    }
     const payload = JSON.stringify({ domain, algorithm, root_epoch: rootEpoch, app_epoch: appEpoch })
-    const result = await this.request<{ key: string, public_key: string, signature_chain: string[], root_epoch?: number, app_epoch?: number }>(
-      this.endpoint, '/v1/GetKey', payload)
+    const result = await this.request<{
+      key: string,
+      public_key: string,
+      signature_chain: string[],
+      root_epoch?: unknown,
+      app_epoch?: unknown,
+    }>(this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
-    if ((rootEpoch !== undefined && (result.root_epoch ?? 0) !== rootEpoch) ||
-        (appEpoch !== undefined && (result.app_epoch ?? 0) !== appEpoch)) {
+    const responseRootEpoch = to_uint32(result.root_epoch, 'root_epoch')
+    const responseAppEpoch = to_uint32(result.app_epoch, 'app_epoch')
+    if ((rootEpoch !== undefined && responseRootEpoch !== rootEpoch) ||
+        (appEpoch !== undefined && responseAppEpoch !== appEpoch)) {
       throw new Error('GetKey returned different epochs than requested')
     }
     return Object.freeze({
@@ -366,8 +386,8 @@ export class DstackClientV1 {
       public_key: from_hex(result.public_key, 'public_key'),
       signature_chain: to_list(result.signature_chain, 'signature_chain', 'error')
         .map((link, i) => from_hex(link, `signature_chain[${i}]`)),
-      root_epoch: result.root_epoch ?? 0,
-      app_epoch: result.app_epoch ?? 0,
+      root_epoch: responseRootEpoch,
+      app_epoch: responseAppEpoch,
       __name__: 'GetKeyResponseV1' as const,
     })
   }
