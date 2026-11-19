@@ -83,20 +83,24 @@ Options: `subject`, `altNames`, `usageRaTls`, `usageServerAuth` (default `true`)
 
 The key is freshly generated on every call and is not derived from the app identity — two identical requests return two unrelated keys. v0 called this `getTlsKey`, which named the by-product rather than the request. Use `getKey` for stable, attestable material.
 
-### `getKey(domain, algorithm)`
+### `getKey(domain, algorithm, rootEpoch?, appEpoch?)`
 
 Derive a deterministic application key.
 
 ```typescript
 const enc = await client.getKey('storage-encryption', 'secp256k1')
-const sig = await client.getKey('backup-signing', 'ed25519')   // unrelated key material
+const old = await client.getKey('storage-encryption', 'secp256k1', 2, 1)
 
 enc.key             // Uint8Array, 32 bytes
 enc.public_key      // Uint8Array — SEC1 compressed (33) for secp256k1, raw (32) for ed25519
 enc.signature_chain // Uint8Array[], exactly 2 links
+enc.root_epoch      // KMS root epoch actually used
+enc.app_epoch       // application key epoch actually used
 ```
 
-Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'` — there is no default and no `k256` alias, because v0's defaulting meant a typo silently produced a key of the wrong type under a name the caller thought meant something else.
+The first two arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'` — there is no default and no `k256` alias, because v0's defaulting meant a typo silently produced a key of the wrong type under a name the caller thought meant something else.
+
+`rootEpoch` and `appEpoch` are optional uint32 selectors. Omit either one to use the current epoch; pass `0` to select epoch zero explicitly. The request uses the proto JSON names `root_epoch` and `app_epoch`, and the client rejects a response that returns different epochs than requested.
 
 `domain` is an opaque domain-separation string, not a DNS name and not a path. Derivation is **flat**: `'a/b'` is a string that happens to contain a slash, not a child of `'a'`, and no key derived here can derive another. It replaces v0's `path` plus `purpose`; both `domain` and `algorithm` now feed the KDF.
 
@@ -446,12 +450,14 @@ Migrate a surface at a time: both clients can talk to the same agent at once, so
 
 ### Sealed environment variables
 
-`sealEnv` produces the version-1 HPKE JSON for `.sealed-env`. Fetch
+`sealEnv` produces the version-1 HPKE JSON for `.sealed-env`, with uint32
+`root_epoch` and `app_epoch` fields matching the HPKE context. Fetch
 `GetSealedEnvPubKey`, verify its signature and timestamp with
 `verifySealedEnvPublicKey`, and compare the returned signer with a trusted
 root key for the response's epoch before encrypting. Pass both epochs of the
-response: the guest decrypts with the key of the epochs the envelope names. Send the UTF-8 JSON bytes
-in the VMM's `sealed_env` field (hex for JSON RPC), not `encrypted_env`.
+response: the guest decrypts with the key of the epochs the envelope names.
+Send the UTF-8 JSON bytes in the VMM's `sealed_env` field (hex for JSON RPC),
+not `encrypted_env`.
 
 ```ts
 import { sealEnv, verifySealedEnvPublicKey } from '@phala/dstack-sdk'
