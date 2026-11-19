@@ -15,7 +15,7 @@ Type=notify
 WatchdogSec=30s
 StandardOutput=journal+console
 StandardError=journal+console
-Environment=RUST_LOG=warn
+Environment=RUST_LOG=warn,dstack_guest_agent::access_log=info
 
 [Install]
 WantedBy=multi-user.target
