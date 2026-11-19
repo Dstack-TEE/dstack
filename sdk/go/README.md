@@ -109,7 +109,13 @@ First, ensure your dstack application is properly configured:
 app compose. The SDK compose hash is not a Rust round-trip. SDKs preserve input
 presence and form: they do not add Rust defaults, keep empty lists, and retain
 the input form of `init_script`. The hash matches the deployed/on-chain hash
-only if those exact bytes are deployed.
+only if those exact bytes are deployed. JSON field names are case-sensitive:
+`RUNNER` is an extra field, not `runner`.
+
+When building a compose in Go, a nil `Features`, `AllowedEnvs`, `VerityVolumes`,
+or `PortPolicy.Ports` slice omits the field. A non-nil empty slice emits `[]`,
+just as an explicit empty list in JSON does. To reproduce a hash made with an
+older Go SDK that omitted empty typed slices, leave those slices nil.
 
 Numeric edge cases differ across SDKs: Go and JavaScript lose precision for
 `swap_size` values above 2^53, while Python emits `2.0` where they emit `2`.
@@ -1000,8 +1006,8 @@ import "github.com/Dstack-TEE/dstack/sdk/go/dstack"
 v0 := dstack.NewDstackClientV0()
 ```
 
-The table above maps tappd onto the v0 method set, which is the smallest step
-away from `TappdClient`. It is not the destination: new code should target
+If a method reports `unsupported on tappd.sock`, use `DstackClientV0` on
+`/var/run/dstack.sock` to call that legacy method. New code should target
 `NewDstackClient` (v1). See [Two API versions](#two-api-versions) for what
 changes, including the warning that v1 derives different key material.
 

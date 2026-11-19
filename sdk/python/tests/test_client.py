@@ -34,7 +34,8 @@ async def test_tappd_quote_payload(monkeypatch):
         return {"quote": "", "event_log": ""}
 
     monkeypatch.setattr(client, "_send_rpc_request", send)
-    await client.tdx_quote(b"hello")
+    with pytest.warns(DeprecationWarning, match=r"tdx_quote.*\bAsyncDstackClientV0\b"):
+        await client.tdx_quote(b"hello")
     await client.tdx_quote(b"hello", "raw")
     assert calls[0] == ("TdxQuote", {"report_data": "68656c6c6f"})
     assert calls[1][1] == {
@@ -63,8 +64,14 @@ async def test_tappd_unsupported_methods_fail_fast(monkeypatch, method, args):
         pytest.fail("unexpected RPC request")
 
     monkeypatch.setattr(client, "_send_rpc_request", send)
-    with pytest.raises(RuntimeError, match=r"DstackClient.*dstack.sock"):
+    with pytest.raises(RuntimeError, match=r"\bAsyncDstackClientV0\b.*dstack\.sock"):
         await getattr(client, method)(*args)
+
+
+def test_sync_tappd_unsupported_method_names_v0_client():
+    client = TappdClient("http://localhost")
+    with pytest.raises(RuntimeError, match=r"\bDstackClientV0\b.*dstack\.sock"):
+        client.get_key()
 
 
 def test_tcb_info_null_measurements():
@@ -543,7 +550,10 @@ def test_tappd_client_derive_key_deprecated():
         # Should have warnings for both constructor and derive_key
         warning_messages = [str(warning.message) for warning in w]
         assert any("TappdClient is deprecated" in msg for msg in warning_messages)
-        assert any("derive_key is deprecated" in msg for msg in warning_messages)
+        assert any(
+            "derive_key is deprecated" in msg and "DstackClientV0" in msg.split()
+            for msg in warning_messages
+        )
 
 
 def test_tappd_client_tdx_quote_deprecated():
@@ -556,7 +566,10 @@ def test_tappd_client_tdx_quote_deprecated():
         # Should have warnings for both constructor and tdx_quote
         warning_messages = [str(warning.message) for warning in w]
         assert any("TappdClient is deprecated" in msg for msg in warning_messages)
-        assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
+        assert any(
+            "tdx_quote is deprecated" in msg and "DstackClientV0" in msg.split()
+            for msg in warning_messages
+        )
 
 
 # Test AsyncTappdClient
@@ -589,7 +602,10 @@ async def test_async_tappd_client_derive_key_deprecated():
         # Should have warnings for both constructor and derive_key
         warning_messages = [str(warning.message) for warning in w]
         assert any("AsyncTappdClient is deprecated" in msg for msg in warning_messages)
-        assert any("derive_key is deprecated" in msg for msg in warning_messages)
+        assert any(
+            "derive_key is deprecated" in msg and "AsyncDstackClientV0" in msg.split()
+            for msg in warning_messages
+        )
 
 
 @pytest.mark.asyncio
@@ -603,7 +619,10 @@ async def test_async_tappd_client_tdx_quote_deprecated():
         # Should have warnings for both constructor and tdx_quote
         warning_messages = [str(warning.message) for warning in w]
         assert any("AsyncTappdClient is deprecated" in msg for msg in warning_messages)
-        assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
+        assert any(
+            "tdx_quote is deprecated" in msg and "AsyncDstackClientV0" in msg.split()
+            for msg in warning_messages
+        )
 
 
 def test_sync_client_version():

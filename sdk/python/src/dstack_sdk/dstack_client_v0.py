@@ -459,7 +459,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
 
     def _require_dstack_socket(self) -> None:
         if isinstance(self, AsyncTappdClient):
-            raise RuntimeError("use DstackClient on dstack.sock for this method")
+            raise RuntimeError(f"{self._MIGRATION_HINT} for this method")
 
     async def _ensure_algorithm_supported(self, algorithm: str) -> None:
         """Check OS version when a non-secp256k1 algorithm is requested."""
@@ -829,6 +829,8 @@ class AsyncTappdClient(AsyncDstackClientV0):
     ``AsyncDstackClient`` now means v1, which derives different keys.
     """
 
+    _MIGRATION_HINT = "use DstackClientV0 or AsyncDstackClientV0 on dstack.sock"
+
     def __init__(
         self,
         endpoint: str | None = None,
@@ -855,10 +857,8 @@ class AsyncTappdClient(AsyncDstackClientV0):
         subject: str | None = None,
         alt_names: List[str] | None = None,
     ) -> GetTlsKeyResponse:
-        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
-        emit_deprecation_warning(
-            "derive_key is deprecated, use DstackClient on dstack.sock instead"
-        )
+        """Use ``AsyncDstackClientV0.get_tls_key`` on dstack.sock instead."""
+        emit_deprecation_warning(f"derive_key is deprecated, {self._MIGRATION_HINT}")
 
         data: Dict[str, Any] = {
             "path": path or "",
@@ -875,10 +875,12 @@ class AsyncTappdClient(AsyncDstackClientV0):
         report_data: str | bytes,
         hash_algorithm: str | None = None,
     ) -> GetQuoteResponse:
-        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
-        emit_deprecation_warning(
-            "tdx_quote is deprecated, use DstackClient on dstack.sock instead"
-        )
+        """Use ``AsyncDstackClientV0.get_quote`` on dstack.sock for raw report data.
+
+        Here the server chooses the hash algorithm when omitted; pass
+        ``hash_algorithm="raw"`` explicitly for the legacy raw report data.
+        """
+        emit_deprecation_warning(f"tdx_quote is deprecated, {self._MIGRATION_HINT}")
 
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
@@ -936,7 +938,7 @@ class TappdClient(DstackClientV0):
         subject: str | None = None,
         alt_names: List[str] | None = None,
     ) -> GetTlsKeyResponse:
-        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
+        """Use ``DstackClientV0.get_tls_key`` on dstack.sock instead."""
         raise NotImplementedError
 
     @call_async
@@ -945,7 +947,10 @@ class TappdClient(DstackClientV0):
         report_data: str | bytes,
         hash_algorithm: str | None = None,
     ) -> GetQuoteResponse:
-        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
+        """Use ``DstackClientV0.get_quote`` on dstack.sock for raw report data.
+
+        See ``AsyncTappdClient.tdx_quote`` for the Tappd hash algorithm default.
+        """
         raise NotImplementedError
 
     @call_async

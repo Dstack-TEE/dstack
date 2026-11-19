@@ -328,7 +328,8 @@ hash_value = get_compose_hash(app_compose_dict)
 
 The SDK compose hash is not a Rust round-trip. SDKs preserve input presence and
 form: they do not add Rust defaults, keep empty lists, and retain the input form
-of `init_script`. The hash matches the deployed/on-chain hash only if those exact
+of `init_script`. Unknown fields, including names starting with `_`, contribute
+to the hash. The hash matches the deployed/on-chain hash only if those exact
 bytes are deployed.
 
 Numeric edge cases differ across SDKs: Go and JavaScript lose precision for
@@ -638,6 +639,11 @@ Method changes:
 - `derive_key()` → `get_tls_key()` for TLS certificates
 - `tdx_quote()` → `get_quote()` (raw data only, no hash algorithms)
 - Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
+
+If you still use `TappdClient` or `AsyncTappdClient`, omitting `hash_algorithm`
+from `tdx_quote()` now lets the server choose the algorithm. To keep the exact
+raw report data used by legacy callers, pass `hash_algorithm="raw"` explicitly.
+Raw mode left-pads inputs shorter than 64 bytes with zeros.
 
 ## Migration from v0 to v1
 

@@ -61,11 +61,12 @@ export interface EventLog {
 }
 
 export interface TcbInfo {
-  mrtd: string
-  rtmr0: string
-  rtmr1: string
-  rtmr2: string
-  rtmr3: string
+  // Non-TDX platforms return null for these registers.
+  mrtd: string | null
+  rtmr0: string | null
+  rtmr1: string | null
+  rtmr2: string | null
+  rtmr3: string | null
   app_compose: string
   event_log: EventLog[]
 }
@@ -512,7 +513,7 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
   protected versionPath = '/prpc/Tappd.Version'
 
   protected ensureDstackRoute(): void {
-    throw new Error('unsupported on tappd.sock; use DstackClient on dstack.sock')
+    throw new Error('unsupported on tappd.sock; use DstackClientV0 on dstack.sock')
   }
 
   constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
@@ -531,19 +532,19 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
         endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
-    console.warn('TappdClient is deprecated, please use DstackClient on dstack.sock instead')
+    console.warn('TappdClient is deprecated, please use DstackClientV0 on dstack.sock instead')
     super(endpoint, options)
   }
 
   /**
-   * @deprecated Use DstackClient on dstack.sock instead.
+   * @deprecated Use DstackClientV0 on dstack.sock instead.
    * @param path The path to the key.
    * @param subject The subject of the key.
    * @param altNames The alternative names of the key.
    * @returns The key.
    */
   async deriveKey(path?: string, subject?: string, alt_names?: string[]): Promise<GetTlsKeyResponse> {
-    console.warn('deriveKey is deprecated, please use DstackClient on dstack.sock instead');
+    console.warn('deriveKey is deprecated, please use DstackClientV0 on dstack.sock instead');
     let raw: Record<string, any> = { path: path || '', subject: subject || path || '' }
     if (alt_names && alt_names.length) {
       raw['alt_names'] = alt_names
@@ -559,13 +560,13 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
   }
 
   /**
-   * @deprecated Use DstackClient on dstack.sock instead.
+   * @deprecated Use DstackClientV0 on dstack.sock instead.
    * @param report_data The report data.
    * @param hash_algorithm The hash algorithm.
    * @returns The quote.
    */
   async tdxQuote(report_data: string | Buffer | Uint8Array, hash_algorithm?: TdxQuoteHashAlgorithms): Promise<GetQuoteResponse> {
-    console.warn('tdxQuote is deprecated, please use DstackClient on dstack.sock instead');
+    console.warn('tdxQuote is deprecated, please use DstackClientV0 on dstack.sock instead');
     let hex = to_hex(report_data)
     if (hash_algorithm === 'raw') {
       if (hex.length > 128) {

@@ -51,7 +51,7 @@ func TestTappdRoutes(t *testing.T) {
 	}
 	for _, check := range checks {
 		err := check()
-		if err == nil || !strings.Contains(err.Error(), "DstackClient") || !strings.Contains(err.Error(), "dstack.sock") {
+		if err == nil || !strings.Contains(err.Error(), "DstackClientV0 on dstack.sock") {
 			t.Errorf("unexpected error: %v", err)
 		}
 	}

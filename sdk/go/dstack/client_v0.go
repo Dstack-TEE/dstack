@@ -622,14 +622,16 @@ func (c *DstackClientV0) TdxQuote(ctx context.Context, reportData []byte, hashAl
 // callers expect the v0.5.11 method set, and v1 has no equivalent for the
 // tappd-era methods overridden below.
 //
-// Deprecated: Use DstackClient instead.
+// Deprecated: Use DstackClientV0 for legacy dstack.sock methods or migrate to
+// DstackClient (v1) for new applications.
 type TappdClient struct {
 	*DstackClientV0
 }
 
 // NewTappdClient creates a new deprecated TappdClient.
 //
-// Deprecated: Use NewDstackClient instead.
+// Deprecated: Use NewDstackClientV0 for legacy dstack.sock methods or
+// NewDstackClient for v1.
 func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	// Create a modified option to use TAPPD_SIMULATOR_ENDPOINT
 	tappdOpts := make([]DstackClientOption, 0, len(opts)+1)
@@ -650,7 +652,7 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	tappdOpts = append(tappdOpts, opts...)
 
 	client := NewDstackClientV0(tappdOpts...)
-	client.logger.Warn("TappdClient is deprecated, please use DstackClient instead")
+	client.logger.Warn("TappdClient is deprecated; use DstackClientV0 on dstack.sock for legacy methods or migrate to v1")
 
 	return &TappdClient{
 		DstackClientV0: client,
@@ -689,7 +691,7 @@ func (tc *TappdClient) IsReachable(ctx context.Context) bool {
 	return err == nil
 }
 func tappdUnsupported() error {
-	return fmt.Errorf("unsupported on tappd.sock; use DstackClient on dstack.sock")
+	return fmt.Errorf("unsupported on tappd.sock; use DstackClientV0 on dstack.sock")
 }
 func (tc *TappdClient) GetKey(context.Context, string, string, string) (*GetKeyResponse, error) {
 	return nil, tappdUnsupported()
@@ -715,9 +717,9 @@ func (tc *TappdClient) EmitEvent(context.Context, string, []byte) error { return
 
 // DeriveKey is deprecated.
 //
-// Deprecated: Use DstackClient on dstack.sock instead.
+// Deprecated: For legacy dstack.sock methods, use DstackClientV0.
 func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
-	tc.logger.Warn("deriveKey is deprecated, please use DstackClient instead")
+	tc.logger.Warn("deriveKey is deprecated; use DstackClientV0 on dstack.sock for legacy methods")
 
 	if subject == "" {
 		subject = path
@@ -745,9 +747,9 @@ func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject strin
 
 // TdxQuote is deprecated.
 //
-// Deprecated: Use DstackClient on dstack.sock instead.
+// Deprecated: For legacy dstack.sock methods, use DstackClientV0.GetQuote.
 func (tc *TappdClient) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
-	tc.logger.Warn("tdxQuote is deprecated, please use DstackClient instead")
+	tc.logger.Warn("tdxQuote is deprecated; use DstackClientV0.GetQuote on dstack.sock for legacy quotes")
 
 	if hashAlgorithm == "raw" {
 		if len(reportData) > 64 {
