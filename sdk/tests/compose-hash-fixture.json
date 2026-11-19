@@ -1,5 +1,5 @@
 {
-  "description": "Canonical SDK compose hashes. The per-case normalize flag defaults to false. Explicit null is kept for Option fields without skip_serializing_if and omitted for Option fields with it; non-Option nulls pass through, false is omitted for is_false fields and otherwise kept.",
+  "description": "Deployment hash contracts shared by Python, JavaScript, and Go: valid compose JSON, legacy input forms, forward-compatible fields, and optional normalization. The digests are SHA-256 of the expected compact deployment bytes, not Rust reserialization.",
   "cases": [
     {
       "name": "server_valid_compact_manifest",
@@ -15,273 +15,65 @@
       "sha256": "57e019ac8ed2e7c1d1f2b1cf7f22e4d1b48222e9426007e9d6da42e424c71a33"
     },
     {
-      "name": "unknown_object_keys_in_lexical_order",
+      "name": "future_manifest_fields_do_not_change_between_sdks",
       "app_compose": {
-        "runner": "docker-compose",
+        "manifest_version": "3",
         "name": "example",
-        "manifest_version": 2,
+        "runner": "docker-compose",
+        "_meta": "release",
+        "Public_logs": true,
         "future": {
           "2": "two",
-          "constructor": { "z": 1, "a": 2 },
-          "10": "ten"
-        }
-      },
-      "sha256": "e040023034db42c6456e2ff179811990046535bc8f4b069925c3f0b979c68560"
-    },
-    {
-      "name": "unknown_underscore_field",
-      "app_compose": {
-        "runner": "docker-compose",
-        "name": "example",
-        "manifest_version": 2,
-        "_meta": "release"
-      },
-      "sha256": "6fde6231022099bc3513852ee96bca8788b73e32c2946b3b5ab76b8077c1136b"
-    },
-    {
-      "name": "unknown_case_variant_field",
-      "app_compose": {
-        "runner": "docker-compose",
-        "name": "example",
-        "manifest_version": 2,
-        "Public_logs": true
-      },
-      "sha256": "8f6d612ec1cf44f9bbe2398db6d298a08a84444dd8149e7361fa1a46c122fd21"
-    },
-    {
-      "name": "docker_config_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "docker_config": null
-      },
-      "sha256": "c40dd5519d34ba1e49f64461689fb0de9a1db1882c2651a0eebe7b4d3a0e4c05"
-    },
-    {
-      "name": "empty_key_provider_id",
-      "app_compose": {
-        "runner": "docker-compose",
-        "key_provider_id": ""
-      },
-      "sha256": "36bc4c19396219c19da36438d1c50531c8d31f20ebde629cd0d0896b2f760743"
-    },
-    {
-      "name": "empty_allowed_envs",
-      "app_compose": {
-        "runner": "docker-compose",
-        "allowed_envs": []
-      },
-      "sha256": "840fd8ae67acfeffbe70ea6e3b187c303941d036c0ce0dbd376396fcc0bc8f12"
-    },
-    {
-      "name": "false_public_logs",
-      "app_compose": {
-        "runner": "docker-compose",
-        "public_logs": false
-      },
-      "sha256": "fdfde75b7ebcc930d26203e091660dfaaafc455992829aad48b4b79138ebd16c"
-    },
-    {
-      "name": "integer_swap_size",
-      "app_compose": {
-        "runner": "docker-compose",
-        "swap_size": 1024
-      },
-      "sha256": "fddf42f9ef77f9cc2d3afe65d4bd5a1e1ee26b72a00612fd8926a86605636595"
-    },
-    {
-      "name": "string_init_script",
-      "app_compose": {
-        "runner": "docker-compose",
-        "init_script": "echo hello"
-      },
-      "sha256": "22c0131c096d02e845e8bafb6a13cda126878c364c2663eb69a9c0a4142cb383"
-    },
-    {
-      "name": "docker_config_extra",
-      "app_compose": {
-        "runner": "docker-compose",
-        "docker_config": {
-          "registry": "example.org",
-          "future": {
-            "enabled": false,
-            "values": []
+          "10": "ten",
+          "constructor": {
+            "z": 1,
+            "a": 2
           }
         }
       },
-      "sha256": "21fbdc1b71d9b62427f964728e29c299e70b1972d0e2d4a3dfa3a129249a411e"
+      "sha256": "b32e9f74ed053ab97a6cd996d100fe19ae226b0787d379a73d6c41255ba25b32"
     },
     {
-      "name": "fully_populated",
+      "name": "legacy_deployment_keeps_input_forms",
       "app_compose": {
-        "runner": "docker-compose",
-        "manifest_version": 2,
+        "manifest_version": "3",
         "name": "example",
-        "docker_compose_file": "services:\n  web:\n    image: nginx\n",
-        "docker_config": {
-          "registry": "example.org",
-          "username": "user",
-          "token_key": "token"
-        },
-        "public_logs": true,
-        "public_sysinfo": true,
-        "public_tcbinfo": true,
-        "kms_enabled": true,
-        "gateway_enabled": true,
-        "key_provider": "kms",
-        "key_provider_id": "provider",
-        "allowed_envs": [
-          "FOO",
-          "BAR"
-        ],
-        "no_instance_id": true,
-        "secure_time": true,
-        "storage_discard": true,
+        "runner": "docker-compose",
+        "init_script": "echo ready",
+        "swap_size": 2048
+      },
+      "sha256": "b367f19ab9084d7a793e3d27d47869ca530065dc014041124384bb1040a77f4a"
+    },
+    {
+      "name": "disabled_options_preserve_the_deployment_hash",
+      "app_compose": {
+        "manifest_version": "3",
+        "name": "example",
+        "runner": "docker-compose",
+        "docker_config": null,
+        "key_provider": null,
+        "init_script": null,
         "requirements": {
-          "platforms": [
-            "tdx"
-          ],
-          "health_check": true,
-          "health_status_file": "/health",
-          "launch_token_hash": "abcd"
-        },
-        "swap_size": 2048,
-        "init_script": [
-          "echo ready"
-        ]
-      },
-      "sha256": "7c0db6c258626ac4a5d200d5c91d58c36cb77af0399fd4eff9aaf4965290dd54"
-    },
-    {
-      "name": "null_key_provider",
-      "app_compose": {
-        "runner": "docker-compose",
-        "key_provider": null
-      },
-      "sha256": "2c2493967c69dbccffcba847892048676098dda2b96c292349cf824c55f7706c"
-    },
-    {
-      "name": "null_requirements",
-      "app_compose": {
-        "runner": "docker-compose",
-        "requirements": null
-      },
-      "sha256": "1120e42a7b5f2ca50128696ea414771441b4fa92373427108a7173181cc80b55"
-    },
-    {
-      "name": "false_health_check",
-      "app_compose": {
-        "runner": "docker-compose",
-        "requirements": {
-          "health_check": false
-        }
-      },
-      "sha256": "63f51e97d2205a09f709b463cc4f1e3e16b04b1a5d70d69379dd2b1e6f3f50e1"
-    },
-    {
-      "name": "false_ephemeral_data_disk",
-      "app_compose": {
-        "runner": "docker-compose",
-        "requirements": {
-          "ephemeral_data_disk": false
-        }
-      },
-      "sha256": "63f51e97d2205a09f709b463cc4f1e3e16b04b1a5d70d69379dd2b1e6f3f50e1"
-    },
-    {
-      "name": "false_restrict_mode",
-      "app_compose": {
-        "runner": "docker-compose",
-        "port_policy": {
-          "ports": [],
-          "restrict_mode": false
-        }
-      },
-      "sha256": "3b647a53cded50c2d33f29bc07dd2ce7871d08cdff6e41d76f915d262c58bf57"
-    },
-    {
-      "name": "init_script_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "init_script": null
-      },
-      "sha256": "1120e42a7b5f2ca50128696ea414771441b4fa92373427108a7173181cc80b55"
-    },
-    {
-      "name": "req_gpu_rego_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "requirements": {
-          "gpu_policy": {
-            "rego": null
-          }
-        }
-      },
-      "sha256": "4a691b287d3991fa248e7efd982c90b94f34b56d23037cdf724597198407dfda"
-    },
-    {
-      "name": "req_gpu_null_rego_other",
-      "app_compose": {
-        "runner": "docker-compose",
-        "requirements": {
+          "health_check": false,
+          "ephemeral_data_disk": false,
           "gpu_policy": {
             "rego": null,
             "attest_gpu": true
           }
         }
       },
-      "sha256": "29dbfd14aaf7aeab6c571f54c618f5b5e52486450f81d1ec00fa05a64ff95757"
+      "sha256": "0cc5fbbe68ca75bd4c44d476dde9f4816f4aa9158673ca0b146508ad73d27512"
     },
     {
-      "name": "name_null",
+      "name": "normalize_removes_an_empty_legacy_boot_script",
       "app_compose": {
-        "runner": "docker-compose",
-        "name": null
-      },
-      "sha256": "fc57cedbc276a9d676fba20c3d9993a9bc5a3512e0255de46f42960a4be5f38b"
-    },
-    {
-      "name": "allowed_envs_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "allowed_envs": null
-      },
-      "sha256": "41e1b94aea704d1a31ec00523f7e0ef48b477ab54c121fd737ca588e0c3e999d"
-    },
-    {
-      "name": "extra_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "future": null
-      },
-      "sha256": "e434ea65eda466ce91f0d9004d9c8fe0d56b889635c6900f34e303d1ada222c5"
-    },
-    {
-      "name": "req_health_check_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "requirements": {
-          "health_check": null
-        }
-      },
-      "sha256": "affb3b6a3e4ce2deb80da7fda123cfc5b600789f777762bd0e494dbc6ec1cc22"
-    },
-    {
-      "name": "norm_prelaunch_empty",
-      "app_compose": {
+        "manifest_version": "3",
+        "name": "example",
         "runner": "docker-compose",
         "pre_launch_script": ""
       },
       "normalize": true,
-      "sha256": "1120e42a7b5f2ca50128696ea414771441b4fa92373427108a7173181cc80b55"
-    },
-    {
-      "name": "norm_prelaunch_null",
-      "app_compose": {
-        "runner": "docker-compose",
-        "pre_launch_script": null
-      },
-      "normalize": true,
-      "sha256": "1120e42a7b5f2ca50128696ea414771441b4fa92373427108a7173181cc80b55"
+      "sha256": "c74df639996abe1bc29a656eb2afe65b4e989af539b37dde1baeb9d29233bc30"
     }
   ]
 }
