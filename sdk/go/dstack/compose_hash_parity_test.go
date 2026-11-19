@@ -12,6 +12,20 @@ import (
 	"testing"
 )
 
+func TestKeyProviderKindsMatchComposeWireValues(t *testing.T) {
+	for kind, want := range map[KeyProviderKind]string{
+		KeyProviderNone:   "none",
+		KeyProviderKMS:    "kms",
+		KeyProviderLocal:  "local",
+		KeyProviderTPM:    "tpm",
+		KeyProviderSevSnp: "sev-snp",
+	} {
+		if string(kind) != want {
+			t.Errorf("key provider kind %q, want %q", kind, want)
+		}
+	}
+}
+
 func TestZeroComposePointers(t *testing.T) {
 	data, err := json.Marshal(AppCompose{InitScript: &InitScripts{}, SwapSize: &SwapSize{}})
 	if err != nil {

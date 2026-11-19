@@ -19,9 +19,11 @@ import (
 type KeyProviderKind string
 
 const (
-	KeyProviderNone  KeyProviderKind = "none"
-	KeyProviderKMS   KeyProviderKind = "kms"
-	KeyProviderLocal KeyProviderKind = "local"
+	KeyProviderNone   KeyProviderKind = "none"
+	KeyProviderKMS    KeyProviderKind = "kms"
+	KeyProviderLocal  KeyProviderKind = "local"
+	KeyProviderTPM    KeyProviderKind = "tpm"
+	KeyProviderSevSnp KeyProviderKind = "sev-snp"
 )
 
 // DockerConfig represents Docker configuration
