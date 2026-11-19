@@ -220,6 +220,15 @@ impl DstackClientV0 {
         serde_json::from_slice(&body).context("failed to parse the response")
     }
 
+    // v0.5.6 accepted these fields, but v0.5.7 first exposed DstackGuest.Version.
+    // Like the other SDKs, use the RPC itself as the capability, not its version string.
+    async fn ensure_version_rpc(&self, feature: &str) -> Result<()> {
+        self.version().await.with_context(|| {
+            format!("cannot confirm support for {feature}: Version RPC unavailable (requires dstack 0.5.7+)")
+        })?;
+        Ok(())
+    }
+
     pub async fn get_key(
         &self,
         path: Option<String>,
@@ -261,6 +270,10 @@ impl DstackClientV0 {
         root_epoch: Option<u32>,
         app_epoch: Option<u32>,
     ) -> Result<GetKeyResponse> {
+        if !matches!(algorithm, "" | "k256" | "secp256k1") {
+            self.ensure_version_rpc(&format!("algorithm {algorithm:?}"))
+                .await?;
+        }
         let mut data = json!({
             "path": path.unwrap_or_default(),
             "purpose": purpose.unwrap_or_default(),
@@ -346,6 +359,20 @@ impl DstackClientV0 {
     }
 
     pub async fn get_tls_key(&self, tls_key_config: TlsKeyConfig) -> Result<GetTlsKeyResponse> {
+        let mut options = Vec::new();
+        if tls_key_config.not_before.is_some() {
+            options.push("not_before");
+        }
+        if tls_key_config.not_after.is_some() {
+            options.push("not_after");
+        }
+        if tls_key_config.with_app_info {
+            options.push("with_app_info");
+        }
+        if !options.is_empty() {
+            self.ensure_version_rpc(&format!("TLS key options [{}]", options.join(", ")))
+                .await?;
+        }
         let response = self.send_rpc_request("/GetTlsKey", &tls_key_config).await?;
         let response = serde_json::from_value::<GetTlsKeyResponse>(response)?;
 

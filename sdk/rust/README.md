@@ -236,6 +236,12 @@ use dstack_sdk::dstack_client_v0::DstackClientV0;
 let client = DstackClientV0::new(None);
 ```
 
+`get_key_with_algorithm` (except `secp256k1`, `k256`, or `""`) and `get_tls_key`
+with `not_before`, `not_after`, or `with_app_info(true)` first call `/Version`.
+If the probe fails, the SDK returns an error without requesting a key or
+certificate. The fields shipped in dstack 0.5.6, but 0.5.7 was the first
+release with this RPC on the guest socket. Upgrade 0.5.6 agents to use these
+options; default requests still work without a probe.
 
 ### Derive Keys (v0)
 
@@ -255,7 +261,7 @@ let testnet_key = client.get_key(Some("wallet/eth/testnet".to_string()), None).a
 - `path`: Key derivation path (determines the key)
 - `purpose` (optional): Included in signature chain message, does not affect the derived key
 
-The Rust SDK currently requests the default `secp256k1` key material. Use distinct paths when keys must be independent.
+`get_key()` requests `secp256k1`. To select Ed25519, use `get_key_with_algorithm(path, purpose, "ed25519")`. In v0, changing the algorithm does not change the derived secret; use distinct paths when keys must be independent.
 
 **Returns:** `GetKeyResponse`
 - `key`: Hex-encoded private key
