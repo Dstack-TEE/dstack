@@ -15,14 +15,20 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	dcap "github.com/Phala-Network/dcap-qvl/golang-bindings"
 	"github.com/vmihailenco/msgpack/v5"
+	"github.com/vmihailenco/msgpack/v5/msgpcode"
 )
 
 var oidAttestation = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62397, 1, 8}
 
 const maxAttestationBytes = 10 * 1024 * 1024
+
+// Bound the in-memory event slice independently of the byte limit (roughly
+// 3 MiB of RuntimeEvent slots on 64-bit platforms).
+const maxRuntimeEvents = 65536
 
 // RuntimeEvent is a measured dstack runtime event. Version 1 is the default.
 type RuntimeEvent struct {
@@ -38,7 +44,7 @@ func (b *msgpackBytes) DecodeMsgpack(dec *msgpack.Decoder) error {
 	if err != nil {
 		return err
 	}
-	if code >= 0x90 && code <= 0x9f || code == 0xdc || code == 0xdd {
+	if msgpcode.IsFixedArray(code) || code == msgpcode.Array16 || code == msgpcode.Array32 {
 		n, err := dec.DecodeArrayLen()
 		if err != nil {
 			return err
@@ -48,20 +54,60 @@ func (b *msgpackBytes) DecodeMsgpack(dec *msgpack.Decoder) error {
 		}
 		v := make([]byte, n)
 		for i := range v {
-			x, err := dec.DecodeUint8()
+			code, err := dec.PeekCode()
 			if err != nil {
 				return err
 			}
-			v[i] = x
+			x, err := dec.DecodeUint64()
+			if err != nil {
+				return err
+			}
+			if code == msgpcode.Nil || x > 255 {
+				return fmt.Errorf("invalid byte array element")
+			}
+			v[i] = byte(x)
 		}
 		*b = v
 		return nil
+	}
+	if !msgpcode.IsBin(code) {
+		return fmt.Errorf("expected byte array or binary")
 	}
 	v, err := dec.DecodeBytes()
 	if err != nil {
 		return err
 	}
 	*b = v
+	return nil
+}
+
+type wireRuntimeEvents []RuntimeEvent
+
+func (events *wireRuntimeEvents) DecodeMsgpack(dec *msgpack.Decoder) error {
+	n, err := dec.DecodeArrayLen()
+	if err != nil {
+		return err
+	}
+	if n < 0 || n > maxRuntimeEvents {
+		return fmt.Errorf("invalid runtime event count")
+	}
+	out := make([]RuntimeEvent, n)
+	for i := range out {
+		var e struct {
+			Event   *string       `msgpack:"event"`
+			Payload *msgpackBytes `msgpack:"payload"`
+			Version uint64        `msgpack:"version"`
+		}
+		e.Version = 1 // omitted in V1; an explicitly encoded zero is invalid
+		if err := dec.Decode(&e); err != nil {
+			return err
+		}
+		if e.Event == nil || !utf8.ValidString(*e.Event) || e.Payload == nil || (e.Version != 1 && e.Version != 2) {
+			return fmt.Errorf("invalid runtime event fields at index %d", i)
+		}
+		out[i] = RuntimeEvent{Event: *e.Event, Payload: *e.Payload, Version: uint32(e.Version)}
+	}
+	*events = out
 	return nil
 }
 
@@ -76,8 +122,8 @@ type wireAttestation struct {
 	Stack struct {
 		Kind string `msgpack:"kind"`
 		Data struct {
-			ReportData    msgpackBytes   `msgpack:"report_data"`
-			RuntimeEvents []RuntimeEvent `msgpack:"runtime_events"`
+			ReportData    msgpackBytes      `msgpack:"report_data"`
+			RuntimeEvents wireRuntimeEvents `msgpack:"runtime_events"`
 		} `msgpack:"data"`
 	} `msgpack:"stack"`
 }
@@ -97,11 +143,7 @@ func extractAttestation(cert *x509.Certificate) ([]byte, []RuntimeEvent, error) 
 			quote, events, reportData, err = decodeLegacyAttestation(encoded)
 		} else {
 			var wire wireAttestation
-			reader := bytes.NewReader(encoded)
-			err = msgpack.NewDecoder(reader).Decode(&wire)
-			if err == nil && reader.Len() != 0 {
-				err = fmt.Errorf("trailing attestation bytes")
-			}
+			err = decodeMsgpackAttestation(encoded, &wire)
 			if err == nil && (wire.Version != 1 || wire.Platform.Kind != "tdx" || wire.Stack.Kind != "dstack") {
 				err = fmt.Errorf("unsupported attestation version or platform")
 			}
@@ -133,21 +175,38 @@ func extractAttestation(cert *x509.Certificate) ([]byte, []RuntimeEvent, error) 
 	if raw == nil {
 		return nil, nil, fmt.Errorf("ratls: certificate has TDX quote but no event log extension")
 	}
-	var entries []tdxEvent
-	if err := json.Unmarshal(raw, &entries); err != nil {
-		return nil, nil, fmt.Errorf("ratls: invalid event log: %w", err)
-	}
-	return quote, eventsFromTDX(entries), nil
+	events, err := decodeTDXEvents(raw)
+	return quote, events, err
 }
 
-func eventsFromTDX(entries []tdxEvent) []RuntimeEvent {
-	var events []RuntimeEvent
-	for _, e := range entries {
-		if e.EventType == dstackRuntimeEventType {
-			events = append(events, RuntimeEvent{Event: e.Event, Payload: msgpackBytes(e.EventPayload), Version: e.Version})
-		}
+func decodeTDXEvents(raw []byte) ([]RuntimeEvent, error) {
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf("ratls: invalid UTF-8 in event log")
 	}
-	return events
+	var entries []tdxEvent
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("ratls: invalid event log: %w", err)
+	}
+	var events []RuntimeEvent
+	for i, e := range entries {
+		if e.EventType != dstackRuntimeEventType {
+			continue
+		}
+		event := RuntimeEvent{Event: e.Event, Payload: msgpackBytes(e.EventPayload), Version: uint32(e.Version)}
+		if event.Version == 2 {
+			canonical, err := event.preimage()
+			if err != nil {
+				return nil, err
+			}
+			preimage, err := hex.DecodeString(e.Preimage)
+			digest := sha512.Sum384(canonical)
+			if err != nil || !bytes.Equal(canonical, preimage) || !bytes.Equal(digest[:], e.Digest) {
+				return nil, fmt.Errorf("ratls: inconsistent V2 digest or preimage at event %d", i)
+			}
+		}
+		events = append(events, event)
+	}
+	return events, nil
 }
 
 func replayRTMR3(events []RuntimeEvent, quote *dcap.Quote) error {
@@ -156,29 +215,9 @@ func replayRTMR3(events []RuntimeEvent, quote *dcap.Quote) error {
 	}
 	mr := make([]byte, 48)
 	for _, e := range events {
-		var preimage []byte
-		switch e.Version {
-		case 0, 1:
-			preimage = make([]byte, 4)
-			binary.LittleEndian.PutUint32(preimage, dstackRuntimeEventType)
-			preimage = append(preimage, ':')
-			preimage = append(preimage, e.Event...)
-			preimage = append(preimage, ':')
-			preimage = append(preimage, e.Payload...)
-		case 2:
-			var out bytes.Buffer
-			encoder := json.NewEncoder(&out)
-			encoder.SetEscapeHTML(false)
-			if err := encoder.Encode(struct {
-				Name    string `json:"name"`
-				Payload string `json:"payload"`
-				Type    uint32 `json:"type"`
-			}{e.Event, hex.EncodeToString(e.Payload), dstackRuntimeEventType}); err != nil {
-				return err
-			}
-			preimage = []byte(unescapeSeparators(strings.TrimSuffix(out.String(), "\n")))
-		default:
-			return fmt.Errorf("ratls: unsupported runtime event version %d", e.Version)
+		preimage, err := e.preimage()
+		if err != nil {
+			return err
 		}
 		digest := sha512.Sum384(preimage)
 		h := sha512.New384()
@@ -190,6 +229,35 @@ func replayRTMR3(events []RuntimeEvent, quote *dcap.Quote) error {
 		return fmt.Errorf("ratls: RTMR3 mismatch: replayed %x, quoted %x", mr, quote.Report.RTMR3)
 	}
 	return nil
+}
+
+func (e RuntimeEvent) preimage() ([]byte, error) {
+	switch e.Version {
+	case 0, 1:
+		if strings.ContainsRune(e.Event, ':') {
+			return nil, fmt.Errorf("ratls: V1 runtime event name must not contain ':'")
+		}
+		preimage := make([]byte, 4)
+		binary.LittleEndian.PutUint32(preimage, dstackRuntimeEventType)
+		preimage = append(preimage, ':')
+		preimage = append(preimage, e.Event...)
+		preimage = append(preimage, ':')
+		return append(preimage, e.Payload...), nil
+	case 2:
+		var out bytes.Buffer
+		encoder := json.NewEncoder(&out)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(struct {
+			Name    string `json:"name"`
+			Payload string `json:"payload"`
+			Type    uint32 `json:"type"`
+		}{e.Event, hex.EncodeToString(e.Payload), dstackRuntimeEventType}); err != nil {
+			return nil, err
+		}
+		return []byte(unescapeSeparators(strings.TrimSuffix(out.String(), "\n"))), nil
+	default:
+		return nil, fmt.Errorf("ratls: unsupported runtime event version %d", e.Version)
+	}
 }
 
 func unescapeSeparators(s string) string {
@@ -225,13 +293,21 @@ func (r scaleReader) compact() (uint64, error) {
 		return uint64(first >> 2), nil
 	case 1:
 		b, err := r.ReadByte()
-		return uint64(uint16(first)|uint16(b)<<8) >> 2, err
+		n := uint64(uint16(first)|uint16(b)<<8) >> 2
+		if err == nil && n < 1<<6 {
+			return 0, fmt.Errorf("noncanonical SCALE length")
+		}
+		return n, err
 	case 2:
 		var b [3]byte
 		if _, err := io.ReadFull(r, b[:]); err != nil {
 			return 0, err
 		}
-		return uint64(uint32(first)|uint32(b[0])<<8|uint32(b[1])<<16|uint32(b[2])<<24) >> 2, nil
+		n := uint64(uint32(first)|uint32(b[0])<<8|uint32(b[1])<<16|uint32(b[2])<<24) >> 2
+		if n < 1<<14 {
+			return 0, fmt.Errorf("noncanonical SCALE length")
+		}
+		return n, nil
 	default:
 		return 0, fmt.Errorf("ratls: oversized SCALE length")
 	}
@@ -278,7 +354,7 @@ func decodeLegacyAttestation(data []byte) ([]byte, []RuntimeEvent, []byte, error
 		}
 	}
 	count, err = r.compact()
-	if err != nil || count > uint64(r.Len()/2) {
+	if err != nil || count > maxRuntimeEvents || count > uint64(r.Len()/2) {
 		return nil, nil, nil, fmt.Errorf("invalid runtime event count")
 	}
 	events := make([]RuntimeEvent, 0, int(count))
@@ -286,6 +362,9 @@ func decodeLegacyAttestation(data []byte) ([]byte, []RuntimeEvent, []byte, error
 		name, e := r.vec()
 		if e != nil {
 			return nil, nil, nil, e
+		}
+		if !utf8.Valid(name) {
+			return nil, nil, nil, fmt.Errorf("invalid UTF-8 in SCALE event name")
 		}
 		payload, e := r.vec()
 		if e != nil {

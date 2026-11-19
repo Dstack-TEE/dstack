@@ -145,6 +145,8 @@ func buildConfig(opts []Option) *config {
 // It extracts the embedded TDX quote, verifies it via dcap-qvl, checks that the
 // quote's report_data binds to the certificate's public key, validates TCB
 // attributes (debug mode, signer), and replays RTMR3 from the event log.
+// For versioned evidence it verifies the stack runtime events, not the separate
+// platform event log or its advertised V2 digest preimages.
 // Only dstack TDX is supported: gcp-tdx, nitro, sev-snp, and dstack-pod
 // evidence are rejected. TLSConfig alone is not application authentication;
 // use WithVerify to enforce trusted application, OS, and compose policy.
@@ -243,36 +245,27 @@ func validateTCB(quote *dcap.Quote) error {
 // tdxEvent matches the JSON format of cc_eventlog::tdx::TdxEvent.
 // Note: digest and event_payload are hex-encoded in JSON (Rust uses serde_human_bytes).
 type tdxEvent struct {
-	IMR          uint32        `json:"imr"`
-	EventType    uint32        `json:"event_type"`
-	Digest       dcap.HexBytes `json:"digest"`
-	Event        string        `json:"event"`
-	EventPayload dcap.HexBytes `json:"event_payload"`
-	Version      uint32        `json:"version"`
+	IMR          uint32           `json:"imr"`
+	EventType    uint32           `json:"event_type"`
+	Digest       dcap.HexBytes    `json:"digest"`
+	Event        string           `json:"event"`
+	EventPayload dcap.HexBytes    `json:"event_payload"`
+	Version      jsonEventVersion `json:"version"`
+	Preimage     string           `json:"preimage"`
 }
 
-// verifyRTMR3 extracts the event log from the certificate, replays runtime events
-// using SHA384, and compares the result with the quote's RTMR3 value.
-// Matches Rust: Attestation::verify_tdx() RTMR3 replay
-func verifyRTMR3(cert *x509.Certificate, quote *dcap.Quote) error {
-	if len(quote.Report.RTMR3) == 0 {
-		return nil // Not a TDX quote, skip
-	}
+type jsonEventVersion uint32
 
-	rawEventLog, err := getExtensionBytes(cert, oidEventLog)
-	if err != nil {
-		return fmt.Errorf("ratls: failed to parse event log extension: %w", err)
+func (v *jsonEventVersion) UnmarshalJSON(raw []byte) error {
+	var n uint32
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return err
 	}
-	if rawEventLog == nil {
-		return fmt.Errorf("ratls: certificate has TDX quote but no event log extension")
+	if n != 1 && n != 2 {
+		return fmt.Errorf("unsupported runtime event version %d", n)
 	}
-
-	var events []tdxEvent
-	if err := json.Unmarshal(rawEventLog, &events); err != nil {
-		return fmt.Errorf("ratls: failed to parse event log JSON: %w", err)
-	}
-
-	return replayRTMR3(eventsFromTDX(events), quote)
+	*v = jsonEventVersion(n)
+	return nil
 }
 
 // TLSConfig returns a *tls.Config that verifies the server's RA-TLS certificate
@@ -283,12 +276,20 @@ func verifyRTMR3(cert *x509.Certificate, quote *dcap.Quote) error {
 // TLSConfig alone does not authenticate the application, OS, or compose. Use
 // WithVerify to compare verified measurements and boot-time events to trusted policy.
 // Use VerifyResult.BootEvent rather than scanning events after system-ready.
+// Do not replace the returned config's verification callbacks: both enforce
+// RA-TLS, one for full handshakes and the other for resumed sessions.
 func TLSConfig(opts ...Option) *tls.Config {
-	return tlsConfigWithVerifier(VerifyCert, opts...)
-}
-
-func tlsConfigWithVerifier(verify func(*x509.Certificate, ...Option) (*VerifyResult, error), opts ...Option) *tls.Config {
 	cfg := buildConfig(opts)
+	verify := func(cert *x509.Certificate) error {
+		result, err := VerifyCert(cert, opts...)
+		if err != nil {
+			return err
+		}
+		if cfg.onVerified != nil {
+			cfg.onVerified(result)
+		}
+		return nil
+	}
 	return &tls.Config{
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
@@ -299,14 +300,17 @@ func tlsConfigWithVerifier(verify func(*x509.Certificate, ...Option) (*VerifyRes
 			if err != nil {
 				return fmt.Errorf("ratls: failed to parse server certificate: %w", err)
 			}
-			result, err := verify(cert, opts...)
-			if err != nil {
-				return err
+			return verify(cert)
+		},
+		VerifyConnection: func(state tls.ConnectionState) error {
+			// Go skips VerifyPeerCertificate on resumption; recheck the cached leaf.
+			if !state.DidResume {
+				return nil
 			}
-			if cfg.onVerified != nil {
-				cfg.onVerified(result)
+			if len(state.PeerCertificates) == 0 {
+				return fmt.Errorf("ratls: server presented no certificate")
 			}
-			return nil
+			return verify(state.PeerCertificates[0])
 		},
 	}
 }
@@ -319,14 +323,22 @@ func tlsConfigWithVerifier(verify func(*x509.Certificate, ...Option) (*VerifyRes
 func getExtensionBytes(cert *x509.Certificate, oid asn1.ObjectIdentifier) ([]byte, error) {
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(oid) {
-			var raw []byte
-			if _, err := asn1.Unmarshal(ext.Value, &raw); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal extension value: %w", err)
-			}
-			return raw, nil
+			return unwrapExtension(ext.Value)
 		}
 	}
 	return nil, nil
+}
+
+func unwrapExtension(der []byte) ([]byte, error) {
+	var raw []byte
+	rest, err := asn1.Unmarshal(der, &raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal extension value: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("trailing data after extension octet string")
+	}
+	return raw, nil
 }
 
 func isAllZeros(b []byte) bool {
