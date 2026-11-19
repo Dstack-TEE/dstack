@@ -212,6 +212,9 @@ impl QuoteVerifier {
     }
 
     /// Reject an ASK that the product's CRL, signed by its pinned ARK, revokes.
+    /// A CRL that cannot be used (stale, corrupt, wrongly signed) is
+    /// unavailable collateral, not evidence against the quote, and is dropped
+    /// from the cache.
     async fn check_ask_not_revoked(
         &self,
         kds_client: &AmdKdsClient,
@@ -219,13 +222,19 @@ impl QuoteVerifier {
         ask: &CertBytes,
     ) -> Result<()> {
         let crl = kds_client.fetch_crl(product).await?;
-        verify_ask_not_revoked(
-            &self.ark(product),
-            ask,
-            &crl,
-            x509_parser::time::ASN1Time::now(),
-        )
-        .with_context(|| format!("amd sev-snp {} crl check failed", product.kds_name()))
+        let now = x509_parser::time::ASN1Time::now();
+        match crl_revokes_ask(&self.ark(product), ask, &crl, now) {
+            Ok(false) => Ok(()),
+            Ok(true) => bail!("amd sev-snp {} ASK is revoked", product.kds_name()),
+            Err(err) => {
+                kds_client
+                    .crl_cache
+                    .invalidate(&AmdKdsCaCacheKey { product })
+                    .await;
+                let err = err.context(format!("unusable amd sev-snp {} crl", product.kds_name()));
+                Err(CollateralUnavailable(err).into())
+            }
+        }
     }
 
     pub async fn fetch_and_verify(
@@ -924,14 +933,15 @@ fn verify_signed_data(
     Ok(())
 }
 
-/// Check the ASK against the product CRL: signed by the pinned ARK and current
-/// at `now`. AMD's CRL revokes ASKs; VCEKs are retired through TCB updates.
-fn verify_ask_not_revoked(
+/// Whether the product CRL revokes the ASK. The CRL must be signed by the
+/// pinned ARK, current at `now` and carry no critical extension. AMD's CRL
+/// revokes ASKs; VCEKs are retired through TCB updates.
+fn crl_revokes_ask(
     ark: &CertBytes,
     ask: &CertBytes,
     crl_der: &[u8],
     now: x509_parser::time::ASN1Time,
-) -> Result<()> {
+) -> Result<bool> {
     use x509_parser::prelude::{CertificateRevocationList, FromDer, X509Certificate};
 
     let ark_der = certificate_der(ark)?;
@@ -959,13 +969,17 @@ fn verify_ask_not_revoked(
         "CRL is not current: valid from {} to {next_update}",
         crl.last_update()
     );
-    if crl
+    anyhow::ensure!(
+        !crl.extensions().iter().any(|ext| ext.critical)
+            && !crl
+                .iter_revoked_certificates()
+                .any(|revoked| revoked.extensions().iter().any(|ext| ext.critical)),
+        "CRL has a critical extension"
+    );
+    let revoked = crl
         .iter_revoked_certificates()
-        .any(|revoked| revoked.serial() == &ask.tbs_certificate.serial)
-    {
-        bail!("ASK is revoked");
-    }
-    Ok(())
+        .any(|revoked| revoked.serial() == &ask.tbs_certificate.serial);
+    Ok(revoked)
 }
 
 fn certificate_der(cert: &CertBytes) -> Result<Vec<u8>> {
@@ -1396,7 +1410,8 @@ mod tests {
         use time::{Duration, OffsetDateTime};
         use x509_parser::time::ASN1Time;
 
-        /// AMD's Milan CRL, valid from 2026-10-27 to 2026-12-09.
+        /// From https://kdsintf.amd.com/vcek/v1/Milan/crl, fetched 2026-11-18;
+        /// valid from 2026-10-27 to 2026-12-09.
         const AMD_MILAN_CRL: &[u8] = include_bytes!("../testdata/amd-milan.crl");
 
         fn pem(bytes: &[u8]) -> CertBytes {
@@ -1415,14 +1430,14 @@ mod tests {
             let ark = pem(builtin::milan::ARK);
             let ask = pem(builtin::milan::ASK);
             let current = at(1_794_000_000); // 2026-11-07
-            verify_ask_not_revoked(&ark, &ask, AMD_MILAN_CRL, current).unwrap();
+            assert!(!crl_revokes_ask(&ark, &ask, AMD_MILAN_CRL, current).unwrap());
 
             let expired = at(1_797_000_000); // 2026-12-11
-            let err = verify_ask_not_revoked(&ark, &ask, AMD_MILAN_CRL, expired).unwrap_err();
+            let err = crl_revokes_ask(&ark, &ask, AMD_MILAN_CRL, expired).unwrap_err();
             assert!(format!("{err:#}").contains("not current"), "{err:#}");
 
             let genoa = pem(builtin::genoa::ARK);
-            let err = verify_ask_not_revoked(&genoa, &ask, AMD_MILAN_CRL, current).unwrap_err();
+            let err = crl_revokes_ask(&genoa, &ask, AMD_MILAN_CRL, current).unwrap_err();
             assert!(
                 format!("{err:#}").contains("not issued by the ARK"),
                 "{err:#}"
@@ -1431,7 +1446,7 @@ mod tests {
             let mut tampered = AMD_MILAN_CRL.to_vec();
             let last = tampered.len() - 1;
             tampered[last] ^= 1;
-            let err = verify_ask_not_revoked(&ark, &ask, &tampered, current).unwrap_err();
+            let err = crl_revokes_ask(&ark, &ask, &tampered, current).unwrap_err();
             assert!(format!("{err:#}").contains("signature"), "{err:#}");
         }
 
@@ -1470,15 +1485,14 @@ mod tests {
             let (ark, ask) = (pem(ark.pem().as_bytes()), pem(ask.pem().as_bytes()));
             let now = ASN1Time::now();
 
-            verify_ask_not_revoked(&ark, &ask, &crl(vec![]), now).unwrap();
+            assert!(!crl_revokes_ask(&ark, &ask, &crl(vec![]), now).unwrap());
             let revoked = crl(vec![RevokedCertParams {
                 serial_number: SerialNumber::from(7),
                 revocation_time: OffsetDateTime::now_utc(),
                 reason_code: None,
                 invalidity_date: None,
             }]);
-            let err = verify_ask_not_revoked(&ark, &ask, &revoked, now).unwrap_err();
-            assert!(format!("{err:#}").contains("ASK is revoked"), "{err:#}");
+            assert!(crl_revokes_ask(&ark, &ask, &revoked, now).unwrap());
         }
     }
 

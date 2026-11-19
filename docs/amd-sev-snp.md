@@ -178,9 +178,10 @@ for production TEE deployments.
 
 ## AMD KDS collateral
 
-The verifier obtains AMD certificate collateral from the built-in AMD KDS URL
-when the attestation evidence does not already contain the required chain. An
-operator can set an AMD-KDS-compatible mirror or cache:
+The verifier obtains the ASK and VCEK from the built-in AMD KDS URL when the
+attestation evidence does not already contain them, and always fetches the
+product family's CRL from it. An operator can set an AMD-KDS-compatible mirror
+or cache, which must also serve `<product>/crl`:
 
 ```toml
 [core]
