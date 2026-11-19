@@ -78,7 +78,7 @@ fn verify_sev_snp_attestation_bin() {
     println!("measurement: {}", hex::encode(verified.measurement));
     println!("host_data:   {}", hex::encode(verified.host_data));
     println!("chip_id:     {}", hex::encode(verified.chip_id));
-    println!("tcb_status:  {}", verified.tcb_info.tcb_status());
+    println!("tcb_status:  {}", verified.tcb_status);
 
     // End-to-end OS image binding, fully offline — exactly what dstack-verifier
     // does after the hardware report verifies. Recompute the launch measurement
@@ -446,4 +446,45 @@ async fn an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed
         format!("{err:#}").contains("invalid amd sev-snp report length"),
         "unexpected error: {err:#}"
     );
+}
+
+#[test]
+fn configured_tcb_requirements_judge_the_real_report() {
+    use dstack_attest::attestation::{SevSnpProduct, SevSnpTcbRequirement};
+
+    let reported = verified_fixture_report().tcb_info.reported;
+    let requirement = |advisory_id: &str, microcode: u8| SevSnpTcbRequirement {
+        product: SevSnpProduct::Milan,
+        advisory_id: advisory_id.into(),
+        bootloader: reported.bootloader,
+        tee: reported.tee,
+        snp: reported.snp,
+        microcode,
+        fmc: None,
+    };
+    let verify = |requirements: &[SevSnpTcbRequirement]| {
+        sev_snp_qvl::QuoteVerifier::new_prod()
+            .with_tcb_requirements(requirements.iter().map(Into::into).collect())
+            .verify(
+                &fixture_report(),
+                &[SEV_ASK_PEM.to_vec(), SEV_VCEK_PEM.to_vec()],
+                &expected_report_data(),
+            )
+            .expect("verify SEV-SNP attestation offline")
+    };
+
+    let unconfigured = verify(&[]);
+    assert_eq!(unconfigured.tcb_status, "");
+    assert!(unconfigured.advisory_ids.is_empty());
+
+    let met = verify(&[requirement("AMD-SB-MET", reported.microcode)]);
+    assert_eq!(met.tcb_status, "UpToDate");
+    assert!(met.advisory_ids.is_empty());
+
+    let unmet = verify(&[
+        requirement("AMD-SB-MET", reported.microcode),
+        requirement("AMD-SB-UNMET", reported.microcode + 1),
+    ]);
+    assert_eq!(unmet.tcb_status, "OutOfDate");
+    assert_eq!(unmet.advisory_ids, ["AMD-SB-UNMET"]);
 }

@@ -65,6 +65,7 @@ pub fn default_verifier(
                 .filter_map(|url| Some(url::Url::parse(url).ok()?.host_str()?.to_owned()))
                 .collect(),
         ),
+        sev_snp_tcb_requirements: Vec::new(),
     })
 }
 

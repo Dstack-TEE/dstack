@@ -96,6 +96,15 @@ pub struct QuoteVerifier {
     genoa_ark_pem: Vec<u8>,
     turin_ark_pem: Vec<u8>,
     external_roots: [bool; 3],
+    tcb_requirements: Vec<AmdSnpTcbRequirement>,
+}
+
+/// The minimum TCB that fixes an AMD security bulletin on one product family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AmdSnpTcbRequirement {
+    pub product: AmdSnpProduct,
+    pub advisory_id: String,
+    pub min_tcb: AmdSnpTcbVersion,
 }
 
 impl QuoteVerifier {
@@ -105,6 +114,7 @@ impl QuoteVerifier {
             genoa_ark_pem,
             turin_ark_pem,
             external_roots: [true; 3],
+            tcb_requirements: Vec::new(),
         }
     }
 
@@ -114,7 +124,15 @@ impl QuoteVerifier {
             genoa_ark_pem: builtin::genoa::ARK.to_vec(),
             turin_ark_pem: builtin::turin::ARK.to_vec(),
             external_roots: [false; 3],
+            tcb_requirements: Vec::new(),
         }
+    }
+
+    /// Judge `tcb_status` and `advisory_ids` against these requirements. A
+    /// product without any requirement reports an empty status.
+    pub fn with_tcb_requirements(mut self, requirements: Vec<AmdSnpTcbRequirement>) -> Self {
+        self.tcb_requirements = requirements;
+        self
     }
 
     /// Create a production verifier overriding one product-family ARK.
@@ -167,10 +185,13 @@ impl QuoteVerifier {
         expected_report_data: &[u8; 64],
     ) -> Result<VerifiedAmdSnpReport> {
         let (ask, vcek) = normalize_ask_vcek_certs(cert_chain)?;
-        let verified =
-            verify_amd_snp_attestation_with_certs_and_arks(report, ask, vcek, |product| {
-                (self.ark(product), self.uses_external_root(product))
-            })?;
+        let verified = verify_amd_snp_attestation_with_certs_and_arks(
+            report,
+            ask,
+            vcek,
+            |product| (self.ark(product), self.uses_external_root(product)),
+            &self.tcb_requirements,
+        )?;
         if &verified.report_data != expected_report_data {
             bail!("amd sev-snp report_data mismatch");
         }
@@ -202,6 +223,7 @@ impl QuoteVerifier {
                     collateral.ask,
                     collateral.vcek,
                     self.uses_external_root(product),
+                    &self.tcb_requirements,
                 ) {
                     Ok(verified) if &verified.report_data == expected_report_data => {
                         return Ok(verified);
@@ -270,6 +292,19 @@ impl From<TcbVersion> for AmdSnpTcbVersion {
     }
 }
 
+impl AmdSnpTcbVersion {
+    /// Whether every SVN is at least the one in `min`.
+    pub fn meets(&self, min: &AmdSnpTcbVersion) -> bool {
+        self.bootloader >= min.bootloader
+            && self.tee >= min.tee
+            && self.snp >= min.snp
+            && self.microcode >= min.microcode
+            && min
+                .fmc
+                .is_none_or(|fmc| self.fmc.is_some_and(|own| own >= fmc))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AmdSnpTcbInfo {
     pub current: AmdSnpTcbVersion,
@@ -288,15 +323,32 @@ impl AmdSnpTcbInfo {
         }
     }
 
-    pub fn tcb_status(&self) -> &'static str {
-        if self.current == self.reported
-            && self.committed == self.reported
-            && self.launch == self.reported
-        {
-            "UpToDate"
-        } else {
-            "OutOfDate"
+    /// Assess the reported, committed and launch TCBs against `requirements`
+    /// for `product`. The reported TCB is the one the VCEK certifies; the
+    /// committed one bounds firmware rollback; the launch one is what the guest
+    /// first ran under.
+    fn assess(
+        &self,
+        product: AmdSnpProduct,
+        requirements: &[AmdSnpTcbRequirement],
+    ) -> (String, Vec<String>) {
+        let mut configured = false;
+        let mut advisory_ids = Vec::new();
+        for requirement in requirements.iter().filter(|r| r.product == product) {
+            configured = true;
+            if ![self.reported, self.committed, self.launch]
+                .iter()
+                .all(|tcb| tcb.meets(&requirement.min_tcb))
+            {
+                advisory_ids.push(requirement.advisory_id.clone());
+            }
         }
+        let status = match (configured, advisory_ids.is_empty()) {
+            (false, _) => "",
+            (true, true) => "UpToDate",
+            (true, false) => "OutOfDate",
+        };
+        (status.to_string(), advisory_ids)
     }
 }
 
@@ -307,6 +359,10 @@ pub struct VerifiedAmdSnpReport {
     pub host_data: [u8; 32],
     pub chip_id: [u8; 64],
     pub tcb_info: AmdSnpTcbInfo,
+    /// `UpToDate` or `OutOfDate` against the verifier's TCB requirements, or
+    /// empty when none is configured for the product.
+    pub tcb_status: String,
+    /// The bulletins whose minimum TCB the report does not meet.
     pub advisory_ids: Vec<String>,
 }
 
@@ -556,9 +612,13 @@ fn verify_amd_snp_attestation_with_certs(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
 ) -> Result<VerifiedAmdSnpReport> {
-    verify_amd_snp_attestation_with_certs_and_arks(report_bytes, ask_bytes, vcek_bytes, |product| {
-        (product.builtin_ark(), false)
-    })
+    verify_amd_snp_attestation_with_certs_and_arks(
+        report_bytes,
+        ask_bytes,
+        vcek_bytes,
+        |product| (product.builtin_ark(), false),
+        &[],
+    )
 }
 
 fn verify_amd_snp_attestation_with_certs_and_arks(
@@ -566,6 +626,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
     ark_for_product: impl Fn(AmdSnpProduct) -> (CertBytes, bool),
+    tcb_requirements: &[AmdSnpTcbRequirement],
 ) -> Result<VerifiedAmdSnpReport> {
     let report = decode_amd_snp_report(report_bytes)?;
     let mut errors = Vec::new();
@@ -578,6 +639,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
             ask_bytes.clone(),
             vcek_bytes.clone(),
             external_root,
+            tcb_requirements,
         ) {
             Ok(verified) => return Ok(verified),
             Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
@@ -596,6 +658,7 @@ fn verify_amd_snp_attestation_with_cert_chain(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
     external_root: bool,
+    tcb_requirements: &[AmdSnpTcbRequirement],
 ) -> Result<VerifiedAmdSnpReport> {
     let report = decode_amd_snp_report(report_bytes)?;
 
@@ -619,18 +682,17 @@ fn verify_amd_snp_attestation_with_cert_chain(
     validate_amd_snp_report_policy(&report)?;
 
     let parsed = parsed_amd_snp_report_from_report(&report)?;
+    let tcb_info = AmdSnpTcbInfo::from_report(&report);
+    let (tcb_status, advisory_ids) = tcb_info.assess(product, tcb_requirements);
 
     Ok(VerifiedAmdSnpReport {
         measurement: parsed.measurement,
         report_data: parsed.report_data,
         host_data: parsed.host_data,
         chip_id: parsed.chip_id,
-        tcb_info: AmdSnpTcbInfo::from_report(&report),
-        // AMD SEV-SNP attestation reports and VCEKs do not carry a direct
-        // advisory list. Keep this explicit and empty so downstream auth stays
-        // fail-closed if a future verifier adds advisories from revocation or
-        // external policy collateral.
-        advisory_ids: Vec::new(),
+        tcb_info,
+        tcb_status,
+        advisory_ids,
     })
 }
 
@@ -1225,26 +1287,54 @@ mod tests {
     }
 
     #[test]
-    fn tcb_status_is_up_to_date_only_when_all_reported_versions_match() {
-        let up_to_date = AmdSnpTcbInfo {
-            current: tcb(1, 2, 3, 4),
+    fn tcb_status_is_judged_against_the_requirements_of_the_product() {
+        let info = AmdSnpTcbInfo {
+            current: tcb(1, 2, 3, 5),
             reported: tcb(1, 2, 3, 4),
             committed: tcb(1, 2, 3, 4),
             launch: tcb(1, 2, 3, 4),
         };
-        assert_eq!(up_to_date.tcb_status(), "UpToDate");
+        let requirement = |product, advisory_id: &str, min_tcb| AmdSnpTcbRequirement {
+            product,
+            advisory_id: advisory_id.into(),
+            min_tcb,
+        };
+        let met = requirement(AmdSnpProduct::Milan, "AMD-SB-1", tcb(1, 2, 3, 4));
+        let unmet = requirement(AmdSnpProduct::Milan, "AMD-SB-2", tcb(1, 2, 3, 5));
+        let other = requirement(AmdSnpProduct::Genoa, "AMD-SB-3", tcb(9, 9, 9, 9));
 
-        let stale_launch = AmdSnpTcbInfo {
+        let assess =
+            |requirements: &[AmdSnpTcbRequirement]| info.assess(AmdSnpProduct::Milan, requirements);
+        assert_eq!(assess(&[]), (String::new(), vec![]));
+        assert_eq!(assess(std::slice::from_ref(&other)), (String::new(), vec![]));
+        assert_eq!(assess(&[met.clone(), other]), ("UpToDate".into(), vec![]));
+        assert_eq!(
+            assess(&[met, unmet]),
+            ("OutOfDate".into(), vec!["AMD-SB-2".to_string()])
+        );
+
+        let old_launch = AmdSnpTcbInfo {
             launch: tcb(1, 2, 3, 3),
-            ..up_to_date
+            ..info
         };
-        assert_eq!(stale_launch.tcb_status(), "OutOfDate");
+        let req = [requirement(
+            AmdSnpProduct::Milan,
+            "AMD-SB-1",
+            tcb(1, 2, 3, 4),
+        )];
+        assert_eq!(old_launch.assess(AmdSnpProduct::Milan, &req).0, "OutOfDate");
+    }
 
-        let stale_vcek_reported = AmdSnpTcbInfo {
-            reported: tcb(1, 2, 3, 3),
-            ..up_to_date
+    #[test]
+    fn fmc_is_required_only_when_the_minimum_sets_it() {
+        let with_fmc = |fmc| AmdSnpTcbVersion {
+            fmc,
+            ..tcb(1, 1, 1, 1)
         };
-        assert_eq!(stale_vcek_reported.tcb_status(), "OutOfDate");
+        assert!(with_fmc(None).meets(&with_fmc(None)));
+        assert!(with_fmc(Some(2)).meets(&with_fmc(Some(2))));
+        assert!(!with_fmc(Some(1)).meets(&with_fmc(Some(2))));
+        assert!(!with_fmc(None).meets(&with_fmc(Some(2))));
     }
 
     /// `fetch_and_verify` takes the KDS branch whenever `cert_chain` is empty,

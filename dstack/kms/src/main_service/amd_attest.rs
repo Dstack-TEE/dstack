@@ -146,7 +146,7 @@ pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
         &verified.measurement,
         &verified.host_data,
         &verified.chip_id,
-        verified.tcb_info.tcb_status(),
+        &verified.tcb_status,
         &verified.advisory_ids,
         input,
         os_image_hash,
@@ -325,6 +325,7 @@ mod tests {
                     ),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    tcb_status: "UpToDate".into(),
                     advisory_ids: Vec::new(),
                 },
             ),
@@ -419,17 +420,6 @@ mod tests {
         let chip_id = [0xbc; 64];
         let mr_config = valid_mr_config(&input)?;
         let mr_config_document = mr_config.to_canonical_json();
-        let tcb = dstack_attest::amd_sev_snp::AmdSnpTcbVersion {
-            fmc: None,
-            bootloader: 1,
-            tee: 2,
-            snp: 3,
-            microcode: 4,
-        };
-        let stale_tcb = dstack_attest::amd_sev_snp::AmdSnpTcbVersion {
-            microcode: 3,
-            ..tcb
-        };
         let attestation = ra_tls::attestation::VerifiedAttestation {
             quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
                 ra_tls::attestation::SnpQuote {
@@ -447,12 +437,8 @@ mod tests {
                     report_data: [0x42; 64],
                     host_data: MrConfigV3::snp_host_data_from_document(&mr_config_document),
                     chip_id,
-                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo {
-                        current: tcb,
-                        reported: tcb,
-                        committed: tcb,
-                        launch: stale_tcb,
-                    },
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    tcb_status: "OutOfDate".into(),
                     advisory_ids: vec!["SNP-TEST-ADVISORY".to_string()],
                 },
             ),

@@ -364,6 +364,7 @@ mod tests {
                     host_data: mr_config.to_snp_host_data(),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    tcb_status: "UpToDate".into(),
                     advisory_ids: Vec::new(),
                 },
             ),

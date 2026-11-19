@@ -58,6 +58,54 @@ pub struct AttestationVerifierConfig {
     /// the vendor hosts in `pki_fetch::DEFAULT_ALLOWED_HOSTS`.
     #[serde(default)]
     pub allowed_collateral_hosts: Option<Vec<String>>,
+    /// AMD SEV-SNP has no vendor TCB status, so it is judged against these
+    /// bulletins. A report below one lists it in `advisory_ids` and is
+    /// `OutOfDate`; with none for its product, its status is empty.
+    #[serde(default)]
+    pub sev_snp_tcb_requirements: Vec<SevSnpTcbRequirement>,
+}
+
+/// The minimum TCB that fixes an AMD security bulletin on one product family.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SevSnpTcbRequirement {
+    pub product: SevSnpProduct,
+    pub advisory_id: String,
+    pub bootloader: u8,
+    pub tee: u8,
+    pub snp: u8,
+    pub microcode: u8,
+    /// Turin only.
+    #[serde(default)]
+    pub fmc: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SevSnpProduct {
+    Milan,
+    Genoa,
+    Turin,
+}
+
+impl From<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
+    fn from(value: &SevSnpTcbRequirement) -> Self {
+        Self {
+            product: match value.product {
+                SevSnpProduct::Milan => sev_snp_qvl::AmdSnpProduct::Milan,
+                SevSnpProduct::Genoa => sev_snp_qvl::AmdSnpProduct::Genoa,
+                SevSnpProduct::Turin => sev_snp_qvl::AmdSnpProduct::Turin,
+            },
+            advisory_id: value.advisory_id.clone(),
+            min_tcb: sev_snp_qvl::AmdSnpTcbVersion {
+                fmc: value.fmc,
+                bootloader: value.bootloader,
+                tee: value.tee,
+                snp: value.snp,
+                microcode: value.microcode,
+            },
+        }
+    }
 }
 
 pub struct AttestationVerifier {
@@ -154,7 +202,13 @@ impl AttestationVerifier {
             gcp_tpm,
             aws_nitro_enclave: nsm(aws_nitro_enclave.as_deref(), "AWS Nitro Enclave")?,
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
-            sev_snp,
+            sev_snp: sev_snp.with_tcb_requirements(
+                config
+                    .sev_snp_tcb_requirements
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
             allowed_collateral_hosts: config
                 .allowed_collateral_hosts
