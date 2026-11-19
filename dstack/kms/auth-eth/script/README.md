@@ -83,6 +83,16 @@ KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH \
 forge script script/Manage.s.sol:RemoveKmsLaunchTicket --broadcast --rpc-url $RPC_URL
 ```
 
+#### Set SEV-SNP TCB Requirements
+The minimum TCB each CPU must meet for an SEV-SNP TCB to report `UpToDate`, as a JSON list
+(see [AMD SEV-SNP](../../../../docs/amd-sev-snp.md)). While it is empty, the KMS
+refuses every SEV-SNP request.
+```bash
+KMS_CONTRACT_ADDR=0x... \
+SEV_SNP_TCB_REQUIREMENTS='[{"cpuid":"00a00f11","bootloader":0,"tee":0,"snp":27,"microcode":222}]' \
+forge script script/Manage.s.sol:SetSevSnpTcbRequirements --broadcast --rpc-url $RPC_URL
+```
+
 #### Set Gateway App ID
 ```bash
 KMS_CONTRACT_ADDR=0x... GATEWAY_APP_ID="my-gateway" \

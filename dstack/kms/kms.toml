@@ -125,20 +125,6 @@ insecure_allow_external_trust_anchors = false
 # sev_snp_genoa = "/etc/dstack/roots/amd-genoa-ark.pem"
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
 
-# AMD SEV-SNP has no vendor TCB status: a report is `UpToDate` only when its
-# reported, committed and launch TCBs meet every bulletin listed for its product.
-# A bulletin it misses is reported in `advisory_ids` and makes it `OutOfDate`.
-# With none listed for its product, the status is empty and the default auth
-# policy rejects it. Take the minimum TCBs from AMD's security bulletins, and
-# keep the KMS and dstack-verifier lists identical. Turin entries also set `fmc`.
-# [[core.attestation.sev_snp_tcb_requirements]]
-# product = "milan"  # milan, genoa or turin
-# advisory_id = "AMD-SB-XXXX"
-# bootloader = 0
-# tee = 0
-# snp = 0
-# microcode = 0
-
 [core.image]
 cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"

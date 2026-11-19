@@ -359,13 +359,15 @@ mod tests {
             config: String::new(),
             report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
                 dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    cpuid: Some(dstack_attest::amd_sev_snp::AmdSnpCpuid::from_eax(
+                        0x00a0_0f11,
+                    )),
                     measurement,
                     report_data: [0x42; 64],
                     host_data: mr_config.to_snp_host_data(),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
                     tcb_status: "UpToDate".into(),
-                    advisory_ids: Vec::new(),
                 },
             ),
         }

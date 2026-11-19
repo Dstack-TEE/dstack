@@ -85,7 +85,6 @@ pub(crate) fn build_amd_snp_boot_info(
         &host_data,
         verified_chip_id,
         "UpToDate",
-        &[],
         input,
         &os_image_hash,
         &mr_config_document,
@@ -98,7 +97,6 @@ fn build_amd_snp_boot_info_with_tcb_status(
     verified_host_data: &[u8; 32],
     verified_chip_id: &[u8; 64],
     tcb_status: &str,
-    advisory_ids: &[String],
     input: &MeasurementInput,
     os_image_hash: &[u8],
     mr_config_document: &str,
@@ -121,7 +119,7 @@ fn build_amd_snp_boot_info_with_tcb_status(
         device_id: Sha256::digest(verified_chip_id).to_vec(),
         key_provider_info,
         tcb_status: tcb_status.to_string(),
-        advisory_ids: advisory_ids.to_vec(),
+        advisory_ids: Vec::new(),
     })
 }
 
@@ -147,7 +145,6 @@ pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
         &verified.host_data,
         &verified.chip_id,
         &verified.tcb_status,
-        &verified.advisory_ids,
         input,
         os_image_hash,
         mr_config_document,
@@ -318,6 +315,7 @@ mod tests {
             config: String::new(),
             report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
                 dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    cpuid: None,
                     measurement,
                     report_data: [0x42; 64],
                     host_data: MrConfigV3::snp_host_data_from_document(
@@ -326,7 +324,6 @@ mod tests {
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
                     tcb_status: "UpToDate".into(),
-                    advisory_ids: Vec::new(),
                 },
             ),
         }
@@ -433,13 +430,13 @@ mod tests {
             config: String::new(),
             report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
                 dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    cpuid: None,
                     measurement: verified,
                     report_data: [0x42; 64],
                     host_data: MrConfigV3::snp_host_data_from_document(&mr_config_document),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
                     tcb_status: "OutOfDate".into(),
-                    advisory_ids: vec!["SNP-TEST-ADVISORY".to_string()],
                 },
             ),
         };
@@ -453,7 +450,7 @@ mod tests {
         .expect("verified snp attestation should feed boot info helper");
 
         assert_eq!(boot_info.tcb_status, "OutOfDate");
-        assert_eq!(boot_info.advisory_ids, vec!["SNP-TEST-ADVISORY"]);
+        assert!(boot_info.advisory_ids.is_empty());
         assert_ne!(boot_info.tcb_status, "snp-verified-basic-policy");
         Ok(())
     }
@@ -619,7 +616,6 @@ mod tests {
             &host_data,
             &chip_id,
             "UpToDate",
-            &[],
             &input,
             &os_image_hash,
             &mr_config_document,
@@ -639,7 +635,6 @@ mod tests {
             &changed_host_data,
             &chip_id,
             "UpToDate",
-            &[],
             &input,
             &os_image_hash,
             &changed_mr_config_document,

@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mirror that serves only `cert_chain` and VCEKs fails every SNP verification
   as unavailable collateral until it serves the CRL too.
 
+- **SEV-SNP needs a published TCB list.** The KMS judges an SEV-SNP TCB
+  against the minimum TCB governance publishes for its CPU, and refuses an
+  SEV-SNP request, its own self-authorization included, while it cannot:
+  upgrade `DstackKms` and the auth API, then publish the list with
+  `setSevSnpTcbRequirements` (or `sevSnpTcbRequirements` for `dstack-auth`)
+  before upgrading the KMS. A host whose firmware still emits version 2
+  reports, which do not name the CPU, is refused. See
+  [AMD SEV-SNP](docs/amd-sev-snp.md).
+
 - **`DstackKms` deploys apps through `appImplementation`.** The app proxy is
   now created by `DstackApp.deployProxy` and initialized by `DstackKms`, which
   keeps the proxy's creation code out of `DstackKms`, close to the 24 KB

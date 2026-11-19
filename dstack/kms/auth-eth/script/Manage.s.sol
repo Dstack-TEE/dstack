@@ -181,6 +181,20 @@ contract RemoveKmsLaunchTicket is BaseScript {
     }
 }
 
+contract SetSevSnpTcbRequirements is BaseScript {
+    function run() external {
+        string memory requirements = vm.envString("SEV_SNP_TCB_REQUIREMENTS");
+        // Reject malformed JSON: the KMS refuses every SEV-SNP request while it cannot parse the list.
+        if (bytes(requirements).length != 0) vm.parseJson(requirements);
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.setSevSnpTcbRequirements(requirements);
+        vm.stopBroadcast();
+
+        console.log("Set SEV-SNP TCB requirements:", requirements);
+    }
+}
+
 contract SetGatewayAppId is BaseScript {
     function run() external {
         string memory gatewayId = vm.envString("GATEWAY_APP_ID");

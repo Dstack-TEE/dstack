@@ -101,11 +101,54 @@ pub struct QuoteVerifier {
     tcb_requirements: Vec<AmdSnpTcbRequirement>,
 }
 
-/// The minimum TCB that fixes an AMD security bulletin on one product family.
+/// A CPU as AMD's bulletins name the parts a fix applies to. A product family
+/// is too coarse: Milan and Milan-X differ only in stepping, and carry
+/// different microcode SVNs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AmdSnpCpuid {
+    pub family: u8,
+    pub model: u8,
+    pub stepping: u8,
+}
+
+impl AmdSnpCpuid {
+    /// From CPUID Fn0000_0001 EAX, as bulletins print it (`0x00A00F11`).
+    pub fn from_eax(eax: u32) -> Self {
+        Self {
+            family: ((eax >> 8 & 0xf) + (eax >> 20 & 0xff)) as u8,
+            model: ((eax >> 16 & 0xf) << 4 | eax >> 4 & 0xf) as u8,
+            stepping: (eax & 0xf) as u8,
+        }
+    }
+
+    /// `None` for a report v2, which predates the CPUID fields.
+    fn from_report(report: &AttestationReport) -> Option<Self> {
+        Some(Self {
+            family: report.cpuid_fam_id?,
+            model: report.cpuid_mod_id?,
+            stepping: report.cpuid_step?,
+        })
+    }
+}
+
+/// As a requirement names it: CPUID Fn0000_0001 EAX of an AMD CPU, whose base
+/// family is Fh.
+impl std::fmt::Display for AmdSnpCpuid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [family, model, stepping] = [self.family, self.model, self.stepping].map(u32::from);
+        let eax = family.saturating_sub(0xf) << 20
+            | model >> 4 << 16
+            | 0xf << 8
+            | (model & 0xf) << 4
+            | stepping;
+        write!(f, "{eax:08x}")
+    }
+}
+
+/// The minimum TCB of one CPU: the highest SVNs AMD's bulletins require of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmdSnpTcbRequirement {
-    pub product: AmdSnpProduct,
-    pub advisory_id: String,
+    pub cpuid: AmdSnpCpuid,
     pub min_tcb: AmdSnpTcbVersion,
 }
 
@@ -130,8 +173,8 @@ impl QuoteVerifier {
         }
     }
 
-    /// Judge `tcb_status` and `advisory_ids` against these requirements. A
-    /// product without any requirement reports an empty status.
+    /// Judge `tcb_status` against these requirements. It is empty for a CPU
+    /// without one.
     pub fn with_tcb_requirements(mut self, requirements: Vec<AmdSnpTcbRequirement>) -> Self {
         self.tcb_requirements = requirements;
         self
@@ -368,47 +411,55 @@ impl AmdSnpTcbInfo {
         }
     }
 
-    /// Assess the reported, committed and launch TCBs against `requirements`
-    /// for `product`. The reported TCB is the one the VCEK certifies; the
+    /// Assess the reported, committed and launch TCBs against the requirements
+    /// for `cpuid`. The reported TCB is the one the VCEK certifies; the
     /// committed one bounds firmware rollback; the launch one is what the guest
-    /// first ran under.
+    /// first ran under. `None` without a requirement for the CPU: there is
+    /// nothing to judge it against.
     fn assess(
         &self,
-        product: AmdSnpProduct,
+        cpuid: AmdSnpCpuid,
         requirements: &[AmdSnpTcbRequirement],
-    ) -> (String, Vec<String>) {
-        let mut configured = false;
-        let mut advisory_ids = Vec::new();
-        for requirement in requirements.iter().filter(|r| r.product == product) {
-            configured = true;
-            if ![self.reported, self.committed, self.launch]
+    ) -> Option<&'static str> {
+        let mut requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.cpuid == cpuid)
+            .peekable();
+        requirements.peek()?;
+        let up_to_date = requirements.all(|requirement| {
+            [self.reported, self.committed, self.launch]
                 .iter()
                 .all(|tcb| tcb.meets(&requirement.min_tcb))
-            {
-                advisory_ids.push(requirement.advisory_id.clone());
-            }
-        }
-        let status = match (configured, advisory_ids.is_empty()) {
-            (false, _) => "",
-            (true, true) => "UpToDate",
-            (true, false) => "OutOfDate",
-        };
-        (status.to_string(), advisory_ids)
+        });
+        Some(if up_to_date { "UpToDate" } else { "OutOfDate" })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedAmdSnpReport {
+    /// `None` for a report v2, which predates the CPUID fields.
+    pub cpuid: Option<AmdSnpCpuid>,
     pub measurement: [u8; 48],
     pub report_data: [u8; 64],
     pub host_data: [u8; 32],
     pub chip_id: [u8; 64],
     pub tcb_info: AmdSnpTcbInfo,
     /// `UpToDate` or `OutOfDate` against the verifier's TCB requirements, or
-    /// empty when none is configured for the product.
+    /// empty when none is configured for the CPU.
     pub tcb_status: String,
-    /// The bulletins whose minimum TCB the report does not meet.
-    pub advisory_ids: Vec<String>,
+}
+
+impl VerifiedAmdSnpReport {
+    /// The TCB status against `requirements` rather than the verifier's own.
+    /// Fails when they cannot judge the report.
+    pub fn assess(&self, requirements: &[AmdSnpTcbRequirement]) -> Result<&'static str> {
+        let cpuid = self
+            .cpuid
+            .context("amd sev-snp report v2 does not name its CPU")?;
+        self.tcb_info
+            .assess(cpuid, requirements)
+            .with_context(|| format!("no minimum TCB is listed for CPUID {cpuid}"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -744,16 +795,20 @@ fn verify_amd_snp_attestation_with_cert_chain(
 
     let parsed = parsed_amd_snp_report_from_report(&report)?;
     let tcb_info = AmdSnpTcbInfo::from_report(&report);
-    let (tcb_status, advisory_ids) = tcb_info.assess(product, tcb_requirements);
+    let cpuid = AmdSnpCpuid::from_report(&report);
+    let tcb_status = cpuid
+        .and_then(|cpuid| tcb_info.assess(cpuid, tcb_requirements))
+        .unwrap_or_default()
+        .to_string();
 
     Ok(VerifiedAmdSnpReport {
+        cpuid,
         measurement: parsed.measurement,
         report_data: parsed.report_data,
         host_data: parsed.host_data,
         chip_id: parsed.chip_id,
         tcb_info,
         tcb_status,
-        advisory_ids,
     })
 }
 
@@ -1507,45 +1562,37 @@ mod tests {
     }
 
     #[test]
-    fn tcb_status_is_judged_against_the_requirements_of_the_product() {
+    fn tcb_status_is_judged_against_the_requirements_of_the_cpu() {
         let info = AmdSnpTcbInfo {
             current: tcb(1, 2, 3, 5),
             reported: tcb(1, 2, 3, 4),
             committed: tcb(1, 2, 3, 4),
             launch: tcb(1, 2, 3, 4),
         };
-        let requirement = |product, advisory_id: &str, min_tcb| AmdSnpTcbRequirement {
-            product,
-            advisory_id: advisory_id.into(),
-            min_tcb,
-        };
-        let met = requirement(AmdSnpProduct::Milan, "AMD-SB-1", tcb(1, 2, 3, 4));
-        let unmet = requirement(AmdSnpProduct::Milan, "AMD-SB-2", tcb(1, 2, 3, 5));
-        let other = requirement(AmdSnpProduct::Genoa, "AMD-SB-3", tcb(9, 9, 9, 9));
+        // Milan and Milan-X, as AMD's bulletins print them.
+        let milan = AmdSnpCpuid::from_eax(0x00A0_0F11);
+        let milan_x = AmdSnpCpuid::from_eax(0x00A0_0F12);
+        assert_eq!((milan.family, milan.model, milan.stepping), (0x19, 0x01, 1));
+        assert_eq!(AmdSnpCpuid::from_eax(0x00AA_0F02).model, 0xa0);
+        for eax in [0x00A0_0F11, 0x00A0_0F12, 0x00AA_0F02, 0x00B0_0F21] {
+            assert_eq!(AmdSnpCpuid::from_eax(eax).to_string(), format!("{eax:08x}"));
+        }
+        let requirement = |cpuid, min_tcb| AmdSnpTcbRequirement { cpuid, min_tcb };
+        let met = requirement(milan, tcb(1, 2, 3, 4));
+        let unmet = requirement(milan, tcb(1, 2, 3, 5));
+        let other = requirement(milan_x, tcb(9, 9, 9, 9));
 
-        let assess =
-            |requirements: &[AmdSnpTcbRequirement]| info.assess(AmdSnpProduct::Milan, requirements);
-        assert_eq!(assess(&[]), (String::new(), vec![]));
-        assert_eq!(
-            assess(std::slice::from_ref(&other)),
-            (String::new(), vec![])
-        );
-        assert_eq!(assess(&[met.clone(), other]), ("UpToDate".into(), vec![]));
-        assert_eq!(
-            assess(&[met, unmet]),
-            ("OutOfDate".into(), vec!["AMD-SB-2".to_string()])
-        );
+        let assess = |requirements: &[AmdSnpTcbRequirement]| info.assess(milan, requirements);
+        assert_eq!(assess(&[]), None);
+        assert_eq!(assess(std::slice::from_ref(&other)), None);
+        assert_eq!(assess(&[met.clone(), other]), Some("UpToDate"));
+        assert_eq!(assess(&[met.clone(), unmet]), Some("OutOfDate"));
 
         let old_launch = AmdSnpTcbInfo {
             launch: tcb(1, 2, 3, 3),
             ..info
         };
-        let req = [requirement(
-            AmdSnpProduct::Milan,
-            "AMD-SB-1",
-            tcb(1, 2, 3, 4),
-        )];
-        assert_eq!(old_launch.assess(AmdSnpProduct::Milan, &req).0, "OutOfDate");
+        assert_eq!(old_launch.assess(milan, &[met]), Some("OutOfDate"));
     }
 
     #[test]

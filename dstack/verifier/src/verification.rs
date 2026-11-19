@@ -43,11 +43,9 @@ pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<Stri
         DstackVerifiedReport::DstackGcpTdx { tdx_report, .. } => {
             (tdx_report.status.clone(), tdx_report.advisory_ids.clone())
         }
-        // SNP has no vendor status; the verifier judges it against its
-        // configured TCB requirements.
-        DstackVerifiedReport::DstackAmdSevSnp(report) => {
-            (report.tcb_status.clone(), report.advisory_ids.clone())
-        }
+        // SNP has no vendor status or advisories; the verifier judges it
+        // against its configured TCB requirements.
+        DstackVerifiedReport::DstackAmdSevSnp(report) => (report.tcb_status.clone(), Vec::new()),
         // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
         // is normalized to "UpToDate" so the verifier's policy boot info matches
         // the KMS bootAuth payload and passes the shared "UpToDate" auth gate.
@@ -1184,15 +1182,15 @@ mod tests {
         }
     }
 
-    fn snp_report(tcb_status: &str, advisory_ids: &[&str]) -> VerifiedAmdSnpReport {
+    fn snp_report(tcb_status: &str) -> VerifiedAmdSnpReport {
         VerifiedAmdSnpReport {
+            cpuid: None,
             measurement: [0; 48],
             report_data: [0; 64],
             host_data: [0; 32],
             chip_id: [0; 64],
             tcb_info: AmdSnpTcbInfo::default(),
             tcb_status: tcb_status.into(),
-            advisory_ids: advisory_ids.iter().map(|id| id.to_string()).collect(),
         }
     }
 
@@ -1314,23 +1312,23 @@ mod tests {
                         cert_chain: Vec::new(),
                         mr_config: String::new(),
                     }),
-                    DstackVerifiedReport::DstackAmdSevSnp(snp_report("UpToDate", &[])),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report("UpToDate")),
                 ),
                 "UpToDate",
                 Vec::new(),
             ),
             (
-                "sev-snp-out-of-date-carries-advisories",
+                "sev-snp-out-of-date",
                 verified_attestation(
                     AttestationQuote::DstackAmdSevSnp(SnpQuote {
                         report: Vec::new(),
                         cert_chain: Vec::new(),
                         mr_config: String::new(),
                     }),
-                    DstackVerifiedReport::DstackAmdSevSnp(snp_report("OutOfDate", &advisories)),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report("OutOfDate")),
                 ),
                 "OutOfDate",
-                expected_advisories.clone(),
+                Vec::new(),
             ),
             (
                 // No TCB surface, but normalized to UpToDate so the verifier's

@@ -450,12 +450,12 @@ async fn an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed
 
 #[test]
 fn configured_tcb_requirements_judge_the_real_report() {
-    use dstack_attest::attestation::{SevSnpProduct, SevSnpTcbRequirement};
+    use dstack_attest::attestation::SevSnpTcbRequirement;
 
     let reported = verified_fixture_report().tcb_info.reported;
-    let requirement = |advisory_id: &str, microcode: u8| SevSnpTcbRequirement {
-        product: SevSnpProduct::Milan,
-        advisory_id: advisory_id.into(),
+    // The fixture's CPU is Milan.
+    let requirement = |cpuid: &str, microcode: u8| SevSnpTcbRequirement {
+        cpuid: cpuid.into(),
         bootloader: reported.bootloader,
         tee: reported.tee,
         snp: reported.snp,
@@ -471,20 +471,18 @@ fn configured_tcb_requirements_judge_the_real_report() {
                 &expected_report_data(),
             )
             .expect("verify SEV-SNP attestation offline")
+            .tcb_status
     };
 
-    let unconfigured = verify(&[]);
-    assert_eq!(unconfigured.tcb_status, "");
-    assert!(unconfigured.advisory_ids.is_empty());
-
-    let met = verify(&[requirement("AMD-SB-MET", reported.microcode)]);
-    assert_eq!(met.tcb_status, "UpToDate");
-    assert!(met.advisory_ids.is_empty());
-
-    let unmet = verify(&[
-        requirement("AMD-SB-MET", reported.microcode),
-        requirement("AMD-SB-UNMET", reported.microcode + 1),
-    ]);
-    assert_eq!(unmet.tcb_status, "OutOfDate");
-    assert_eq!(unmet.advisory_ids, ["AMD-SB-UNMET"]);
+    assert_eq!(verify(&[]), "");
+    assert_eq!(
+        verify(&[requirement("00a00f11", reported.microcode)]),
+        "UpToDate"
+    );
+    assert_eq!(
+        verify(&[requirement("00a00f11", reported.microcode + 1)]),
+        "OutOfDate"
+    );
+    // Milan-X's minimum says nothing about Milan.
+    assert_eq!(verify(&[requirement("00a00f12", reported.microcode)]), "");
 }

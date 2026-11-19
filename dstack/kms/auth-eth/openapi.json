@@ -198,6 +198,31 @@
           }
         }
       }
+    },
+    "/sevSnpTcbRequirements": {
+      "get": {
+        "summary": "Read the minimum TCB each CPU must meet on SEV-SNP",
+        "responses": {
+          "200": {
+            "description": "The JSON list the KMS parses; empty when governance sets none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "requirements"
+                  ],
+                  "properties": {
+                    "requirements": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

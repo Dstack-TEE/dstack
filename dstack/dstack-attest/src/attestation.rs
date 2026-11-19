@@ -59,57 +59,48 @@ pub struct AttestationVerifierConfig {
     #[serde(default)]
     pub allowed_collateral_hosts: Option<Vec<String>>,
     /// AMD SEV-SNP has no vendor TCB status, so it is judged against these
-    /// bulletins. A report below one lists it in `advisory_ids` and is
-    /// `OutOfDate`; with none for its product, its status is empty.
+    /// minimums. A report below the one for its CPU is `OutOfDate`; one whose
+    /// CPU has none carries an empty status.
     #[serde(default)]
     pub sev_snp_tcb_requirements: Vec<SevSnpTcbRequirement>,
 }
 
-/// The minimum TCB that fixes an AMD security bulletin on one product family.
+/// The minimum TCB of one CPU: the highest SVNs AMD's security bulletins
+/// require of it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SevSnpTcbRequirement {
-    pub product: SevSnpProduct,
-    pub advisory_id: String,
+    /// CPUID Fn0000_0001 EAX as the bulletins print it, in eight hex digits:
+    /// `00a00f11` is Milan and `00a00f12` Milan-X.
+    pub cpuid: String,
     pub bootloader: u8,
     pub tee: u8,
     pub snp: u8,
     pub microcode: u8,
-    /// Turin only.
+    /// Family 1Ah (Turin) only.
     #[serde(default)]
     pub fmc: Option<u8>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SevSnpProduct {
-    Milan,
-    Genoa,
-    Turin,
 }
 
 impl TryFrom<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
     type Error = anyhow::Error;
 
     fn try_from(value: &SevSnpTcbRequirement) -> Result<Self> {
+        let eax = u32::from_str_radix(&value.cpuid, 16)
+            .ok()
+            .filter(|_| value.cpuid.len() == 8)
+            .with_context(|| format!("sev_snp_tcb_requirements: invalid cpuid {}", value.cpuid))?;
+        let cpuid = sev_snp_qvl::AmdSnpCpuid::from_eax(eax);
+        // Only family 1Ah has an FMC SVN: an entry for it without one would
+        // pass any FMC, and an entry for another family with one would fail
+        // every report.
         anyhow::ensure!(
-            !value.advisory_id.trim().is_empty(),
-            "sev_snp_tcb_requirements entry has an empty advisory_id"
-        );
-        // Only Turin has an FMC SVN: a Turin entry without one would pass any
-        // FMC, and a Milan or Genoa entry with one would fail every report.
-        anyhow::ensure!(
-            matches!(value.product, SevSnpProduct::Turin) == value.fmc.is_some(),
-            "sev_snp_tcb_requirements {}: set fmc for turin, and only for turin",
-            value.advisory_id
+            (cpuid.family == 0x1a) == value.fmc.is_some(),
+            "sev_snp_tcb_requirements {}: set fmc for family 1Ah, and only for it",
+            value.cpuid
         );
         Ok(Self {
-            product: match value.product {
-                SevSnpProduct::Milan => sev_snp_qvl::AmdSnpProduct::Milan,
-                SevSnpProduct::Genoa => sev_snp_qvl::AmdSnpProduct::Genoa,
-                SevSnpProduct::Turin => sev_snp_qvl::AmdSnpProduct::Turin,
-            },
-            advisory_id: value.advisory_id.clone(),
+            cpuid,
             min_tcb: sev_snp_qvl::AmdSnpTcbVersion {
                 fmc: value.fmc,
                 bootloader: value.bootloader,
@@ -121,6 +112,13 @@ impl TryFrom<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
     }
 }
 
+/// Parse `sev_snp_tcb_requirements` from the JSON list governance publishes.
+pub fn sev_snp_tcb_requirements_from_json(
+    json: &str,
+) -> Result<Vec<sev_snp_qvl::AmdSnpTcbRequirement>> {
+    sev_snp_tcb_requirements(&serde_json::from_str::<Vec<SevSnpTcbRequirement>>(json)?)
+}
+
 fn sev_snp_tcb_requirements(
     requirements: &[SevSnpTcbRequirement],
 ) -> Result<Vec<sev_snp_qvl::AmdSnpTcbRequirement>> {
@@ -128,12 +126,13 @@ fn sev_snp_tcb_requirements(
     requirements
         .iter()
         .map(|requirement| {
+            let parsed = sev_snp_qvl::AmdSnpTcbRequirement::try_from(requirement)?;
             anyhow::ensure!(
-                seen.insert((requirement.product, requirement.advisory_id.as_str())),
-                "sev_snp_tcb_requirements lists {} twice for one product",
-                requirement.advisory_id
+                seen.insert(parsed.cpuid),
+                "sev_snp_tcb_requirements lists cpuid {} twice",
+                requirement.cpuid
             );
-            requirement.try_into()
+            Ok(parsed)
         })
         .collect()
 }
@@ -2773,9 +2772,8 @@ mod tests {
 
     #[test]
     fn sev_snp_tcb_requirements_are_checked_during_load() {
-        let requirement = |product, advisory_id: &str, fmc| SevSnpTcbRequirement {
-            product,
-            advisory_id: advisory_id.into(),
+        let requirement = |cpuid: &str, fmc| SevSnpTcbRequirement {
+            cpuid: cpuid.into(),
             bootloader: 1,
             tee: 1,
             snp: 1,
@@ -2790,23 +2788,17 @@ mod tests {
             .err()
             .map(|err| err.to_string())
         };
-        let milan = requirement(SevSnpProduct::Milan, "AMD-SB-1", None);
-        let turin = requirement(SevSnpProduct::Turin, "AMD-SB-1", Some(1));
-        assert_eq!(load(vec![milan.clone(), turin.clone()]), None);
+        let milan = requirement("00a00f11", None);
+        let milan_x = requirement("00A00F12", None);
+        let turin = requirement("00b00f21", Some(1));
+        assert_eq!(load(vec![milan.clone(), milan_x, turin]), None);
 
         for (requirements, expected) in [
-            (
-                vec![requirement(SevSnpProduct::Turin, "AMD-SB-2", None)],
-                "only for turin",
-            ),
-            (
-                vec![requirement(SevSnpProduct::Genoa, "AMD-SB-2", Some(1))],
-                "only for turin",
-            ),
-            (
-                vec![requirement(SevSnpProduct::Milan, " ", None)],
-                "empty advisory_id",
-            ),
+            (vec![requirement("00b00f21", None)], "only for it"),
+            (vec![requirement("00a10f11", Some(1))], "only for it"),
+            (vec![requirement("milan", None)], "invalid cpuid"),
+            (vec![requirement("0x00a00f11", None)], "invalid cpuid"),
+            (vec![requirement("a00f11", None)], "invalid cpuid"),
             (vec![milan.clone(), milan], "twice"),
         ] {
             let error = load(requirements).unwrap_or_default();
