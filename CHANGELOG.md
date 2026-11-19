@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set both paths. The on-disk layout is not read from older versions, so
   upgrade by onboarding a new KMS, as before.
 
+- **SEV-SNP verification fetches AMD's CRL.** Every SNP verification now
+  needs AMD KDS, or the configured mirror, to serve `<product>/crl`, including
+  evidence that carries its own certificates and used to verify offline. A
+  mirror that serves only `cert_chain` and VCEKs fails every SNP verification
+  as unavailable collateral until it serves the CRL too.
+
 ### Changed
 
 - KMS: each root epoch keeps the attestation produced when its keys were

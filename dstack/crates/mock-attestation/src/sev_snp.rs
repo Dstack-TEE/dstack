@@ -6,8 +6,9 @@ use anyhow::Result;
 use p384::ecdsa::{signature::DigestSigner, Signature as P384Signature, SigningKey};
 use p384::pkcs8::DecodePrivateKey;
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, CertifiedKey, CustomExtension, DnType, IsCa,
-    KeyPair, KeyUsagePurpose,
+    BasicConstraints, Certificate, CertificateParams, CertificateRevocationListParams,
+    CertifiedKey, CustomExtension, DnType, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose,
+    SerialNumber,
 };
 use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha384};
@@ -21,6 +22,7 @@ pub struct SevSnpGenerator {
     ask: Certificate,
     vcek: Certificate,
     vcek_key: KeyPair,
+    crl: Vec<u8>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -66,12 +68,25 @@ impl SevSnpGenerator {
             )
         }));
         let vcek = params.signed_by(&vcek_key, &ask, &ask_key)?;
+        let now = OffsetDateTime::now_utc();
+        let crl = CertificateRevocationListParams {
+            this_update: now - Duration::days(1),
+            next_update: now + Duration::days(30),
+            crl_number: SerialNumber::from(1),
+            issuing_distribution_point: None,
+            revoked_certs: Vec::new(),
+            key_identifier_method: KeyIdMethod::Sha256,
+        }
+        .signed_by(&root, &root_key)?
+        .der()
+        .to_vec();
         Ok(Self {
             root,
             root_key,
             ask,
             vcek,
             vcek_key,
+            crl,
         })
     }
 
@@ -85,6 +100,10 @@ impl SevSnpGenerator {
 
     pub fn ca_chain_pem(&self) -> Vec<u8> {
         format!("{}{}", self.ask.pem(), self.root.pem()).into_bytes()
+    }
+
+    pub fn crl_der(&self) -> Vec<u8> {
+        self.crl.clone()
     }
 
     pub fn vcek_der(&self) -> Vec<u8> {

@@ -103,3 +103,28 @@ async fn malformed_certificate_is_not_a_dependency_outage() {
     assert!(!collateral_unavailable(&error), "{error:#}");
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn an_unusable_crl_is_unavailable_collateral_and_is_refetched() {
+    // Two error pages served as 200: the second is only requested if the
+    // first was not kept in the cache.
+    let (url, server) = mock_kds(vec![
+        ("200 OK", b"<html>maintenance</html>"),
+        ("200 OK", b"<html>maintenance</html>"),
+    ])
+    .await;
+    let client = AmdKdsClient::with_base_url(url).unwrap();
+    let verifier = QuoteVerifier::new_prod();
+    let ask = CertBytes {
+        bytes: builtin::milan::ASK.to_vec(),
+        encoding: CertEncoding::Pem,
+    };
+    for _ in 0..2 {
+        let err = verifier
+            .check_ask_not_revoked(&client, AmdSnpProduct::Milan, &ask)
+            .await
+            .unwrap_err();
+        assert!(collateral_unavailable(&err), "{err:#}");
+    }
+    server.await.unwrap();
+}
