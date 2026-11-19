@@ -63,6 +63,34 @@ contract UpgradesWithPluginTest is Test {
         assertTrue(app.allowedDeviceIdsAtEpoch(0, deviceId));
     }
 
+    function test_ReleasedKmsDeploysAppsOnceItsAppImplementationIsCurrent() public {
+        vm.startPrank(owner);
+        address releasedApp = deployCode("DstackAppV060.sol:DstackApp");
+        address proxy = Upgrades.deployUUPSProxy(
+            "DstackKmsV060.sol:DstackKms", abi.encodeWithSignature("initialize(address,address)", owner, releasedApp)
+        );
+        Options memory opts;
+        opts.referenceContract = kmsReleases[1];
+        Upgrades.upgradeProxy(proxy, "DstackKms.sol", "", opts);
+        DstackKms kms = DstackKms(proxy);
+
+        // A released DstackApp cannot deploy proxies of itself.
+        vm.expectRevert();
+        kms.deployAndRegisterApp(owner, false, false, true, bytes32(0), bytes32(0));
+
+        // UpgradeKms points the upgraded proxy at a current one.
+        kms.setAppImplementation(address(new DstackApp()));
+        address appId = kms.deployAndRegisterApp(owner, false, true, true, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        assertTrue(kms.registeredApps(appId));
+        assertEq(DstackApp(appId).owner(), owner);
+        assertTrue(DstackApp(appId).requireTcbUpToDate());
+
+        // An app proxy does not deploy proxies.
+        vm.expectRevert(UUPSUpgradeable.UUPSUnauthorizedCallContext.selector);
+        DstackApp(appId).deployProxy("");
+    }
+
     function attemptKmsUpgrade(address proxy) external {
         Upgrades.upgradeProxy(proxy, "contracts/test-utils/DstackKmsV2.sol:DstackKmsV2", "");
     }

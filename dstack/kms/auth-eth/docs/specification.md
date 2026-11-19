@@ -295,14 +295,15 @@ KMS calls `IAppAuth(b.appId).isAppAllowed(b)` after confirming
 
 ### 5.2 KMS ↔ Proxy (factory deploy)
 
-`deployAndRegisterApp` calls `new ERC1967Proxy(appImplementation, initData)`.
-The proxy constructor delegatecalls into the implementation's initialize
-function. Assumptions:
+`deployAndRegisterApp` calls `DstackApp(appImplementation).deployProxy(initData)`,
+which runs `new ERC1967Proxy(address(this), initData)` and refuses to run
+through a proxy. The proxy constructor delegatecalls into the implementation's
+initialize function. Assumptions:
 
 - The constructor runs `initialize` exactly once on the new proxy.
 - `appImplementation` is a contract conforming to `DstackApp`'s storage
-  layout. Setting it to anything else is the owner's prerogative; the
-  spec does not constrain it beyond non-zero.
+  layout and exposing `deployProxy`. Setting it to anything else is the
+  owner's prerogative; the spec does not constrain it beyond non-zero.
 
 ### 5.3 App ↔ Proxy (upgrade authorization)
 

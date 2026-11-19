@@ -360,6 +360,11 @@ KMS_CONTRACT_ADDR=0x... \
 forge script script/Upgrade.s.sol:UpgradeKms --broadcast --rpc-url $RPC_URL --ffi
 ```
 
+`DstackKms` deploys apps through its `appImplementation`, which must be a
+current `DstackApp`. The script deploys one and sets it in the same upgrade
+call. If you upgrade another way, also call `setAppImplementation` with a
+current `DstackApp`; until then, `deployAndRegisterApp` reverts.
+
 #### Upgrade App
 ```bash
 APP_CONTRACT_ADDR=0x... \

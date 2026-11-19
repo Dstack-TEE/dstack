@@ -10,12 +10,12 @@ import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
 import "./TeeVariantPolicy.sol";
+import "./DstackApp.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
-import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
@@ -407,15 +407,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             initialComposeHash
         );
 
-        // The ERC1967Proxy constructor delegatecalls into `appImplementation`'s
-        // initializer. The owner sets `appImplementation` via
+        // `appImplementation` deploys an ERC1967Proxy of itself, whose
+        // constructor delegatecalls into its initializer. The owner sets `appImplementation` via
         // setAppImplementation; safety here rests on owner trust, not on a
         // structural reentrancy impossibility — a malicious owner could in
         // principle install an impl whose `initialize` reenters this contract.
         // See docs/specification.md §1 for the owner trust scope and §6.1 for
         // the malicious-registered-app threat model.
         // slither-disable-next-line reentrancy-benign,reentrancy-events
-        appId = address(new ERC1967Proxy(appImplementation, initData));
+        appId = DstackApp(appImplementation).deployProxy(initData);
         registerApp(appId);
         emit AppDeployedViaFactory(appId, msg.sender);
     }

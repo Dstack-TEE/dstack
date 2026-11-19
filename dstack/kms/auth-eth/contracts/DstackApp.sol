@@ -15,6 +15,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DstackApp is
@@ -407,6 +408,13 @@ contract DstackApp is
         }
 
         return (true, "");
+    }
+
+    /// @notice Deploy a proxy of this implementation, initialized with `initData`. {DstackKms} deploys apps
+    /// through its `appImplementation`, so it does not carry the proxy's creation code. Anyone may call it, as
+    /// anyone may deploy a proxy themselves; it refuses to run through a proxy.
+    function deployProxy(bytes calldata initData) external notDelegated returns (address) {
+        return address(new ERC1967Proxy(address(this), initData));
     }
 
     /// Advance only from the epoch the owner intended, rejecting stale transactions.
