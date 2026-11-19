@@ -181,6 +181,58 @@ async def test_async_v1_get_key_rejects_epochs_other_than_requested(monkeypatch)
     assert (key.root_epoch, key.app_epoch) == (1, 2)
 
 
+@pytest.mark.asyncio
+async def test_async_v1_get_key_epoch_wire_names_and_defaults(monkeypatch):
+    payloads = []
+
+    async def fake_send(self, method, payload):
+        assert method == "GetKey"
+        payloads.append(payload)
+        return {
+            "key": "aa" * 32,
+            "public_key": "bb" * 33,
+            "signature_chain": [],
+            **{
+                name: payload[name]
+                for name in ("root_epoch", "app_epoch")
+                if name in payload
+            },
+        }
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClientV1, "_send_rpc_request", fake_send)
+    client = AsyncDstackClientV1()
+    current = await client.get_key("d", "secp256k1")
+    explicit = await client.get_key("d", "secp256k1", 0xFFFFFFFF, 0)
+
+    assert (current.root_epoch, current.app_epoch) == (0, 0)
+    assert (explicit.root_epoch, explicit.app_epoch) == (0xFFFFFFFF, 0)
+    assert payloads == [
+        {"domain": "d", "algorithm": "secp256k1"},
+        {
+            "domain": "d",
+            "algorithm": "secp256k1",
+            "root_epoch": 0xFFFFFFFF,
+            "app_epoch": 0,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("epoch", [-1, 2**32, 0.5, "1", True])
+async def test_async_v1_get_key_request_epochs_are_uint32(monkeypatch, epoch):
+    async def unexpected_send(self, method, payload):
+        pytest.fail("unexpected RPC request")
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClientV1, "_send_rpc_request", unexpected_send)
+    client = AsyncDstackClientV1()
+    with pytest.raises(ValueError, match="root_epoch must be a uint32"):
+        await client.get_key("d", "secp256k1", epoch)
+    with pytest.raises(ValueError, match="app_epoch must be a uint32"):
+        await client.get_key("d", "secp256k1", app_epoch=epoch)
+
+
 def test_v1_keys_differ_from_v0_keys():
     """No compatibility mode: the same name yields different key material."""
     v0 = DstackClientV0().get_key("storage-encryption", "")
@@ -414,6 +466,36 @@ def test_v1_malformed_chain_link_is_rejected():
         GetKeyResponseV1(
             key="aa" * 32, public_key="bb" * 33, signature_chain=["aabb", "qq"]
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("root_epoch", -1),
+        ("root_epoch", 2**32),
+        ("root_epoch", 0.5),
+        ("root_epoch", "1"),
+        ("root_epoch", True),
+        ("root_epoch", None),
+        ("app_epoch", -1),
+        ("app_epoch", 2**32),
+        ("app_epoch", 0.5),
+        ("app_epoch", "1"),
+        ("app_epoch", True),
+        ("app_epoch", None),
+    ],
+)
+def test_v1_get_key_response_epochs_are_uint32(field, value):
+    response = {
+        "key": "aa" * 32,
+        "public_key": "bb" * 33,
+        "signature_chain": [],
+        "root_epoch": 0,
+        "app_epoch": 0,
+        field: value,
+    }
+    with pytest.raises(ValidationError, match="uint32"):
+        GetKeyResponseV1(**response)
 
 
 def test_v1_absent_identity_hashes_are_empty():
