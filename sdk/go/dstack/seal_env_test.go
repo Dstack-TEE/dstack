@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -99,6 +101,66 @@ func TestSealEnvRoundTripAndBinding(t *testing.T) {
 					t.Fatal("accepted tampered encapsulation")
 				}
 			})
+		})
+	}
+}
+
+func TestSealedEnvFixturesOpenWithEnvelopeEpochs(t *testing.T) {
+	for _, producer := range []string{"python", "javascript"} {
+		t.Run(producer, func(t *testing.T) {
+			data, err := os.ReadFile("../../fixtures/sealed-env/" + producer + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixture struct {
+				PrivateKey string          `json:"private_key"`
+				Env        []dstack.EnvVar `json:"env"`
+				SealedEnv  struct {
+					Version    uint32 `json:"version"`
+					RootEpoch  uint32 `json:"root_epoch"`
+					AppEpoch   uint32 `json:"app_epoch"`
+					Enc        []byte `json:"enc"`
+					Ciphertext []byte `json:"ciphertext"`
+				} `json:"sealed_env"`
+			}
+			if err := json.Unmarshal(data, &fixture); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.SealedEnv.Version != 1 || fixture.SealedEnv.RootEpoch != 3 || fixture.SealedEnv.AppEpoch != 0 {
+				t.Fatalf("unexpected fixture envelope: %+v", fixture.SealedEnv)
+			}
+
+			privateKeyBytes, err := hex.DecodeString(fixture.PrivateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			privateKey, err := hpke.KEM_X25519_HKDF_SHA256.Scheme().UnmarshalBinaryPrivateKey(privateKeyBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			suite := hpke.NewSuite(hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES256GCM)
+			info := fmt.Sprintf("dstack-sealed-env-v1:%d:%d", fixture.SealedEnv.RootEpoch, fixture.SealedEnv.AppEpoch)
+			receiver, err := suite.NewReceiver(privateKey, []byte(info))
+			if err != nil {
+				t.Fatal(err)
+			}
+			opener, err := receiver.Setup(fixture.SealedEnv.Enc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plaintext, err := opener.Open(fixture.SealedEnv.Ciphertext, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var opened struct {
+				Env []dstack.EnvVar `json:"env"`
+			}
+			if err := json.Unmarshal(plaintext, &opened); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(opened.Env, fixture.Env) {
+				t.Errorf("opened env %v, want %v", opened.Env, fixture.Env)
+			}
 		})
 	}
 }
