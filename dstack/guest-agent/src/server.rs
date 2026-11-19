@@ -4,6 +4,7 @@
 
 use std::{future::pending, os::unix::net::UnixListener as StdUnixListener, time::Duration};
 
+use crate::access_log::{AccessLog, WATCHDOG_PROBE_PATH};
 use crate::api_auth::ScopeFairing;
 use crate::config::BindAddr;
 use crate::guest_api_service::GuestApiHandler;
@@ -39,6 +40,7 @@ async fn run_internal_v0(
             "/prpc/",
             ra_rpc::prpc_routes!(AppState, InternalRpcHandlerV0, trim: "Tappd."),
         )
+        .attach(AccessLog::new("tappd.sock"))
         .manage(state);
     let ignite = rocket
         .ignite()
@@ -133,7 +135,9 @@ async fn run_internal(
     activated_socket: Option<StdUnixListener>,
     sock_ready_tx: oneshot::Sender<()>,
 ) -> Result<()> {
-    let rocket = mount_internal(rocket::custom(figment)).manage(state);
+    let rocket = mount_internal(rocket::custom(figment))
+        .attach(AccessLog::new("dstack.sock"))
+        .manage(state);
     let ignite = rocket
         .ignite()
         .await
@@ -182,6 +186,10 @@ async fn run_external(state: AppState, figment: Figment) -> Result<()> {
         .mount("/", http_routes::external_routes(state.config()))
         // Where `ScopeFairing` rewrites a denied request.
         .mount("/", dstack_api_auth::routes())
+        // Before `ScopeFairing`, so a refused request is logged under the path
+        // it asked for rather than the 401 route it was rewritten to. The
+        // query is kept: tokens travel in the header, never in the query.
+        .attach(AccessLog::with_query("external"))
         .attach(ScopeFairing::new(state.clone()))
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
@@ -199,6 +207,7 @@ async fn run_external(state: AppState, figment: Figment) -> Result<()> {
 async fn run_guest_api(state: AppState, figment: Figment) -> Result<()> {
     let rocket = rocket::custom(figment)
         .mount("/api", ra_rpc::prpc_routes!(AppState, GuestApiHandler))
+        .attach(AccessLog::with_query("guest-api"))
         .manage(state);
 
     let ignite = rocket
@@ -241,7 +250,7 @@ async fn run_watchdog(port: u16) {
     info!("Watchdog enabled, interval={watchdog_usec}us, heartbeat={heatbeat_interval:?}");
     let mut interval = tokio::time::interval(heatbeat_interval);
 
-    let probe_url = format!("http://localhost:{port}/prpc/Worker.Version");
+    let probe_url = format!("http://localhost:{port}{WATCHDOG_PROBE_PATH}");
     // Built once: the loop runs every few seconds for the process's lifetime,
     // and a fresh client per tick leaks a connection pool each time.
     // Idle connections are not pooled: the server drops a keep-alive
