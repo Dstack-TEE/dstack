@@ -20,7 +20,7 @@ async fn endpoint(routes: Router) -> String {
 #[tokio::test]
 async fn legacy_keys_still_work_but_cannot_silently_ignore_new_options() {
     // An agent without Version can return its default key or certificate even
-    // if the caller requested a different algorithm or an explicit expiry.
+    // if the caller requested an explicit expiry.
     let routes = Router::new()
         .route(
             "/GetKey",
@@ -33,10 +33,6 @@ async fn legacy_keys_still_work_but_cannot_silently_ignore_new_options() {
     let client = DstackClientV0::new(Some(&endpoint(routes).await));
 
     assert_eq!(client.get_key(None, None).await.unwrap().key, "ab");
-    assert!(client
-        .get_key_with_algorithm(None, None, "ed25519")
-        .await
-        .is_err());
 
     assert_eq!(
         client

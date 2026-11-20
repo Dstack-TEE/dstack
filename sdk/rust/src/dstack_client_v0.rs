@@ -234,18 +234,7 @@ impl DstackClientV0 {
         path: Option<String>,
         purpose: Option<String>,
     ) -> Result<GetKeyResponse> {
-        self.get_key_with_algorithm(path, purpose, "secp256k1")
-            .await
-    }
-
-    /// Derive a key using the requested algorithm, such as `ed25519`.
-    pub async fn get_key_with_algorithm(
-        &self,
-        path: Option<String>,
-        purpose: Option<String>,
-        algorithm: &str,
-    ) -> Result<GetKeyResponse> {
-        self.request_key(path, purpose, algorithm, None, None).await
+        self.get_key_at_epochs(path, purpose, None, None).await
     }
 
     /// [`Self::get_key`] under the given KMS root and application key epochs;
@@ -258,26 +247,10 @@ impl DstackClientV0 {
         root_epoch: Option<u32>,
         app_epoch: Option<u32>,
     ) -> Result<GetKeyResponse> {
-        self.request_key(path, purpose, "secp256k1", root_epoch, app_epoch)
-            .await
-    }
-
-    async fn request_key(
-        &self,
-        path: Option<String>,
-        purpose: Option<String>,
-        algorithm: &str,
-        root_epoch: Option<u32>,
-        app_epoch: Option<u32>,
-    ) -> Result<GetKeyResponse> {
-        if !matches!(algorithm, "" | "k256" | "secp256k1") {
-            self.ensure_version_rpc(&format!("algorithm {algorithm:?}"))
-                .await?;
-        }
         let mut data = json!({
             "path": path.unwrap_or_default(),
             "purpose": purpose.unwrap_or_default(),
-            "algorithm": algorithm,
+            "algorithm": "secp256k1", // Default or specify as needed
         });
         if let Some(root_epoch) = root_epoch {
             data["root_epoch"] = root_epoch.into();
