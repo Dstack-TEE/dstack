@@ -654,3 +654,52 @@ func TestV0RemainsAvailableUnderItsExplicitName(t *testing.T) {
 		t.Error("expected the v0 client to reach the simulator")
 	}
 }
+
+// A key from other epochs than the requested ones must not pass as them,
+// including from an agent too old to report its epochs at all.
+func TestGetKeyAtEpochsRejectsUnrequestedEpochs(t *testing.T) {
+	agent := func(epochs map[string]interface{}) *dstack.DstackClientV0 {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body := map[string]interface{}{"key": strings.Repeat("aa", 32), "signature_chain": []string{}}
+			for k, v := range epochs {
+				body[k] = v
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(body)
+		}))
+		t.Cleanup(server.Close)
+		return dstack.NewDstackClientV0(dstack.WithEndpoint(server.URL))
+	}
+	client := agent(map[string]interface{}{"root_epoch": 1, "app_epoch": 2})
+	oldAgent := agent(nil)
+	epoch := func(e uint32) *uint32 { return &e }
+
+	for _, tc := range []struct {
+		client    *dstack.DstackClientV0
+		root, app *uint32
+	}{
+		{client, epoch(0), nil},
+		{client, nil, epoch(1)},
+		{client, epoch(1), epoch(3)},
+		{oldAgent, epoch(0), nil},
+	} {
+		_, err := tc.client.GetKeyAtEpochs(context.Background(), "d", "", "secp256k1", tc.root, tc.app)
+		if err == nil || !strings.Contains(err.Error(), "different epochs than requested") {
+			t.Errorf("root %v app %v: expected an epoch mismatch error, got %v", tc.root, tc.app, err)
+		}
+	}
+	resp, err := client.GetKeyAtEpochs(context.Background(), "d", "", "secp256k1", epoch(1), epoch(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *resp.RootEpoch != 1 || *resp.AppEpoch != 2 {
+		t.Errorf("unexpected epochs: root %d app %d", *resp.RootEpoch, *resp.AppEpoch)
+	}
+	resp, err = oldAgent.GetKey(context.Background(), "d", "", "secp256k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.RootEpoch != nil || resp.AppEpoch != nil {
+		t.Error("an agent without epoch fields must leave them nil")
+	}
+}

@@ -60,6 +60,12 @@ pub struct GetKeyResponse {
     pub key: String,
     /// The chain of signatures verifying the key
     pub signature_chain: Vec<String>,
+    /// KMS root key epoch the key was derived from; absent from older agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch: Option<u32>,
+    /// Application key epoch the key was derived from; absent from older agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_epoch: Option<u32>,
 }
 
 impl GetKeyResponse {

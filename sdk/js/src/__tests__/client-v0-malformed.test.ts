@@ -45,6 +45,23 @@ describe('DstackClientV0.getKey', () => {
     })
   })
 
+  it('rejects a key from other epochs than the requested ones', async () => {
+    await withAgentAnswering({ key: KEY, signature_chain: CHAIN, root_epoch: 1, app_epoch: 2 }, async client => {
+      for (const [rootEpoch, appEpoch] of [[0, undefined], [undefined, 1], [1, 3]]) {
+        await expect(client.getKey('d', '', 'secp256k1', rootEpoch, appEpoch))
+          .rejects.toThrow(/different epochs than requested/)
+      }
+      const response = await client.getKey('d', '', 'secp256k1', 1, 2)
+      expect([response.root_epoch, response.app_epoch]).toEqual([1, 2])
+    })
+    // An agent older than the epoch fields ignores the selectors.
+    await withAgentAnswering({ key: KEY, signature_chain: CHAIN }, async client => {
+      await expect(client.getKey('d', '', 'secp256k1', 0)).rejects.toThrow(/different epochs than requested/)
+      const response = await client.getKey('d')
+      expect([response.root_epoch, response.app_epoch]).toEqual([undefined, undefined])
+    })
+  })
+
   it('reads an empty key as zero bytes', async () => {
     await withAgentAnswering({ key: '', signature_chain: [] }, async client => {
       expect((await client.getKey('d')).key).toEqual(new Uint8Array(0))
