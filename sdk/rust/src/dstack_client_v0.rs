@@ -229,11 +229,16 @@ impl DstackClientV0 {
         Ok(())
     }
 
-    /// Derive a secp256k1 key, by default under this CVM's current key epochs.
+    /// Derive a key, by default secp256k1 under this CVM's current key epochs.
+    ///
+    /// An agent without the `Version` RPC ignores the algorithm and returns a
+    /// secp256k1 key, so any other algorithm is refused on such an agent.
     pub async fn get_key(&self, config: GetKeyConfig) -> Result<GetKeyResponse> {
-        let mut data = serde_json::to_value(&config)?;
-        data["algorithm"] = "secp256k1".into();
-        let response = self.send_rpc_request("/GetKey", &data).await?;
+        if !matches!(config.algorithm.as_str(), "secp256k1" | "k256" | "") {
+            self.ensure_version_rpc(&format!("algorithm {}", config.algorithm))
+                .await?;
+        }
+        let response = self.send_rpc_request("/GetKey", &config).await?;
         let response = serde_json::from_value::<GetKeyResponse>(response)?;
         // An agent older than the epoch fields ignores the selectors and omits them.
         if config

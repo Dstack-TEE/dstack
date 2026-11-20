@@ -35,12 +35,12 @@ pub struct EventLog {
     pub preimage: Option<String>,
 }
 
-/// Configuration for a `GetKey` request. The key is always secp256k1; use the
-/// v1 client for ed25519.
+/// Configuration for a `GetKey` request.
 ///
 /// ```
 /// # use dstack_sdk_types::dstack_v0::GetKeyConfig;
 /// let current = GetKeyConfig::builder().path("wallet/ethereum").build();
+/// let ed25519 = GetKeyConfig::builder().path("solana").algorithm("ed25519").build();
 /// // The key from before a KMS key rotation, to migrate off it.
 /// let original = GetKeyConfig::builder()
 ///     .path("wallet/ethereum")
@@ -58,6 +58,10 @@ pub struct GetKeyConfig {
     /// The purpose recorded in the first link of the signature chain
     #[builder(into, default = String::new())]
     pub purpose: String,
+    /// `secp256k1` (alias `k256`) or `ed25519`. Both derive from the same
+    /// secret, so the algorithm only selects how the key is encoded.
+    #[builder(into, default = String::from("secp256k1"))]
+    pub algorithm: String,
     /// KMS root key epoch to derive from; unset is the current one. Name an
     /// older epoch only to reach a key from before a KMS key rotation, for
     /// example to migrate off it.

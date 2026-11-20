@@ -63,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - sdk/rust (breaking): `TappdTcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now
   `Option<String>` to support non-TDX guests. Persisted Borsh values must be
   decoded with the old layout before re-encoding. Rust v0 now requires an
-  agent with the `Version` RPC (dstack 0.5.7 or newer) to request certificate
-  validity overrides or application info in TLS certificates.
+  agent with the `Version` RPC (dstack 0.5.7 or newer) to request Ed25519 keys,
+  certificate validity overrides, or application info in TLS certificates.
   Default requests are unchanged.
 - sdk/js (breaking): v0 and Tappd `TcbInfo` measurement fields `mrtd` and
   `rtmr0`-`rtmr3` are typed as `string | null`, matching non-TDX responses.
@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - sdk/python (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now `Optional[str]`
 - sdk/rust (breaking): v0 and v1 `get_key` take a `GetKeyConfig` built with
   `GetKeyConfig::builder()`, which also carries the optional `root_epoch` and
-  `app_epoch`. Replace v0 `get_key(Some(path), None)` with
+  `app_epoch`, and for v0 the `algorithm`. Replace v0 `get_key(Some(path), None)` with
   `get_key(GetKeyConfig::builder().path(path).build())`, and v1
   `get_key(domain, algorithm)` with
   `get_key(GetKeyConfig::builder().domain(domain).algorithm(algorithm).build())`.

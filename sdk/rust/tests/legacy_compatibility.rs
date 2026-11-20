@@ -40,6 +40,10 @@ async fn legacy_keys_still_work_but_cannot_silently_ignore_new_options() {
             .key,
         "ab"
     );
+    assert!(client
+        .get_key(GetKeyConfig::builder().algorithm("ed25519").build())
+        .await
+        .is_err());
 
     assert_eq!(
         client
