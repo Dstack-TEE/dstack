@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Context, Result};
-use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
+use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider, SysConfig};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::cert::{generate_ra_cert, CaCert, CertSigningRequestV2};
@@ -75,6 +75,38 @@ impl CertRequestClient {
                 Ok(response.certificate_chain)
             }
         }
+    }
+
+    /// Fetch app keys from the startup KMS, using its current epochs for omitted selectors.
+    pub async fn get_app_key(
+        &self,
+        root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
+    ) -> Result<AppKeyResponse> {
+        let CertRequestClient::Kms {
+            client,
+            vm_config,
+            launch_ticket,
+        } = self
+        else {
+            bail!("only KMS-provided keys have older root epochs");
+        };
+        let response = client
+            .get_app_key(GetAppKeyRequest {
+                api_version: 1,
+                vm_config: vm_config.clone(),
+                root_epoch,
+                app_epoch,
+                launch_ticket: launch_ticket.clone(),
+            })
+            .await?;
+        if root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
+            bail!("KMS returned a different root epoch than requested");
+        }
+        if app_epoch.is_some_and(|epoch| epoch != response.app_epoch) {
+            bail!("KMS returned a different app epoch than requested");
+        }
+        Ok(response)
     }
 
     pub async fn get_root_ca(&self) -> Result<String> {
