@@ -10,6 +10,7 @@ from importlib.metadata import version as _pkg_version
 import json
 import logging
 import os
+from typing import Annotated
 from typing import Any
 from typing import Dict
 from typing import Generic
@@ -21,6 +22,7 @@ import warnings
 
 import httpx
 from pydantic import BaseModel
+from pydantic import BeforeValidator
 
 logger = logging.getLogger("dstack_sdk")
 
@@ -126,12 +128,23 @@ class GetTlsKeyResponse(BaseModel):
             return bytes(result)
 
 
+def _decode_uint32(value: Any) -> int:
+    """Reject JSON values a protobuf ``uint32`` cannot carry."""
+    if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
+        raise ValueError("expected a uint32")
+    return value
+
+
+#: A protobuf ``uint32`` field, with no JSON coercion.
+_Uint32 = Annotated[int, BeforeValidator(_decode_uint32)]
+
+
 class GetKeyResponse(BaseModel):
     key: str
     signature_chain: List[str]
     # Key epochs the key was derived from; None from agents older than these fields.
-    root_epoch: Optional[int] = None
-    app_epoch: Optional[int] = None
+    root_epoch: Optional[_Uint32] = None
+    app_epoch: Optional[_Uint32] = None
 
     def decode_key(self) -> bytes:
         return bytes.fromhex(self.key)

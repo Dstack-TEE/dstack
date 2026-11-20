@@ -7,6 +7,7 @@ import os
 import warnings
 
 from evidence_api.tdx.quote import TdxQuote
+from pydantic import ValidationError
 import pytest
 
 from dstack_sdk import AsyncDstackClientV0
@@ -782,3 +783,9 @@ async def test_get_key_rejects_epochs_other_than_requested(monkeypatch):
         await client.get_key("d", "", "secp256k1", root_epoch=0)
     key = await client.get_key("d")
     assert (key.root_epoch, key.app_epoch) == (None, None)
+
+
+@pytest.mark.parametrize("value", ["0", True, 1.0, -1, 2**32])
+def test_get_key_response_epochs_are_uint32(value):
+    with pytest.raises(ValidationError, match="uint32"):
+        GetKeyResponse(key="aa" * 32, signature_chain=[], root_epoch=value)

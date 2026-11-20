@@ -30,6 +30,7 @@ from pydantic import PlainSerializer
 
 from .dstack_client_v0 import AsyncBaseClient
 from .dstack_client_v0 import BaseClient
+from .dstack_client_v0 import _Uint32
 from .dstack_client_v0 import call_async
 
 #: An even number of hex digits, and nothing else.
@@ -71,13 +72,6 @@ def _decode_hex(value: Any) -> Any:
     return value
 
 
-def _decode_uint32(value: Any) -> int:
-    """Reject JSON values a protobuf ``uint32`` cannot carry."""
-    if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
-        raise ValueError("expected a uint32")
-    return value
-
-
 #: A protobuf ``bytes`` field: lowercase hex on the wire, ``bytes`` in Python.
 #:
 #: v0 exposed these as ``str`` with a ``decode_*`` helper beside them, which
@@ -94,9 +88,6 @@ HexBytes = Annotated[
     BeforeValidator(_decode_hex),
     PlainSerializer(lambda value: value.hex(), return_type=str, when_used="json"),
 ]
-
-#: A protobuf ``uint32`` field, with no JSON coercion.
-_Uint32 = Annotated[int, BeforeValidator(_decode_uint32)]
 
 
 class IssueCertResponseV1(BaseModel):
