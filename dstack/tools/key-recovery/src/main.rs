@@ -35,18 +35,12 @@ use dstack_types::shared_filenames::{host_shared_dir, APP_KEYS, SYS_CONFIG};
 use dstack_types::{AppKeys, KeyProvider, SysConfig, VmConfig};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
-use ra_tls::api_v1::{
-    derive_app_key, key_claim, sign_recoverable_keccak256, KeyAlgorithm,
-};
+use ra_tls::api_v1::{derive_app_key, key_claim, sign_recoverable_keccak256, KeyAlgorithm};
 use ra_tls::cert::generate_self_signed_ra_cert;
 use ra_tls::kdf::derive_key;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 #[derive(Parser)]
@@ -588,8 +582,14 @@ async fn cmd_info(args: InfoArgs) -> Result<()> {
             "guest_version:       {}",
             info["guest_version"].as_str().unwrap_or("unknown")
         );
-        println!("api:                 {}", info["api"].as_str().unwrap_or("?"));
-        println!("kms_url:             {}", info["kms_url"].as_str().unwrap_or("?"));
+        println!(
+            "api:                 {}",
+            info["api"].as_str().unwrap_or("?")
+        );
+        println!(
+            "kms_url:             {}",
+            info["kms_url"].as_str().unwrap_or("?")
+        );
         println!(
             "current_root_epoch:  {}",
             info["current_root_epoch"].as_u64().unwrap_or(0)
