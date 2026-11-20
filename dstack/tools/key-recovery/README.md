@@ -22,6 +22,10 @@ app used, because the same name produces a different key on each:
 `--api auto` (the default) reads the guest OS version and picks the right one:
 0.5.x → v0, 0.6.x → v1. You can force either with `--api v0` / `--api v1`.
 
+> Newer agents also accept `root_epoch`/`app_epoch` on the v0 `GetKey`
+> directly. That change is on `next` but not in a release yet. This tool works on
+> guests that predate it and gives you one HTTP API for both surfaces.
+
 ## Why you need this tool
 
 The guest agent only serves its **boot (current) epoch**. After a KMS root-key
@@ -73,7 +77,7 @@ The sidecar holds the privileged passthrough; the app only talks HTTP. See
 ```yaml
 services:
   key-recovery:
-    image: ghcr.io/dstack-tee/dstack-key-recovery:0.6.5
+    image: ghcr.io/dstack-tee/dstack-key-recovery:0.6.5@sha256:26803eb7eb34f69f367d7ebc0b4abc31f35caad5e58213de77a91dddcd2d0b6b
     restart: unless-stopped
     command: ["serve", "--addr", "0.0.0.0:8099", "--no-socket"]
     security_opt: ["seccomp=unconfined"]
@@ -133,15 +137,32 @@ The response is the same JSON as `key --json`:
 }
 ```
 
-Pin the image by digest in production. The release workflow publishes
-`ghcr.io/dstack-tee/dstack-key-recovery` with build provenance and an SBOM.
+### Verify the image
+
+The release is built from the tag commit and carries a Sigstore
+build-provenance attestation. The image also embeds the commit at `/.GIT_REV`.
+
+```bash
+DIGEST=sha256:26803eb7eb34f69f367d7ebc0b4abc31f35caad5e58213de77a91dddcd2d0b6b
+
+cosign verify ghcr.io/dstack-tee/dstack-key-recovery@$DIGEST \
+  --certificate-identity-regexp \
+    'https://github.com/Dstack-TEE/dstack/.github/workflows/key-recovery-release.yml@refs/tags/key-recovery-v0.6.5' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+gh attestation verify oci://ghcr.io/dstack-tee/dstack-key-recovery@$DIGEST \
+  --repo Dstack-TEE/dstack
+```
+
+The release workflow publishes `ghcr.io/dstack-tee/dstack-key-recovery` with
+build provenance and an SBOM.
 
 ### Embed in your image
 
 Copy the binary from the published image in a build stage:
 
 ```dockerfile
-FROM ghcr.io/dstack-tee/dstack-key-recovery:0.6.5 AS key-recovery
+FROM ghcr.io/dstack-tee/dstack-key-recovery:0.6.5@sha256:26803eb7eb34f69f367d7ebc0b4abc31f35caad5e58213de77a91dddcd2d0b6b AS key-recovery
 FROM your-app
 COPY --from=key-recovery /dstack-key-recovery /usr/local/bin/
 ```
