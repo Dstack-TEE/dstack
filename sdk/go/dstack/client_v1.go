@@ -448,15 +448,10 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 	return c.getKey(ctx, domain, algorithm, nil, nil)
 }
 
-// GetKeyAtRootEpoch is GetKey under the KMS root key epoch rootEpoch instead of
-// the current one; epoch 0 is the original root keys. Name an older epoch only
-// to reach a key from before a KMS root key rotation, for example to migrate
-// off it.
-func (c *DstackClientV1) GetKeyAtRootEpoch(ctx context.Context, domain string, algorithm string, rootEpoch uint32) (*GetKeyV1Response, error) {
-	return c.getKey(ctx, domain, algorithm, &rootEpoch, nil)
-}
-
-// GetKeyAtEpochs selects the two independent key epochs. Nil means current.
+// GetKeyAtEpochs is GetKey under the given KMS root key epoch and application
+// key epoch; nil selects the current one. Epoch 0 is the original keys. Name an
+// older epoch only to reach a key from before a rotation, for example to
+// migrate off it.
 func (c *DstackClientV1) GetKeyAtEpochs(ctx context.Context, domain, algorithm string, rootEpoch, appEpoch *uint32) (*GetKeyV1Response, error) {
 	return c.getKey(ctx, domain, algorithm, rootEpoch, appEpoch)
 }

@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. `bootstrap-info.json` is gone: `GetMeta.bootstrap_info` reports the served
   epoch's attestation. Auto-bootstrap now records the attestation too (#539).
 
+### Removed
+
+- **Breaking:** Go and Rust SDKs: `GetKeyAtRootEpoch` and
+  `get_key_at_root_epoch`. Use `GetKeyAtEpochs(ctx, domain, algorithm,
+  &rootEpoch, nil)` or `get_key_at_epochs(domain, algorithm, Some(root_epoch),
+  None)`.
+
 ## [0.6.5] - 2026-11-15
 
 ### Upgrade notes
