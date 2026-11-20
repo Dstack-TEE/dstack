@@ -877,8 +877,8 @@ class AsyncTappdClient(AsyncDstackClientV0):
     ) -> GetQuoteResponse:
         """Use ``AsyncDstackClientV0.get_quote`` on dstack.sock for raw report data.
 
-        Here the server chooses the hash algorithm when omitted; pass
-        ``hash_algorithm="raw"`` explicitly for the legacy raw report data.
+        ``hash_algorithm`` defaults to ``raw``, which left-pads ``report_data``
+        to 64 bytes.
         """
         emit_deprecation_warning(f"tdx_quote is deprecated, {self._MIGRATION_HINT}")
 
@@ -890,6 +890,7 @@ class AsyncTappdClient(AsyncDstackClientV0):
         )
         hex_data = binascii.hexlify(report_bytes).decode()
 
+        hash_algorithm = hash_algorithm or "raw"
         if hash_algorithm == "raw":
             if len(hex_data) > 128:
                 raise ValueError(
@@ -898,9 +899,7 @@ class AsyncTappdClient(AsyncDstackClientV0):
             if len(hex_data) < 128:
                 hex_data = hex_data.zfill(128)
 
-        payload = {"report_data": hex_data}
-        if hash_algorithm is not None:
-            payload["hash_algorithm"] = hash_algorithm
+        payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm}
 
         result = await self._send_rpc_request("TdxQuote", payload)
 

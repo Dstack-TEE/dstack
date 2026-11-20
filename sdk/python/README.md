@@ -640,10 +640,8 @@ Method changes:
 - `tdx_quote()` → `get_quote()` (raw data only, no hash algorithms)
 - Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
 
-If you still use `TappdClient` or `AsyncTappdClient`, omitting `hash_algorithm`
-from `tdx_quote()` now lets the server choose the algorithm. To keep the exact
-raw report data used by legacy callers, pass `hash_algorithm="raw"` explicitly.
-Raw mode left-pads inputs shorter than 64 bytes with zeros.
+`TappdClient.tdx_quote()` and `AsyncTappdClient.tdx_quote()` default to
+`hash_algorithm="raw"`, which left-pads inputs shorter than 64 bytes with zeros.
 
 ## Migration from v0 to v1
 

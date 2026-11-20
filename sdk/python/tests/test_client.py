@@ -36,11 +36,11 @@ async def test_tappd_quote_payload(monkeypatch):
     monkeypatch.setattr(client, "_send_rpc_request", send)
     await client.tdx_quote(b"hello")
     await client.tdx_quote(b"hello", "raw")
-    assert calls[0] == ("TdxQuote", {"report_data": "68656c6c6f"})
-    assert calls[1][1] == {
-        "report_data": "68656c6c6f".zfill(128),
-        "hash_algorithm": "raw",
-    }
+    await client.tdx_quote(b"hello", "sha256")
+    raw = {"report_data": "68656c6c6f".zfill(128), "hash_algorithm": "raw"}
+    assert calls[0] == ("TdxQuote", raw)
+    assert calls[1][1] == raw
+    assert calls[2][1] == {"report_data": "68656c6c6f", "hash_algorithm": "sha256"}
 
 
 def test_sync_tappd_unsupported_method_names_v0_client():
