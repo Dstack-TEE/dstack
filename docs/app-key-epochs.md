@@ -182,9 +182,9 @@ KMS root or revoke already disclosed secrets.
 Both selectors are optional; specify zero explicitly to recover an old key.
 For example, Python `client.get_key("storage", "secp256k1", root_epoch=3,
 app_epoch=0)` selects exactly that pair. JavaScript uses
-`client.getKey("storage", "secp256k1", 3, 0)`. Rust takes
-`GetKeyConfig::builder().root_epoch(3).app_epoch(0)`; Go provides `GetKeyAtEpochs` with
-pointer selectors. Responses report both epochs.
+`client.getKey("storage", "secp256k1", 3, 0)`. Rust uses
+`client.get_key(GetKeyConfig::builder().domain("storage").algorithm("secp256k1").root_epoch(3).app_epoch(0).build())`.
+Go provides `GetKeyAtEpochs` with pointer selectors. Responses report both epochs.
 
 Sealing helpers (`seal_env`, `SealEnv`, `sealEnv`) and the SealedEnv public-key
 verifiers take both epochs, with no default: they work offline and cannot know

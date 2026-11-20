@@ -58,6 +58,21 @@ mod hex_vec {
 }
 
 /// Configuration for a `GetKey` request.
+///
+/// ```
+/// # use dstack_sdk_types::dstack_v1::GetKeyConfig;
+/// let current = GetKeyConfig::builder()
+///     .domain("storage")
+///     .algorithm("secp256k1")
+///     .build();
+/// // The key from before a KMS key rotation, to migrate off it.
+/// let original = GetKeyConfig::builder()
+///     .domain("storage")
+///     .algorithm("secp256k1")
+///     .root_epoch(0)
+///     .app_epoch(0)
+///     .build();
+/// ```
 #[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]

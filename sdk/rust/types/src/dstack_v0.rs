@@ -37,6 +37,17 @@ pub struct EventLog {
 
 /// Configuration for a `GetKey` request. The key is always secp256k1; use the
 /// v1 client for ed25519.
+///
+/// ```
+/// # use dstack_sdk_types::dstack_v0::GetKeyConfig;
+/// let current = GetKeyConfig::builder().path("wallet/ethereum").build();
+/// // The key from before a KMS key rotation, to migrate off it.
+/// let original = GetKeyConfig::builder()
+///     .path("wallet/ethereum")
+///     .root_epoch(0)
+///     .app_epoch(0)
+///     .build();
+/// ```
 #[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
