@@ -116,7 +116,8 @@ fn digest(shape: &str) -> String {
 ///
 /// Regenerate a digest only when you have confirmed against
 /// `git show v0.5.11:guest-agent/rpc/proto/agent_rpc.proto` that the change is
-/// comment-only or a `reserved` addition.
+/// comment-only or a `reserved` addition. The one exception is the `GetKey`
+/// epoch selectors, which `agent_rpc.proto` explains.
 #[test]
 fn the_frozen_services_match_their_pinned_shape() {
     let set = descriptor_set();
@@ -124,7 +125,7 @@ fn the_frozen_services_match_their_pinned_shape() {
     let expected = [
         (
             "DstackGuest",
-            "aa6b5814627a26284b12c180acb0eb13f91c3e57ce00952734fb358a729762f3",
+            "6c4ebf6644784f690ec91611f1dc97d103d10963478ba5d513e4cb64fe502ba6",
         ),
         (
             "Worker",
@@ -132,7 +133,7 @@ fn the_frozen_services_match_their_pinned_shape() {
         ),
         (
             "Tappd",
-            "65c2e3b49f0ffbdcda4712f4b87b2ca4be386205e57e7956ddc56bec7616cffd",
+            "804fb5337d51896e094eb5af0cdaba29f0cd102a574c8fd1a1d49f2654096592",
         ),
     ];
     for (name, want) in expected {

@@ -720,3 +720,27 @@ def test_v0_sync_wrapper_warns_exactly_once():
         w for w in caught if "DstackClientV0 is deprecated" in str(w.message)
     ]
     assert len(v0_warnings) == 1, [str(w.message) for w in caught]
+
+
+@pytest.mark.asyncio
+async def test_get_key_rejects_epochs_other_than_requested(monkeypatch):
+    """A key from other epochs, or from an agent without epochs, must not pass."""
+    epochs: dict = {"root_epoch": 1, "app_epoch": 2}
+
+    async def fake_send(self, method, payload):
+        return {"key": "aa" * 32, "signature_chain": [], **epochs}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClientV0, "_send_rpc_request", fake_send)
+    client = AsyncDstackClientV0()
+    for root_epoch, app_epoch in [(0, None), (None, 1), (1, 3)]:
+        with pytest.raises(ValueError, match="different epochs than requested"):
+            await client.get_key("d", "", "secp256k1", root_epoch, app_epoch)
+    key = await client.get_key("d", "", "secp256k1", 1, 2)
+    assert (key.root_epoch, key.app_epoch) == (1, 2)
+
+    epochs = {}
+    with pytest.raises(ValueError, match="different epochs than requested"):
+        await client.get_key("d", "", "secp256k1", root_epoch=0)
+    key = await client.get_key("d")
+    assert (key.root_epoch, key.app_epoch) == (None, None)
