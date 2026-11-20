@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-20
+
 ### Upgrade notes
 
 - **KMS state moves to `/var/lib/kms`.** The root keys of every epoch move out
@@ -42,6 +44,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at a current `DstackApp`, as `Upgrade.s.sol:UpgradeKms` now does. With a
   released `DstackApp` there, `deployAndRegisterApp` reverts.
 
+- **Gateway WireGuard key proofs are off until you turn them on.** A CVM now
+  proves it holds the WireGuard key it registers. Old CVMs and gateways keep
+  working, and a missing proof is only logged, so the logs show when the fleet
+  is ready; then require proofs with `SetWgKeyProofConfig`. The squatting it
+  stops is closed only once every gateway node runs 0.6.6 and proofs are
+  required (#1615).
+
+- **The guest agent logs every API request to the serial console**: socket,
+  caller pid and uid, method, status and latency, never the arguments. Whoever
+  can read the console sees which internal APIs an app calls and how often
+  (#1626).
+
+### Added
+
+- Guest agent: v0 `GetKey` takes optional `root_epoch` and `app_epoch` and
+  reports the epochs it derived from, so an app can still reach a v0 key from
+  before a KMS key rotation. Unset means the current epochs, as before.
+  `Tappd.DeriveK256Key` shares `GetKeyArgs` and honours them too. The 0.5 line
+  gets the same in 0.5.16 (#1630, #1631).
+- `dstack-key-recovery`, a tool that recovers an application key from an older
+  KMS root epoch for guests that cannot select one (#1632, #1633).
+- KMS and verifier: the SEV-SNP TCB is judged against per-CPU minimums taken
+  from the AMD security bulletins, published through the auth API or loaded
+  from a JSON file (#1621, #1627, #1628).
+- Gateway: CVMs prove possession of their WireGuard key at registration
+  (#1615).
+- Guest agent: an access log line per API request on the serial console
+  (#1626).
+- `formal/`: Lean 4 models and machine-checked proofs of KMS, gateway and guest
+  OS logic, built in CI (#1597).
+
 ### Changed
 
 - KMS: each root epoch keeps the attestation produced when its keys were
@@ -76,6 +109,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_key(GetKeyConfig::builder().path(path).build())`, and v1
   `get_key(domain, algorithm)` with
   `get_key(GetKeyConfig::builder().domain(domain).algorithm(algorithm).build())`.
+- SDKs: the Python, JS and Go compose-hash helpers follow one rule, taken from
+  the `dstack-types` serde attributes, and agree on every app-compose vmm-cli
+  and the VMM UI emit. Go's hash of such files changes, since it used to differ
+  from the other SDKs. Hand-built inputs holding `null` or `false` values can
+  hash differently than before: Python and Go now keep a top-level `null`,
+  and JS drops `requirements.health_check: false` and similar defaults (#1508).
+- SDKs: a v1 `GetKey` that selects an epoch fails if the response omits it, as
+  the v0 clients do: an agent older than the epoch fields ignores the
+  selectors (#1508).
+- sdk/go: `ratls` verifies the versioned attestation current dstack writes,
+  replays V2 runtime events, accepts only TDX quotes, and gains a `WithVerify`
+  policy hook (#1508).
 - sdk/go (breaking): `AppCompose.InitScript` and `AppCompose.SwapSize` changed to the named types `*InitScripts` and `*SwapSize`. Explicit empty compose slices now encode as `[]`; use nil to reproduce hashes that omitted them.
 
 ### Removed
@@ -83,6 +128,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** Go and Rust SDKs: `GetKeyAtRootEpoch` and
   `get_key_at_root_epoch`. Use `GetKeyAtEpochs(ctx, domain, algorithm,
   &rootEpoch, nil)` or `get_key` with `GetKeyConfig::builder().root_epoch(n)`.
+
+### Fixed
+
+- Guest agent: the watchdog probe no longer reuses an idle connection the
+  agent may be closing, which logged `Connection reset by peer` every few
+  minutes on 0.6.5 (#1625).
+- KMS: refuses to serve from an empty keyring instead of serving epoch
+  `u32::MAX` (#1618).
+- VMM: a dropped start request no longer leaves two QEMUs; stop, power-off and
+  load recheck their state under the launch lock; the VM manifest and state
+  are written atomically; a reload no longer tears down a VM created while it
+  scans; and a VM that fails to load at startup is kept running instead of
+  stopped as an orphan (#1609-#1614, #1616, #1617).
+- Gateway: a lock or lease that is no longer held cannot delete a successor's
+  or commit writes, and one stamped beyond the clock drift bound counts as
+  expired; an IP stays allocated while another instance holds it; a peer
+  gateway address inside this node's pool is warned about; wavekv 2.2 fixes two
+  replication divergences (#1598-#1601, #1605, #1606).
+- Guest: warns on an `instance_id_seed` that is not 20 bytes (#1607).
+- SDKs: Tappd clients call only routes `tappd.sock` serves, and Python's
+  `tdx_quote` pads short raw report data instead of failing; JS validates hex
+  and handles truncated responses; Python and Rust decode `Info` with null
+  registers (#1508).
+
+### Security
+
+- sev-snp-qvl: binds a supplied VCEK to the chip and TCB the report claims,
+  and rejects ASKs revoked by AMD's CRL (#1620, #1622).
+- cc-eventlog: rejects V1 runtime event names containing `:`, whose digests
+  were not injective (#1596).
+- Gateway: SNI sniffing honours the declared record lengths, and a CVM can no
+  longer register with a gateway node's WireGuard key (#1602, #1603, #1604).
 
 ## [0.6.5] - 2026-11-15
 
