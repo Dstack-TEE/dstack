@@ -55,7 +55,16 @@ function isSuccess(statusCode: number): boolean {
   return statusCode >= 200 && statusCode < 300
 }
 
-export function send_rpc_request<T = any>(endpoint: string, path: string, payload: string, timeoutMs?: number): Promise<T> {
+// Node clamps out-of-range timer delays to 1 ms.
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
+
+export function validateTimeoutMs(timeoutMs?: number): void {
+  if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS)) {
+    throw new RangeError(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}`)
+  }
+}
+
+export function send_rpc_request<T = any>(endpoint: string, path: string, payload: string, timeoutMs = 30_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const abortController = new AbortController()
     let isCompleted = false
@@ -96,7 +105,7 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
     const timeout = setTimeout(() => {
       safeReject(new Error('request timed out'))
       abortController.abort()
-    }, timeoutMs || 30_000) // Default 30 seconds timeout
+    }, timeoutMs)
 
     const cleanup = () => {
       clearTimeout(timeout)
@@ -132,6 +141,8 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
         res.on('data', (chunk) => {
           chunks.push(chunk)
         })
+        res.on('aborted', () => { cleanup(); safeReject(new Error('response aborted')) })
+        res.on('error', (error) => { cleanup(); safeReject(error) })
         res.on('end', () => {
           cleanup()
           settle(res.statusCode ?? 0, Buffer.concat(chunks).toString('utf8'))
@@ -181,6 +192,8 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
           res.on('data', (chunk) => {
             chunks.push(chunk)
           })
+          res.on('aborted', () => { cleanup(); safeReject(new Error('response aborted')) })
+          res.on('error', (error) => { cleanup(); safeReject(error) })
           res.on('end', () => {
             cleanup()
             settle(res.statusCode ?? 0, Buffer.concat(chunks).toString('utf8'))

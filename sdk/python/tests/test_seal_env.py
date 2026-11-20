@@ -31,6 +31,7 @@ def test_sealed_env_round_trip(app_epoch):
     )
     assert envelope["version"] == 1
     assert envelope["root_epoch"] == 2
+    assert envelope["app_epoch"] == app_epoch
     context = suite.create_recipient_context(
         base64.b64decode(envelope["enc"]),
         keys.private_key,

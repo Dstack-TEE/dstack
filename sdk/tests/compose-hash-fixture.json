@@ -1,0 +1,79 @@
+{
+  "description": "Deployment hash contracts shared by Python, JavaScript, and Go: valid compose JSON, legacy input forms, forward-compatible fields, and optional normalization. The digests are SHA-256 of the expected compact deployment bytes, not Rust reserialization.",
+  "cases": [
+    {
+      "name": "server_valid_compact_manifest",
+      "app_compose": {
+        "allowed_envs": [],
+        "docker_compose_file": "services:\n  web:\n    image: nginx\n",
+        "key_provider": "none",
+        "key_provider_id": "",
+        "manifest_version": 2,
+        "name": "example",
+        "runner": "docker-compose"
+      },
+      "sha256": "57e019ac8ed2e7c1d1f2b1cf7f22e4d1b48222e9426007e9d6da42e424c71a33"
+    },
+    {
+      "name": "future_manifest_fields_do_not_change_between_sdks",
+      "app_compose": {
+        "manifest_version": "3",
+        "name": "example",
+        "runner": "docker-compose",
+        "_meta": "release",
+        "Public_logs": true,
+        "future": {
+          "2": "two",
+          "10": "ten",
+          "constructor": {
+            "z": 1,
+            "a": 2
+          }
+        }
+      },
+      "sha256": "b32e9f74ed053ab97a6cd996d100fe19ae226b0787d379a73d6c41255ba25b32"
+    },
+    {
+      "name": "legacy_deployment_keeps_input_forms",
+      "app_compose": {
+        "manifest_version": "3",
+        "name": "example",
+        "runner": "docker-compose",
+        "init_script": "echo ready",
+        "swap_size": 2048
+      },
+      "sha256": "b367f19ab9084d7a793e3d27d47869ca530065dc014041124384bb1040a77f4a"
+    },
+    {
+      "name": "disabled_options_preserve_the_deployment_hash",
+      "app_compose": {
+        "manifest_version": "3",
+        "name": "example",
+        "runner": "docker-compose",
+        "docker_config": null,
+        "key_provider": null,
+        "init_script": null,
+        "requirements": {
+          "health_check": false,
+          "ephemeral_data_disk": false,
+          "gpu_policy": {
+            "rego": null,
+            "attest_gpu": true
+          }
+        }
+      },
+      "sha256": "0cc5fbbe68ca75bd4c44d476dde9f4816f4aa9158673ca0b146508ad73d27512"
+    },
+    {
+      "name": "normalize_removes_an_empty_legacy_boot_script",
+      "app_compose": {
+        "manifest_version": "3",
+        "name": "example",
+        "runner": "docker-compose",
+        "pre_launch_script": ""
+      },
+      "normalize": true,
+      "sha256": "c74df639996abe1bc29a656eb2afe65b4e989af539b37dde1baeb9d29233bc30"
+    }
+  ]
+}

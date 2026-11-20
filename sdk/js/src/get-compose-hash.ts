@@ -11,30 +11,6 @@ interface SortableObject {
 }
 interface SortableArray extends Array<SortableValue> {}
 
-/**
- * Recursively sorts object keys lexicographically.
- * This is crucial for deterministic JSON.stringify in JavaScript.
- * @param obj The object to sort.
- * @returns A new object with sorted keys, or the original value if not an object.
- */
-function sortObject(obj: SortableValue): SortableValue {
-  if (obj === undefined || obj === null) {
-    return obj;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(sortObject);
-  } else if (obj && typeof obj === "object" && obj.constructor === Object) {
-    return Object.keys(obj)
-      .sort()
-      .reduce((result: SortableObject, key) => {
-        const value = (obj as SortableObject)[key];
-        result[key] = sortObject(value);
-        return result;
-      }, {});
-  }
-  return obj;
-}
-
 export type KeyProviderKind = "none" | "kms" | "local" | "tpm" | "sev-snp";
 export type RequirementPlatform =
   | "dstack-tdx"
@@ -43,35 +19,31 @@ export type RequirementPlatform =
   | "dstack-nitro-enclave";
 
 export interface DockerConfig extends SortableObject {
-  registry?: string;
-  username?: string;
-  token_key?: string;
+  registry?: string | null;
+  username?: string | null;
+  token_key?: string | null;
 }
 
 export interface GpuPolicy extends SortableObject {
   attest_gpu?: boolean;
-  rego?: string;
+  rego?: string | null;
   allow_devtools?: boolean;
   allow_debug?: boolean;
   allow_insecure_boot?: boolean;
 }
 
 export interface Requirements extends SortableObject {
-  platforms?: RequirementPlatform[];
-  tdx_measure_acpi_tables?: boolean;
-  launch_token_hash?: string;
-  /**
-   * Opt-in gateway health gating. Leave it out rather than passing `false`: the
-   * guest's Rust types skip a false `health_check`, and this hash has to be the
-   * one that gets whitelisted on chain.
-   */
+  platforms?: RequirementPlatform[] | null;
+  tdx_measure_acpi_tables?: boolean | null;
+  launch_token_hash?: string | null;
+  /** Opt-in gateway health gating. A false value is omitted when hashing. */
   health_check?: boolean;
   /**
    * Path to a file the app writes its own verdict into. `""` and absent are
    * different app composes and hash differently, in every SDK.
    */
-  health_status_file?: string;
-  /** Format the data disk on every boot. Leave it out rather than passing `false`. */
+  health_status_file?: string | null;
+  /** Format the data disk on every boot. A false value is omitted when hashing. */
   ephemeral_data_disk?: boolean;
   gpu_policy?: GpuPolicy;
 }
@@ -99,8 +71,8 @@ export interface AppCompose extends SortableObject {
   // Deprecated
   features?: string[];
   runner: string;
-  snapshotter?: "overlayfs" | "stargz";
-  docker_compose_file?: string;
+  snapshotter?: "overlayfs" | "stargz" | null;
+  docker_compose_file?: string | null;
   docker_config?: DockerConfig;
   public_logs?: boolean;
   public_sysinfo?: boolean;
@@ -110,18 +82,18 @@ export interface AppCompose extends SortableObject {
   // For backward compatibility with tproxy_enabled
   tproxy_enabled?: boolean;
   local_key_provider_enabled?: boolean;
-  key_provider?: KeyProviderKind;
+  key_provider?: KeyProviderKind | null;
   key_provider_id?: string; // hex string
   allowed_envs?: string[];
   no_instance_id?: boolean;
   secure_time?: boolean;
-  requirements?: Requirements;
-  init_script?: string[];
-  storage_fs?: string;
+  requirements?: Requirements | null;
+  init_script?: string | string[] | null;
+  storage_fs?: string | null;
   /** Reclaim unused data-disk blocks; disable to hide allocation changes. */
   storage_discard?: boolean;
-  /** Human size string, e.g. "2G", matching what the guest reads. */
-  swap_size?: string;
+  /** Size in bytes or a human-readable string, e.g. "2G". */
+  swap_size?: number | string;
   event_log_version?: number;
   port_policy?: PortPolicy;
   verity_volumes?: VerityVolume[];
@@ -143,25 +115,56 @@ function preprocessAppCompose(dic: AppCompose): AppCompose {
   return obj;
 }
 
-/**
- * Deterministic JSON serialization following cross-language standards.
- * - Recursively sorts object keys lexicographically
- * - Compact output (no spaces)
- * - Handles special values (NaN, Infinity) by converting them to null
- * - UTF-8 encoding (default in JavaScript)
- */
-function toDeterministicJson(dic: AppCompose): string {
-  const ordered = sortObject(dic);
-  return JSON.stringify(ordered, (key, value) => {
-    // Convert NaN and Infinity to null for deterministic output
-    if (typeof value === 'number' && (isNaN(value) || !isFinite(value))) {
-      return null;
-    }
-    return value;
-  }); // Omit the 'space' argument for compact output
+// Emit entries directly: JSON.stringify on a sorted object would still move
+// integer-like keys to the front in numeric order ("2" before "10").
+function toDeterministicJson(value: SortableValue): string {
+  if (Array.isArray(value)) {
+    return '[' + Array.from(value, toDeterministicJson).join(',') + ']';
+  }
+  if (value !== null && typeof value === 'object') {
+    const fields = Object.keys(value).sort()
+      .filter(key => value[key] !== undefined)
+      .map(key => JSON.stringify(key) + ':' + toDeterministicJson(value[key]));
+    return '{' + fields.join(',') + '}';
+  }
+  return JSON.stringify(value ?? null);
 }
 
+function serializeFields(appCompose: AppCompose): AppCompose {
+  const result = { ...appCompose };
+  for (const field of ['snapshotter', 'requirements', 'init_script']) {
+    if (result[field] === null) delete result[field];
+  }
+  if (result.requirements && typeof result.requirements === 'object' && !Array.isArray(result.requirements)) {
+    const requirements = { ...result.requirements };
+    for (const field of ['platforms', 'tdx_measure_acpi_tables', 'launch_token_hash', 'health_status_file']) {
+      if (requirements[field] === null) delete requirements[field];
+    }
+    for (const field of ['health_check', 'ephemeral_data_disk']) {
+      if (requirements[field] === false) delete requirements[field];
+    }
+    if (requirements.gpu_policy && typeof requirements.gpu_policy === 'object' && !Array.isArray(requirements.gpu_policy)) {
+      const gpuPolicy = { ...requirements.gpu_policy };
+      if (gpuPolicy.rego === null) delete gpuPolicy.rego;
+      requirements.gpu_policy = gpuPolicy;
+    }
+    result.requirements = requirements;
+  }
+  return result;
+}
+
+/**
+ * Hash the SDK's compact, sorted JSON representation, not a Rust round-trip.
+ * Apart from the documented field omissions and optional normalization, input
+ * presence and form are preserved: no Rust defaults are added, empty arrays
+ * remain, and init_script retains its string or array form. This matches the
+ * deployed hash only when the exact serialized bytes are deployed.
+ *
+ * Numeric values beyond 2^53 can lose precision in Go and JavaScript. Python
+ * serializes a float such as 2.0 as `2.0`, while Go and JavaScript emit `2`.
+ */
 export function getComposeHash(app_compose: AppCompose, normalize: boolean = false): string {
+  app_compose = serializeFields(app_compose);
   if (normalize) {
     app_compose = preprocessAppCompose(app_compose);
   }

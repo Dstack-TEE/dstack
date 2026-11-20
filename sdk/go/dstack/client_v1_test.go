@@ -103,6 +103,77 @@ func TestV1GetKeyRejectsUnrequestedEpochs(t *testing.T) {
 	}
 }
 
+func TestV1GetKeyEpochWireNamesAndDefaults(t *testing.T) {
+	zero := uint32(0)
+	for _, tc := range []struct {
+		name  string
+		epoch *uint32
+	}{
+		{"current", nil},
+		{"explicit_zero", &zero},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+				}
+				for _, field := range []string{"root_epoch", "app_epoch"} {
+					raw, present := payload[field]
+					if tc.epoch == nil && present || tc.epoch != nil && string(raw) != "0" {
+						t.Errorf("unexpected %s in request: %s", field, raw)
+					}
+				}
+				epochs := ""
+				if tc.epoch != nil {
+					epochs = `,"root_epoch":0,"app_epoch":0`
+				}
+				_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[]` + epochs + `}`))
+			}))
+			defer server.Close()
+			client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+			res, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", tc.epoch, tc.epoch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.RootEpoch != 0 || res.AppEpoch != 0 {
+				t.Errorf("omitted response epochs should default to zero, got %d/%d", res.RootEpoch, res.AppEpoch)
+			}
+		})
+	}
+}
+
+// An agent older than the epoch fields ignores the selectors and omits them.
+func TestV1GetKeyRejectsOmittedEpochsWhenRequested(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[]}`))
+	}))
+	defer server.Close()
+	client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+	zero := uint32(0)
+	for _, tc := range []struct{ root, app *uint32 }{{&zero, nil}, {nil, &zero}} {
+		_, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", tc.root, tc.app)
+		if err == nil || !strings.Contains(err.Error(), "different epochs than requested") {
+			t.Errorf("root %v app %v: expected an epoch mismatch error, got %v", tc.root, tc.app, err)
+		}
+	}
+}
+
+func TestV1GetKeyRejectsNullResponseEpochs(t *testing.T) {
+	zero := uint32(0)
+	for _, epochs := range []string{`"root_epoch":null,"app_epoch":0`, `"root_epoch":0,"app_epoch":null`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[],` + epochs + `}`))
+		}))
+		client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+		_, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", &zero, &zero)
+		server.Close()
+		if err == nil {
+			t.Errorf("accepted null as a confirmed zero epoch: %s", epochs)
+		}
+	}
+}
+
 // v1 binds the algorithm into the derivation, so the two curves no longer share
 // one 32-byte secret the way they did on the frozen surface.
 func TestV1GetKeyIsDomainSeparated(t *testing.T) {

@@ -83,20 +83,24 @@ Options: `subject`, `altNames`, `usageRaTls`, `usageServerAuth` (default `true`)
 
 The key is freshly generated on every call and is not derived from the app identity — two identical requests return two unrelated keys. v0 called this `getTlsKey`, which named the by-product rather than the request. Use `getKey` for stable, attestable material.
 
-### `getKey(domain, algorithm)`
+### `getKey(domain, algorithm, rootEpoch?, appEpoch?)`
 
 Derive a deterministic application key.
 
 ```typescript
 const enc = await client.getKey('storage-encryption', 'secp256k1')
-const sig = await client.getKey('backup-signing', 'ed25519')   // unrelated key material
+const old = await client.getKey('storage-encryption', 'secp256k1', 2, 1)
 
 enc.key             // Uint8Array, 32 bytes
 enc.public_key      // Uint8Array — SEC1 compressed (33) for secp256k1, raw (32) for ed25519
 enc.signature_chain // Uint8Array[], exactly 2 links
+enc.root_epoch      // KMS root epoch actually used
+enc.app_epoch       // application key epoch actually used
 ```
 
-Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'` — there is no default and no `k256` alias, because v0's defaulting meant a typo silently produced a key of the wrong type under a name the caller thought meant something else.
+The first two arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'` — there is no default and no `k256` alias, because v0's defaulting meant a typo silently produced a key of the wrong type under a name the caller thought meant something else.
+
+`rootEpoch` and `appEpoch` are optional uint32 selectors. Omit either one to use the current epoch; pass `0` to select epoch zero explicitly. The request uses the proto JSON names `root_epoch` and `app_epoch`, and the client rejects a response that returns different epochs than requested.
 
 `domain` is an opaque domain-separation string, not a DNS name and not a path. Derivation is **flat**: `'a/b'` is a string that happens to contain a slash, not a child of `'a'`, and no key derived here can derive another. It replaces v0's `path` plus `purpose`; both `domain` and `algorithm` now feed the KDF.
 
@@ -167,6 +171,11 @@ Flat, with no `tcb_info` blob and no `app_cert`. The measurement registers and t
 
 Do not parse and re-serialize `app_compose` before hashing it — key order, whitespace and unknown fields all change the digest, and that digest is what gets whitelisted on chain.
 
+Client requests default to a 30-second timeout. For long-running GPU attestation,
+pass milliseconds: `new DstackClient(endpoint, { timeoutMs: 300_000 })`.
+`timeoutMs` must be an integer from 1 through 2,147,483,647. `DstackClientV0`
+and `TappdClient` accept the same option.
+
 ### `version()`
 
 Returns `{ version, rev }` of the guest agent.
@@ -188,7 +197,13 @@ const hash = getComposeHash(compose)
 const normalized = getComposeHash(compose, true) // strip bash_script/docker_compose_file overlap
 ```
 
-Pure function — no TEE call required. Produces the canonical SHA-256 used by the on-chain KMS allowlist.
+Pure function — no TEE call required. Its SHA-256 matches the on-chain KMS allowlist only when the exact serialized bytes it hashes are deployed. Otherwise, use the provisioned compose hash or hash the verbatim deployed file.
+
+The SDK hash is not a Rust parse-and-reserialize round-trip. Apart from field-specific omissions and optional normalization, SDKs preserve input presence and form: they do not add Rust defaults, retain empty arrays, and keep `init_script` in its input string or array form.
+
+Pass plain JSON data to `getComposeHash`. JavaScript sorts property names by UTF-16 code unit; names containing characters above U+FFFF can sort differently in SDKs that use Unicode code point order.
+
+Numeric edge cases can differ across SDKs: Go and JavaScript can lose precision for numeric `swap_size` values above 2^53, and Python serializes a float such as `2.0` as `2.0` while Go and JavaScript emit `2`.
 
 ## Encrypted environment variables
 
@@ -438,22 +453,27 @@ Migrate a surface at a time: both clients can talk to the same agent at once, so
 
 ### Sealed environment variables
 
-`sealEnv` produces the version-1 HPKE JSON for `.sealed-env`. Fetch
+`sealEnv` produces the version-1 HPKE JSON for `.sealed-env`, with uint32
+`root_epoch` and `app_epoch` fields matching the HPKE context. Fetch
 `GetSealedEnvPubKey`, verify its signature and timestamp with
 `verifySealedEnvPublicKey`, and compare the returned signer with a trusted
 root key for the response's epoch before encrypting. Pass both epochs of the
-response: the guest decrypts with the key of the epochs the envelope names. Send the UTF-8 JSON bytes
-in the VMM's `sealed_env` field (hex for JSON RPC), not `encrypted_env`.
+response: the guest decrypts with the key of the epochs the envelope names.
+Send the UTF-8 JSON bytes in the VMM's `sealed_env` field (hex for JSON RPC),
+not `encrypted_env`.
 
 ```ts
 import { sealEnv, verifySealedEnvPublicKey } from '@phala/dstack-sdk'
-// response.public_key/signature are decoded bytes; trustedSigner comes from
-// an independently trusted epoch registry or local pin.
+// The decoded response carries public_key and signature as Uint8Arrays.
+const publicKeyBytes = response.public_key
 const signer = verifySealedEnvPublicKey(
-  publicKeyBytes, signatureBytes, appId, response.root_epoch, response.app_epoch, response.timestamp,
+  publicKeyBytes, response.signature, appId, response.root_epoch, response.app_epoch, response.timestamp,
 )
-if (signer !== trustedSigner) throw new Error('untrusted SealedEnv key')
-const sealed = await sealEnv(envs, response.public_key, response.root_epoch, response.app_epoch)
+// trustedSigner is pinned independently for response.root_epoch.
+if (!signer || !trustedSigner || signer !== trustedSigner) throw new Error('untrusted SealedEnv key')
+const sealed = await sealEnv(
+  envs, Buffer.from(publicKeyBytes).toString('hex'), response.root_epoch, response.app_epoch,
+)
 ```
 
 Legacy `encryptEnvVars` remains available for old guest images. See

@@ -160,15 +160,15 @@ async def test_async_v1_get_key_rejects_the_v0_k256_alias():
 
 @pytest.mark.asyncio
 async def test_async_v1_get_key_rejects_epochs_other_than_requested(monkeypatch):
-    """A key from another epoch must not pass as the requested one."""
+    """A key from other epochs, or from an agent without epochs, must not pass."""
+    epochs: dict = {"root_epoch": 1, "app_epoch": 2}
 
     async def fake_send(self, method, payload):
         return {
             "key": "aa" * 32,
             "public_key": "bb" * 33,
             "signature_chain": [],
-            "root_epoch": 1,
-            "app_epoch": 2,
+            **epochs,
         }
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
@@ -179,6 +179,13 @@ async def test_async_v1_get_key_rejects_epochs_other_than_requested(monkeypatch)
             await client.get_key("d", "secp256k1", root_epoch, app_epoch)
     key = await client.get_key("d", "secp256k1", 1, 2)
     assert (key.root_epoch, key.app_epoch) == (1, 2)
+
+    epochs = {}
+    for root_epoch, app_epoch in [(0, None), (None, 0)]:
+        with pytest.raises(ValueError, match="different epochs than requested"):
+            await client.get_key("d", "secp256k1", root_epoch, app_epoch)
+    key = await client.get_key("d", "secp256k1")
+    assert (key.root_epoch, key.app_epoch) == (0, 0)
 
 
 def test_v1_keys_differ_from_v0_keys():
@@ -414,6 +421,20 @@ def test_v1_malformed_chain_link_is_rejected():
         GetKeyResponseV1(
             key="aa" * 32, public_key="bb" * 33, signature_chain=["aabb", "qq"]
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("root_epoch", 2**32), ("app_epoch", True)]
+)
+def test_v1_get_key_response_epochs_are_uint32(field, value):
+    response = {
+        "key": "aa" * 32,
+        "public_key": "bb" * 33,
+        "signature_chain": [],
+        field: value,
+    }
+    with pytest.raises(ValidationError, match="uint32"):
+        GetKeyResponseV1(**response)
 
 
 def test_v1_absent_identity_hashes_are_empty():

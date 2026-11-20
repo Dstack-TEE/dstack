@@ -30,6 +30,7 @@ from pydantic import PlainSerializer
 
 from .dstack_client_v0 import AsyncBaseClient
 from .dstack_client_v0 import BaseClient
+from .dstack_client_v0 import _Uint32
 from .dstack_client_v0 import call_async
 
 #: An even number of hex digits, and nothing else.
@@ -108,8 +109,8 @@ class GetKeyResponseV1(BaseModel):
     # KMS root key's signature over the app root public key.
     signature_chain: List[HexBytes]
     # KMS root key epoch the key was derived from.
-    root_epoch: int = 0
-    app_epoch: int = 0
+    root_epoch: _Uint32 = 0
+    app_epoch: _Uint32 = 0
 
 
 class GpuEvidenceBundleV1(BaseModel):
@@ -273,8 +274,13 @@ class AsyncDstackClientV1(AsyncBaseClient):
             data["app_epoch"] = app_epoch
         result = await self._send_rpc_request("GetKey", data)
         response = GetKeyResponseV1(**result)
-        if (root_epoch is not None and response.root_epoch != root_epoch) or (
-            app_epoch is not None and response.app_epoch != app_epoch
+        # An agent older than the epoch fields ignores the selectors and omits them.
+        if (
+            root_epoch is not None
+            and ("root_epoch" not in result or response.root_epoch != root_epoch)
+        ) or (
+            app_epoch is not None
+            and ("app_epoch" not in result or response.app_epoch != app_epoch)
         ):
             raise ValueError("GetKey returned different epochs than requested")
         return response

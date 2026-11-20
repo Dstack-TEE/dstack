@@ -164,6 +164,46 @@ describe('DstackClientV1', () => {
         const response = await client.getKey('d', 'secp256k1', 1, 2)
         expect([response.root_epoch, response.app_epoch]).toEqual([1, 2])
       })
+      // An agent older than the epoch fields ignores the selectors and omits them.
+      const { root_epoch, app_epoch, ...omitted } = key
+      await withAgentAnswering(omitted, async client => {
+        for (const [rootEpoch, appEpoch] of [[0, undefined], [undefined, 0]]) {
+          await expect(client.getKey('d', 'secp256k1', rootEpoch, appEpoch))
+            .rejects.toThrow(/different epochs than requested/)
+        }
+        const response = await client.getKey('d', 'secp256k1')
+        expect([response.root_epoch, response.app_epoch]).toEqual([0, 0])
+      })
+    })
+
+    it('can select epoch zero rather than fall back to the current epoch', async () => {
+      const archivedKey = 'aa'.repeat(32)
+      const server = http.createServer(async (req, res) => {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { root_epoch, app_epoch } = JSON.parse(body)
+        // Only explicit selectors get the archived key.
+        const selected = root_epoch === 0 && app_epoch === 2
+          ? { key: archivedKey, root_epoch: 0, app_epoch: 2 }
+          : { key: 'cc'.repeat(32), root_epoch: 4, app_epoch: 3 }
+        res.end(JSON.stringify({ ...selected, public_key: 'bb'.repeat(33), signature_chain: [] }))
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      try {
+        const client = new DstackClientV1(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+        const result = await client.getKey('d', 'secp256k1', 0, 2)
+        expect(Buffer.from(result.key).toString('hex')).toBe(archivedKey)
+        expect([result.root_epoch, result.app_epoch]).toEqual([0, 2])
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()))
+      }
+    })
+
+    it('does not accept a null response epoch as the requested epoch zero', async () => {
+      const key = { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: [], app_epoch: null }
+      await withAgentAnswering(key, client =>
+        expect(client.getKey('d', 'secp256k1', 0, 0)).rejects.toThrow()
+      )
     })
 
     it('should reject an empty algorithm without a round trip', async () => {

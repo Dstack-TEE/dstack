@@ -46,11 +46,11 @@ async fn test_tappd_client_info_integration() {
     assert!(!info.instance_id.is_empty());
     assert!(!info.app_name.is_empty());
     assert!(!info.tcb_info.app_compose.is_empty());
-    assert!(!info.tcb_info.mrtd.is_empty());
-    assert!(!info.tcb_info.rtmr0.is_empty());
-    assert!(!info.tcb_info.rtmr1.is_empty());
-    assert!(!info.tcb_info.rtmr2.is_empty());
-    assert!(!info.tcb_info.rtmr3.is_empty());
+    assert!(!info.tcb_info.mrtd.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr0.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr1.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr2.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr3.unwrap().is_empty());
     assert!(!info.tcb_info.event_log.is_empty());
 }
 

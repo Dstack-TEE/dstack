@@ -5,7 +5,7 @@
 // The `dstack.guest.v1` surface: the recommended client, and what the
 // unsuffixed `DstackClient` names since 0.6.0.
 
-import { send_rpc_request } from './send-rpc-request'
+import { validateTimeoutMs, send_rpc_request } from './send-rpc-request'
 import {
   to_hex, throwOnRpcError, resolveDstackEndpoint,
   decode_hex, from_hex, require_string, to_list,
@@ -233,6 +233,17 @@ function to_string(value: unknown, field: string): string {
   return require_string(value, field)
 }
 
+/** Decode an optional proto uint32 scalar, whose absent wire default is zero. */
+function to_uint32(value: unknown, field: string): number {
+  if (value === undefined) {
+    return 0
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new Error(`the agent returned a malformed ${field}: expected a uint32`)
+  }
+  return value
+}
+
 /**
  * Decode the bundles a v1 RPC returned.
  *
@@ -273,9 +284,16 @@ function to_gpu_evidence_bundles(
  */
 export class DstackClientV1 {
   protected endpoint: string
+  protected timeoutMs?: number
 
-  constructor(endpoint: string | undefined = undefined) {
+  constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
+    validateTimeoutMs(options.timeoutMs)
     this.endpoint = resolveDstackEndpoint(endpoint)
+    this.timeoutMs = options.timeoutMs
+  }
+
+  protected request<T = any>(endpoint: string, path: string, payload: string): Promise<T> {
+    return send_rpc_request<T>(endpoint, path, payload, this.timeoutMs)
   }
 
   /**
@@ -315,7 +333,7 @@ export class DstackClientV1 {
     if (notAfter !== undefined) {
       raw['not_after'] = notAfter
     }
-    const result = await send_rpc_request<{ key: string, certificate_chain: string[] }>(
+    const result = await this.request<{ key: string, certificate_chain: string[] }>(
       this.endpoint, '/v1/IssueCert', JSON.stringify(raw))
     throwOnRpcError(result)
     return Object.freeze({
@@ -346,13 +364,23 @@ export class DstackClientV1 {
     if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff)) {
       throw new Error('rootEpoch must be a uint32')
     }
-    if (appEpoch !== undefined && (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff)) throw new Error('appEpoch must be a uint32')
+    if (appEpoch !== undefined && (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff)) {
+      throw new Error('appEpoch must be a uint32')
+    }
     const payload = JSON.stringify({ domain, algorithm, root_epoch: rootEpoch, app_epoch: appEpoch })
-    const result = await send_rpc_request<{ key: string, public_key: string, signature_chain: string[], root_epoch?: number, app_epoch?: number }>(
-      this.endpoint, '/v1/GetKey', payload)
+    const result = await this.request<{
+      key: string,
+      public_key: string,
+      signature_chain: string[],
+      root_epoch?: unknown,
+      app_epoch?: unknown,
+    }>(this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
-    if ((rootEpoch !== undefined && (result.root_epoch ?? 0) !== rootEpoch) ||
-        (appEpoch !== undefined && (result.app_epoch ?? 0) !== appEpoch)) {
+    const responseRootEpoch = to_uint32(result.root_epoch, 'root_epoch')
+    const responseAppEpoch = to_uint32(result.app_epoch, 'app_epoch')
+    // An agent older than the epoch fields ignores the selectors and omits them.
+    if ((rootEpoch !== undefined && (result.root_epoch === undefined || responseRootEpoch !== rootEpoch)) ||
+        (appEpoch !== undefined && (result.app_epoch === undefined || responseAppEpoch !== appEpoch))) {
       throw new Error('GetKey returned different epochs than requested')
     }
     return Object.freeze({
@@ -360,8 +388,8 @@ export class DstackClientV1 {
       public_key: from_hex(result.public_key, 'public_key'),
       signature_chain: to_list(result.signature_chain, 'signature_chain', 'error')
         .map((link, i) => from_hex(link, `signature_chain[${i}]`)),
-      root_epoch: result.root_epoch ?? 0,
-      app_epoch: result.app_epoch ?? 0,
+      root_epoch: responseRootEpoch,
+      app_epoch: responseAppEpoch,
       __name__: 'GetKeyResponseV1' as const,
     })
   }
@@ -392,7 +420,7 @@ export class DstackClientV1 {
     }
     const hex = to_hex(bytes)
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
-    const result = await send_rpc_request<{
+    const result = await this.request<{
       attestation: string,
       boottime_gpu_evidence?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/Attest', payload)
@@ -424,7 +452,7 @@ export class DstackClientV1 {
       throw new Error(`nonce must be exactly 32 bytes, but received ${bytes.length}`)
     }
     const payload = JSON.stringify({ nonce: to_hex(bytes) })
-    const result = await send_rpc_request<{
+    const result = await this.request<{
       bundles?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
@@ -436,7 +464,7 @@ export class DstackClientV1 {
 
   /** Return this application's identity and configuration. */
   async info(): Promise<InfoResponseV1> {
-    const result = await send_rpc_request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
+    const result = await this.request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
     throwOnRpcError(result)
     return Object.freeze({
       app_id: from_hex(result.app_id, 'app_id'),
@@ -457,7 +485,7 @@ export class DstackClientV1 {
 
   /** Return the guest agent version. Also the cheapest probe for v1 support. */
   async version(): Promise<VersionResponseV1> {
-    const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
+    const result = await this.request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
     throwOnRpcError(result)
     return Object.freeze({
       version: to_string(result.version, 'version'),

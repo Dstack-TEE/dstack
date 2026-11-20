@@ -85,52 +85,20 @@ impl DstackClientV1 {
         Ok(serde_json::from_value::<IssueCertResponse>(response)?)
     }
 
-    /// Derive an application key from `(domain, algorithm)`.
-    ///
-    /// `domain` is a caller-chosen domain-separation string, not a DNS name and
-    /// not a path: derivation is flat, so `a/b` is unrelated to `a` and no key
-    /// derives another.
-    ///
-    /// `algorithm` is required and must be `secp256k1` or `ed25519`. v1 has no
-    /// default and no `k256` alias -- a typo is an error rather than a key of
-    /// the wrong type under a name the caller misread.
-    pub async fn get_key(&self, domain: &str, algorithm: &str) -> Result<GetKeyResponse> {
-        self.request_key(domain, algorithm, None, None).await
-    }
-
-    /// [`Self::get_key`] under the given KMS root key epoch and application key
-    /// epoch; `None` selects the current one. Epoch 0 is the original keys.
-    /// Name an older epoch only to reach a key from before a rotation, for
-    /// example to migrate off it.
-    pub async fn get_key_at_epochs(
-        &self,
-        domain: &str,
-        algorithm: &str,
-        root_epoch: Option<u32>,
-        app_epoch: Option<u32>,
-    ) -> Result<GetKeyResponse> {
-        self.request_key(domain, algorithm, root_epoch, app_epoch)
-            .await
-    }
-
-    async fn request_key(
-        &self,
-        domain: &str,
-        algorithm: &str,
-        root_epoch: Option<u32>,
-        app_epoch: Option<u32>,
-    ) -> Result<GetKeyResponse> {
-        if algorithm.is_empty() {
+    /// Derive an application key from `(domain, algorithm)`, by default under
+    /// this CVM's current key epochs. See [`GetKeyConfig`].
+    pub async fn get_key(&self, config: GetKeyConfig) -> Result<GetKeyResponse> {
+        if config.algorithm.is_empty() {
             anyhow::bail!("algorithm is required, use `secp256k1` or `ed25519`")
         }
-        let mut data = json!({ "domain": domain, "algorithm": algorithm });
-        if let Some(root_epoch) = root_epoch {
-            data["root_epoch"] = root_epoch.into();
+        let (root_epoch, app_epoch) = (config.root_epoch, config.app_epoch);
+        let response: serde_json::Value = self.send_rpc_request("GetKey", &config).await?;
+        // An agent older than the epoch fields ignores the selectors and omits them.
+        let omitted =
+            |requested: Option<u32>, field| requested.is_some() && response.get(field).is_none();
+        if omitted(root_epoch, "root_epoch") || omitted(app_epoch, "app_epoch") {
+            anyhow::bail!("GetKey returned different epochs than requested");
         }
-        if let Some(app_epoch) = app_epoch {
-            data["app_epoch"] = app_epoch.into();
-        }
-        let response = self.send_rpc_request("GetKey", &data).await?;
         let response = serde_json::from_value::<GetKeyResponse>(response)?;
         if root_epoch.is_some_and(|epoch| epoch != response.root_epoch)
             || app_epoch.is_some_and(|epoch| epoch != response.app_epoch)

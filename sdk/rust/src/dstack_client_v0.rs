@@ -220,40 +220,33 @@ impl DstackClientV0 {
         serde_json::from_slice(&body).context("failed to parse the response")
     }
 
-    pub async fn get_key(
-        &self,
-        path: Option<String>,
-        purpose: Option<String>,
-    ) -> Result<GetKeyResponse> {
-        self.get_key_at_epochs(path, purpose, None, None).await
+    // v0.5.6 accepted these fields, but v0.5.7 first exposed DstackGuest.Version.
+    // Like the other SDKs, use the RPC itself as the capability, not its version string.
+    async fn ensure_version_rpc(&self, feature: &str) -> Result<()> {
+        self.version().await.with_context(|| {
+            format!("cannot confirm support for {feature}: Version RPC unavailable (requires dstack 0.5.7+)")
+        })?;
+        Ok(())
     }
 
-    /// [`Self::get_key`] under the given KMS root and application key epochs;
-    /// omitted values use this CVM's current keys. Name an older epoch only to
-    /// reach a key from before a KMS key rotation, for example to migrate off it.
-    pub async fn get_key_at_epochs(
-        &self,
-        path: Option<String>,
-        purpose: Option<String>,
-        root_epoch: Option<u32>,
-        app_epoch: Option<u32>,
-    ) -> Result<GetKeyResponse> {
-        let mut data = json!({
-            "path": path.unwrap_or_default(),
-            "purpose": purpose.unwrap_or_default(),
-            "algorithm": "secp256k1", // Default or specify as needed
-        });
-        if let Some(root_epoch) = root_epoch {
-            data["root_epoch"] = root_epoch.into();
+    /// Derive a key, by default secp256k1 under this CVM's current key epochs.
+    ///
+    /// An agent without the `Version` RPC ignores the algorithm and returns a
+    /// secp256k1 key, so any other algorithm is refused on such an agent.
+    pub async fn get_key(&self, config: GetKeyConfig) -> Result<GetKeyResponse> {
+        if !matches!(config.algorithm.as_str(), "secp256k1" | "k256" | "") {
+            self.ensure_version_rpc(&format!("algorithm {}", config.algorithm))
+                .await?;
         }
-        if let Some(app_epoch) = app_epoch {
-            data["app_epoch"] = app_epoch.into();
-        }
-        let response = self.send_rpc_request("/GetKey", &data).await?;
+        let response = self.send_rpc_request("/GetKey", &config).await?;
         let response = serde_json::from_value::<GetKeyResponse>(response)?;
         // An agent older than the epoch fields ignores the selectors and omits them.
-        if root_epoch.is_some_and(|epoch| Some(epoch) != response.root_epoch)
-            || app_epoch.is_some_and(|epoch| Some(epoch) != response.app_epoch)
+        if config
+            .root_epoch
+            .is_some_and(|epoch| Some(epoch) != response.root_epoch)
+            || config
+                .app_epoch
+                .is_some_and(|epoch| Some(epoch) != response.app_epoch)
         {
             anyhow::bail!("GetKey returned different epochs than requested");
         }
@@ -323,6 +316,20 @@ impl DstackClientV0 {
     }
 
     pub async fn get_tls_key(&self, tls_key_config: TlsKeyConfig) -> Result<GetTlsKeyResponse> {
+        let mut options = Vec::new();
+        if tls_key_config.not_before.is_some() {
+            options.push("not_before");
+        }
+        if tls_key_config.not_after.is_some() {
+            options.push("not_after");
+        }
+        if tls_key_config.with_app_info {
+            options.push("with_app_info");
+        }
+        if !options.is_empty() {
+            self.ensure_version_rpc(&format!("TLS key options [{}]", options.join(", ")))
+                .await?;
+        }
         let response = self.send_rpc_request("/GetTlsKey", &tls_key_config).await?;
         let response = serde_json::from_value::<GetTlsKeyResponse>(response)?;
 

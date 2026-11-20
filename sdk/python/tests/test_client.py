@@ -7,6 +7,7 @@ import os
 import warnings
 
 from evidence_api.tdx.quote import TdxQuote
+from pydantic import ValidationError
 import pytest
 
 from dstack_sdk import AsyncDstackClientV0
@@ -22,6 +23,44 @@ from dstack_sdk import VerifyResponse
 from dstack_sdk import VersionResponse
 from dstack_sdk.dstack_client_v0 import InfoResponse
 from dstack_sdk.dstack_client_v0 import TcbInfo
+
+
+@pytest.mark.asyncio
+async def test_tappd_quote_payload(monkeypatch):
+    client = AsyncTappdClient("http://localhost")
+    calls = []
+
+    async def send(method, payload):
+        calls.append((method, payload))
+        return {"quote": "", "event_log": ""}
+
+    monkeypatch.setattr(client, "_send_rpc_request", send)
+    await client.tdx_quote(b"hello")
+    await client.tdx_quote(b"hello", "raw")
+    await client.tdx_quote(b"hello", "sha256")
+    raw = {"report_data": "68656c6c6f".zfill(128), "hash_algorithm": "raw"}
+    assert calls[0] == ("TdxQuote", raw)
+    assert calls[1][1] == raw
+    assert calls[2][1] == {"report_data": "68656c6c6f", "hash_algorithm": "sha256"}
+
+
+def test_sync_tappd_unsupported_method_names_v0_client():
+    client = TappdClient("http://localhost")
+    with pytest.raises(RuntimeError, match=r"\bDstackClientV0\b.*dstack\.sock"):
+        client.get_key()
+
+
+def test_tcb_info_null_measurements():
+    info = TcbInfo(
+        mrtd=None,
+        rtmr0=None,
+        rtmr1=None,
+        rtmr2=None,
+        rtmr3=None,
+        app_compose="",
+        event_log=[],
+    )
+    assert info.mrtd is None and info.rtmr3 is None
 
 
 def test_sync_client_get_key():
@@ -744,3 +783,9 @@ async def test_get_key_rejects_epochs_other_than_requested(monkeypatch):
         await client.get_key("d", "", "secp256k1", root_epoch=0)
     key = await client.get_key("d")
     assert (key.root_epoch, key.app_epoch) == (None, None)
+
+
+@pytest.mark.parametrize("value", ["0", True, 1.0, -1, 2**32])
+def test_get_key_response_epochs_are_uint32(value):
+    with pytest.raises(ValidationError, match="uint32"):
+        GetKeyResponse(key="aa" * 32, signature_chain=[], root_epoch=value)

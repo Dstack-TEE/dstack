@@ -15,7 +15,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 
@@ -41,14 +40,49 @@ type VerifyResult struct {
 	Report *dcap.VerifiedReport
 	// Quote is the parsed TDX quote structure with measurements and report data.
 	Quote *dcap.Quote
+	// RuntimeEvents are authenticated by replay against RTMR3, in order. Events
+	// after system-ready are app-controlled and untrusted for identity policy;
+	// use BootEvent for boot-time identity lookup.
+	RuntimeEvents []RuntimeEvent
+}
+
+// BootEvent returns the first matching boot-time event payload. Events at and
+// after system-ready are excluded because the application can emit them.
+func (r *VerifyResult) BootEvent(name string) ([]byte, bool) {
+	for _, event := range r.RuntimeEvents {
+		if event.Event == "system-ready" {
+			break
+		}
+		if event.Event == name {
+			return bytes.Clone(event.Payload), true
+		}
+	}
+	return nil, false
+}
+
+// BootEvents returns all matching boot-time event payloads in event order.
+// Events at and after system-ready are excluded because the application can emit them.
+func (r *VerifyResult) BootEvents(name string) [][]byte {
+	var payloads [][]byte
+	for _, event := range r.RuntimeEvents {
+		if event.Event == "system-ready" {
+			break
+		}
+		if event.Event == name {
+			payloads = append(payloads, bytes.Clone(event.Payload))
+		}
+	}
+	return payloads
 }
 
 // Option configures RA-TLS verification.
 type Option func(*config)
 
 type config struct {
-	pccsURL    string
-	onVerified func(*VerifyResult)
+	pccsURL     string
+	onVerified  func(*VerifyResult)
+	verify      func(*VerifyResult) error
+	verifyQuote func([]byte, string) (*dcap.VerifiedReport, *dcap.Quote, error)
 }
 
 // WithPCCSURL sets the PCCS server URL for collateral fetching.
@@ -62,8 +96,44 @@ func WithOnVerified(fn func(*VerifyResult)) Option {
 	return func(c *config) { c.onVerified = fn }
 }
 
+// WithVerify rejects an attested peer when fn returns an error. Use it to
+// enforce the expected application, OS and compose identity. A nil function
+// rejects verification rather than silently disabling policy.
+func WithVerify(fn func(*VerifyResult) error) Option {
+	return func(c *config) {
+		if fn == nil {
+			c.verify = func(*VerifyResult) error { return fmt.Errorf("ratls: nil verification policy") }
+			return
+		}
+		c.verify = fn
+	}
+}
+
+func (c *config) applyPolicy(result *VerifyResult) error {
+	if c.verify != nil {
+		return c.verify(result)
+	}
+	return nil
+}
+
+func withQuoteVerifier(fn func([]byte, string) (*dcap.VerifiedReport, *dcap.Quote, error)) Option {
+	return func(c *config) { c.verifyQuote = fn }
+}
+
+func verifyQuote(raw []byte, pccsURL string) (*dcap.VerifiedReport, *dcap.Quote, error) {
+	report, err := dcap.GetCollateralAndVerify(raw, pccsURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("quote verification failed: %w", err)
+	}
+	quote, err := dcap.ParseQuote(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse quote structure: %w", err)
+	}
+	return report, quote, nil
+}
+
 func buildConfig(opts []Option) *config {
-	cfg := &config{pccsURL: DefaultPCCSURL}
+	cfg := &config{pccsURL: DefaultPCCSURL, verifyQuote: verifyQuote}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -75,28 +145,31 @@ func buildConfig(opts []Option) *config {
 // It extracts the embedded TDX quote, verifies it via dcap-qvl, checks that the
 // quote's report_data binds to the certificate's public key, validates TCB
 // attributes (debug mode, signer), and replays RTMR3 from the event log.
+// For versioned evidence it verifies the stack runtime events, not the separate
+// platform event log or its advertised V2 digest preimages.
+// Only dstack TDX is supported: gcp-tdx, nitro, sev-snp, and dstack-pod
+// evidence are rejected. TLSConfig alone is not application authentication;
+// use WithVerify to enforce trusted application, OS, and compose policy.
 func VerifyCert(cert *x509.Certificate, opts ...Option) (*VerifyResult, error) {
 	cfg := buildConfig(opts)
 
-	// 1. Extract raw TDX quote from certificate extension (OID 1.1)
-	rawQuote, err := getExtensionBytes(cert, oidTdxQuote)
+	// The versioned attestation takes precedence over legacy extensions.
+	rawQuote, events, err := extractAttestation(cert)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: failed to parse quote extension: %w", err)
-	}
-	if rawQuote == nil {
-		return nil, fmt.Errorf("ratls: certificate has no TDX quote extension (OID %s)", oidTdxQuote)
+		return nil, err
 	}
 
-	// 2. Verify quote via dcap-qvl (fetch collateral from PCCS + verify Intel signature)
-	report, err := dcap.GetCollateralAndVerify(rawQuote, cfg.pccsURL)
+	// Verify the quote and parse the report fields.
+	report, quote, err := cfg.verifyQuote(rawQuote, cfg.pccsURL)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: quote verification failed: %w", err)
+		return nil, fmt.Errorf("ratls: %w", err)
 	}
 
-	// 3. Parse quote structure to access report fields
-	quote, err := dcap.ParseQuote(rawQuote)
-	if err != nil {
-		return nil, fmt.Errorf("ratls: failed to parse quote structure: %w", err)
+	if quote.Report.Type != "TD10" && quote.Report.Type != "TD15" {
+		return nil, fmt.Errorf("ratls: expected a TDX quote, got %s", quote.Report.Type)
+	}
+	if len(quote.Report.RTMR3) != 48 || len(quote.Report.ReportData) != 64 {
+		return nil, fmt.Errorf("ratls: invalid TDX report lengths")
 	}
 
 	// 4. Validate TCB attributes
@@ -122,11 +195,15 @@ func VerifyCert(cert *x509.Certificate, opts ...Option) (*VerifyResult, error) {
 
 	// 6. Replay RTMR3 from event log and compare with quote
 	//    Matches Rust: Attestation::replay_runtime_events::<Sha384>(None)
-	if err := verifyRTMR3(cert, quote); err != nil {
+	if err := replayRTMR3(events, quote); err != nil {
 		return nil, err
 	}
 
-	return &VerifyResult{Report: report, Quote: quote}, nil
+	result := &VerifyResult{Report: report, Quote: quote, RuntimeEvents: events}
+	if err := cfg.applyPolicy(result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // validateTCB checks TCB attributes to reject debug mode and invalid signers.
@@ -168,70 +245,26 @@ func validateTCB(quote *dcap.Quote) error {
 // tdxEvent matches the JSON format of cc_eventlog::tdx::TdxEvent.
 // Note: digest and event_payload are hex-encoded in JSON (Rust uses serde_human_bytes).
 type tdxEvent struct {
-	IMR          uint32        `json:"imr"`
-	EventType    uint32        `json:"event_type"`
-	Digest       dcap.HexBytes `json:"digest"`
-	Event        string        `json:"event"`
-	EventPayload dcap.HexBytes `json:"event_payload"`
+	IMR          uint32           `json:"imr"`
+	EventType    uint32           `json:"event_type"`
+	Digest       dcap.HexBytes    `json:"digest"`
+	Event        string           `json:"event"`
+	EventPayload dcap.HexBytes    `json:"event_payload"`
+	Version      jsonEventVersion `json:"version"`
+	Preimage     string           `json:"preimage"`
 }
 
-// verifyRTMR3 extracts the event log from the certificate, replays runtime events
-// using SHA384, and compares the result with the quote's RTMR3 value.
-// Matches Rust: Attestation::verify_tdx() RTMR3 replay
-func verifyRTMR3(cert *x509.Certificate, quote *dcap.Quote) error {
-	if len(quote.Report.RTMR3) == 0 {
-		return nil // Not a TDX quote, skip
+type jsonEventVersion uint32
+
+func (v *jsonEventVersion) UnmarshalJSON(raw []byte) error {
+	var n uint32
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return err
 	}
-
-	rawEventLog, err := getExtensionBytes(cert, oidEventLog)
-	if err != nil {
-		return fmt.Errorf("ratls: failed to parse event log extension: %w", err)
+	if n != 1 && n != 2 {
+		return fmt.Errorf("unsupported runtime event version %d", n)
 	}
-	if rawEventLog == nil {
-		return fmt.Errorf("ratls: certificate has TDX quote but no event log extension")
-	}
-
-	var events []tdxEvent
-	if err := json.Unmarshal(rawEventLog, &events); err != nil {
-		return fmt.Errorf("ratls: failed to parse event log JSON: %w", err)
-	}
-
-	// Replay: accumulate SHA384 over runtime events
-	// Matches Rust: cc_eventlog::runtime_events::replay_events::<Sha384>()
-	mr := make([]byte, 48) // starts at all zeros
-
-	for _, ev := range events {
-		if ev.EventType != dstackRuntimeEventType {
-			continue
-		}
-
-		// Compute event digest: SHA384(event_type_ne_bytes || ":" || event || ":" || payload)
-		// Matches Rust: RuntimeEvent::digest::<Sha384>()
-		// TDX CVMs run on x86_64 (little-endian), so to_ne_bytes() is LE.
-		eventTypeBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(eventTypeBytes, ev.EventType)
-
-		dh := sha512.New384()
-		dh.Write(eventTypeBytes)
-		dh.Write([]byte(":"))
-		dh.Write([]byte(ev.Event))
-		dh.Write([]byte(":"))
-		dh.Write(ev.EventPayload)
-		digest := dh.Sum(nil)
-
-		// Extend: mr = SHA384(mr || digest)
-		eh := sha512.New384()
-		eh.Write(mr)
-		eh.Write(digest)
-		mr = eh.Sum(nil)
-	}
-
-	if !bytes.Equal(mr, []byte(quote.Report.RTMR3)) {
-		return fmt.Errorf(
-			"ratls: RTMR3 mismatch: replayed %x, quoted %x",
-			mr[:8], []byte(quote.Report.RTMR3)[:8],
-		)
-	}
+	*v = jsonEventVersion(n)
 	return nil
 }
 
@@ -240,8 +273,23 @@ func verifyRTMR3(cert *x509.Certificate, quote *dcap.Quote) error {
 //
 // Standard CA chain verification is skipped because RA-TLS certificates are
 // self-signed; trust is established through hardware attestation instead.
+// TLSConfig alone does not authenticate the application, OS, or compose. Use
+// WithVerify to compare verified measurements and boot-time events to trusted policy.
+// Use VerifyResult.BootEvent rather than scanning events after system-ready.
+// Do not replace the returned config's verification callbacks: both enforce
+// RA-TLS, one for full handshakes and the other for resumed sessions.
 func TLSConfig(opts ...Option) *tls.Config {
 	cfg := buildConfig(opts)
+	verify := func(cert *x509.Certificate) error {
+		result, err := VerifyCert(cert, opts...)
+		if err != nil {
+			return err
+		}
+		if cfg.onVerified != nil {
+			cfg.onVerified(result)
+		}
+		return nil
+	}
 	return &tls.Config{
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
@@ -252,14 +300,17 @@ func TLSConfig(opts ...Option) *tls.Config {
 			if err != nil {
 				return fmt.Errorf("ratls: failed to parse server certificate: %w", err)
 			}
-			result, err := VerifyCert(cert, opts...)
-			if err != nil {
-				return err
+			return verify(cert)
+		},
+		VerifyConnection: func(state tls.ConnectionState) error {
+			// Go skips VerifyPeerCertificate on resumption; recheck the cached leaf.
+			if !state.DidResume {
+				return nil
 			}
-			if cfg.onVerified != nil {
-				cfg.onVerified(result)
+			if len(state.PeerCertificates) == 0 {
+				return fmt.Errorf("ratls: server presented no certificate")
 			}
-			return nil
+			return verify(state.PeerCertificates[0])
 		},
 	}
 }
@@ -272,14 +323,22 @@ func TLSConfig(opts ...Option) *tls.Config {
 func getExtensionBytes(cert *x509.Certificate, oid asn1.ObjectIdentifier) ([]byte, error) {
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(oid) {
-			var raw []byte
-			if _, err := asn1.Unmarshal(ext.Value, &raw); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal extension value: %w", err)
-			}
-			return raw, nil
+			return unwrapExtension(ext.Value)
 		}
 	}
 	return nil, nil
+}
+
+func unwrapExtension(der []byte) ([]byte, error) {
+	var raw []byte
+	rest, err := asn1.Unmarshal(der, &raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal extension value: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("trailing data after extension octet string")
+	}
+	return raw, nil
 }
 
 func isAllZeros(b []byte) bool {

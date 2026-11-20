@@ -19,6 +19,7 @@ describe('sealed env', () => {
     const sealed = JSON.parse(await sealEnv(env, publicKey, 3, appEpoch))
     expect(sealed.version).toBe(1)
     expect(sealed.root_epoch).toBe(3)
+    expect(sealed.app_epoch).toBe(appEpoch)
     const params = { recipientKey: keys.privateKey, enc: Buffer.from(sealed.enc, 'base64'), info: new TextEncoder().encode(`dstack-sealed-env-v1:3:${appEpoch}`) }
     const ct = Buffer.from(sealed.ciphertext, 'base64')
     const plaintext = await suite.open(params, ct)
@@ -35,14 +36,23 @@ describe('sealed env', () => {
     const timestamp = BigInt(Math.floor(Date.now() / 1000))
     const ts = Buffer.alloc(8)
     ts.writeBigUInt64BE(timestamp)
-    const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epoch, Buffer.alloc(4), publicKey, ts]))
-    const signed = secp256k1.sign(digest, signer)
-    const signature = Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery])
+    const sign = (appEpoch: number) => {
+      const appEpochBytes = Buffer.alloc(4)
+      appEpochBytes.writeUInt32BE(appEpoch)
+      const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epoch, appEpochBytes, publicKey, ts]))
+      const signed = secp256k1.sign(digest, signer)
+      return Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery])
+    }
+    const signature = sign(0)
     const trusted = '0x' + Buffer.from(secp256k1.getPublicKey(signer, true)).toString('hex')
     expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, 0, timestamp)).toBe(trusted)
     expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 4, 0, timestamp)).not.toBe(trusted)
     expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, 0, timestamp - 1000n)).toBeNull()
     expect(verifySealedEnvPublicKey(publicKey, signature, '01', 3, 0, timestamp)).toBeNull()
+
+    const rotated = sign(2)
+    expect(verifySealedEnvPublicKey(publicKey, rotated, app.toString('hex'), 3, 2, timestamp)).toBe(trusted)
+    expect(verifySealedEnvPublicKey(publicKey, rotated, app.toString('hex'), 3, 0, timestamp)).not.toBe(trusted)
   })
 
   it.each([-1, 2 ** 32, 0.5, NaN])('rejects invalid epoch %s', async (epoch) => {

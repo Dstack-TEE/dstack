@@ -10,6 +10,7 @@ members = [".", "types", "no_std_check"]
 resolver = "2"
 
 [workspace.dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 hpke = { version = "0.15.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
 anyhow = { version = "1.0.97", default-features = false }
@@ -58,5 +59,6 @@ sha2.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 dcap-qvl.workspace = true
 tokio = { workspace = true, features = ["full"] }

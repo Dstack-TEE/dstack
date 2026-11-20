@@ -153,15 +153,15 @@ impl TdxQuoteResponse {
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct TappdTcbInfo {
     /// The measurement root of trust
-    pub mrtd: String,
+    pub mrtd: Option<String>,
     /// The value of RTMR0 (Runtime Measurement Register 0)
-    pub rtmr0: String,
+    pub rtmr0: Option<String>,
     /// The value of RTMR1 (Runtime Measurement Register 1)
-    pub rtmr1: String,
+    pub rtmr1: Option<String>,
     /// The value of RTMR2 (Runtime Measurement Register 2)
-    pub rtmr2: String,
+    pub rtmr2: Option<String>,
     /// The value of RTMR3 (Runtime Measurement Register 3)
-    pub rtmr3: String,
+    pub rtmr3: Option<String>,
     /// The event log entries
     pub event_log: Vec<EventLog>,
     /// The application compose file

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -50,6 +51,39 @@ const fullAppCompose = `{
     "gpu_policy": {"attest_gpu": true, "rego": "package policy", "allow_devtools": true}
   }
 }`
+
+func TestComposeHashFixture(t *testing.T) {
+	data, err := os.ReadFile("../../tests/compose-hash-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name       string          `json:"name"`
+			AppCompose json.RawMessage `json:"app_compose"`
+			SHA256     string          `json:"sha256"`
+			Normalize  bool            `json:"normalize"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			var compose AppCompose
+			if err := json.Unmarshal(tc.AppCompose, &compose); err != nil {
+				t.Fatal(err)
+			}
+			got, err := GetComposeHash(compose, tc.Normalize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.SHA256 {
+				t.Fatalf("got %s want %s", got, tc.SHA256)
+			}
+		})
+	}
+}
 
 func hashOfRawJSON(t *testing.T, raw string) string {
 	t.Helper()

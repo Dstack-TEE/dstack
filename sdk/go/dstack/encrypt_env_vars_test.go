@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
@@ -17,6 +18,12 @@ import (
 )
 
 func TestEncryptEnvVars(t *testing.T) {
+	for _, envs := range [][]dstack.EnvVar{nil, {{Key: "NODE_ENV", Value: "production"}, {Key: "MESSAGE", Value: "Hello 世界"}}} {
+		t.Run(fmt.Sprint(len(envs)), func(t *testing.T) { testEncryptEnvVars(t, envs) })
+	}
+}
+
+func testEncryptEnvVars(t *testing.T, envs []dstack.EnvVar) {
 	remotePriv := make([]byte, 32)
 	if _, err := rand.Read(remotePriv); err != nil {
 		t.Fatal(err)
@@ -24,11 +31,6 @@ func TestEncryptEnvVars(t *testing.T) {
 	remotePub, err := curve25519.X25519(remotePriv, curve25519.Basepoint)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	envs := []dstack.EnvVar{
-		{Key: "NODE_ENV", Value: "production"},
-		{Key: "MESSAGE", Value: "Hello 世界"},
 	}
 
 	encryptedHex, err := dstack.EncryptEnvVars(envs, hex.EncodeToString(remotePub))
@@ -74,6 +76,9 @@ func TestEncryptEnvVars(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if payload.Env == nil {
+		t.Fatal("env must be an array, not null")
+	}
 	if len(payload.Env) != len(envs) {
 		t.Fatalf("expected %d env vars, got %d", len(envs), len(payload.Env))
 	}

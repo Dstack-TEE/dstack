@@ -4,7 +4,8 @@
 
 //! `DstackClientV1` against the guest-agent simulator.
 
-use dstack_sdk::dstack_client_v1::{DstackClientV1, IssueCertConfig};
+use dstack_sdk::dstack_client_v0::GetKeyConfig as GetKeyConfigV0;
+use dstack_sdk::dstack_client_v1::{DstackClientV1, GetKeyConfig, IssueCertConfig};
 
 fn client() -> DstackClientV1 {
     DstackClientV1::new(None)
@@ -20,7 +21,12 @@ async fn version_answers_on_the_v1_surface() {
 async fn get_key_returns_a_key_public_key_and_two_link_chain() {
     for algorithm in ["secp256k1", "ed25519"] {
         let response = client()
-            .get_key("storage-encryption", algorithm)
+            .get_key(
+                GetKeyConfig::builder()
+                    .domain("storage-encryption")
+                    .algorithm(algorithm)
+                    .build(),
+            )
             .await
             .unwrap();
 
@@ -61,7 +67,14 @@ async fn get_key_rejects_epochs_other_than_the_requested_ones() {
     let client = DstackClientV1::new(Some(&endpoint));
     for (root, app) in [(Some(0), None), (None, Some(1)), (Some(1), Some(3))] {
         let err = client
-            .get_key_at_epochs("d", "secp256k1", root, app)
+            .get_key(
+                GetKeyConfig::builder()
+                    .domain("d")
+                    .algorithm("secp256k1")
+                    .maybe_root_epoch(root)
+                    .maybe_app_epoch(app)
+                    .build(),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -70,22 +83,91 @@ async fn get_key_rejects_epochs_other_than_the_requested_ones() {
         );
     }
     let key = client
-        .get_key_at_epochs("d", "secp256k1", Some(1), Some(2))
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("d")
+                .algorithm("secp256k1")
+                .root_epoch(1)
+                .app_epoch(2)
+                .build(),
+        )
         .await
         .unwrap();
     assert_eq!((key.root_epoch, key.app_epoch), (1, 2));
 }
 
+/// An agent older than the epoch fields ignores the selectors and omits them.
+#[tokio::test]
+async fn get_key_rejects_omitted_epochs_when_requested() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let body = format!(
+            r#"{{"key":"{}","public_key":"{}","signature_chain":[]}}"#,
+            "aa".repeat(32),
+            "bb".repeat(33)
+        );
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let _ = stream.read(&mut [0; 4096]);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    let client = DstackClientV1::new(Some(&endpoint));
+    for (root, app) in [(Some(0), None), (None, Some(0))] {
+        let err = client
+            .get_key(
+                GetKeyConfig::builder()
+                    .domain("d")
+                    .algorithm("secp256k1")
+                    .maybe_root_epoch(root)
+                    .maybe_app_epoch(app)
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("different epochs than requested"),
+            "{err:#}"
+        );
+    }
+    let key = client
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("d")
+                .algorithm("secp256k1")
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!((key.root_epoch, key.app_epoch), (0, 0));
+}
+
 #[tokio::test]
 async fn get_key_public_key_lengths_are_the_specified_ones() {
     let secp = client()
-        .get_key("storage-encryption", "secp256k1")
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("storage-encryption")
+                .algorithm("secp256k1")
+                .build(),
+        )
         .await
         .unwrap();
     assert_eq!(secp.public_key.len(), 33, "SEC1 compressed");
 
     let ed = client()
-        .get_key("storage-encryption", "ed25519")
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("storage-encryption")
+                .algorithm("ed25519")
+                .build(),
+        )
         .await
         .unwrap();
     assert_eq!(ed.public_key.len(), 32);
@@ -95,11 +177,24 @@ async fn get_key_public_key_lengths_are_the_specified_ones() {
 /// nothing in particular and get a key.
 #[tokio::test]
 async fn get_key_rejects_an_empty_or_unknown_algorithm() {
-    assert!(client().get_key("storage-encryption", "").await.is_err());
+    assert!(client()
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("storage-encryption")
+                .algorithm("")
+                .build()
+        )
+        .await
+        .is_err());
     for algorithm in ["k256", "rsa", "secp256k1_prehashed"] {
         assert!(
             client()
-                .get_key("storage-encryption", algorithm)
+                .get_key(
+                    GetKeyConfig::builder()
+                        .domain("storage-encryption")
+                        .algorithm(algorithm)
+                        .build()
+                )
                 .await
                 .is_err(),
             "v1 accepted algorithm {algorithm:?}"
@@ -110,8 +205,24 @@ async fn get_key_rejects_an_empty_or_unknown_algorithm() {
 /// Derivation is flat: a domain that looks like a path is just a domain.
 #[tokio::test]
 async fn different_domains_yield_different_keys() {
-    let a = client().get_key("a", "secp256k1").await.unwrap();
-    let b = client().get_key("a/b", "secp256k1").await.unwrap();
+    let a = client()
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("a")
+                .algorithm("secp256k1")
+                .build(),
+        )
+        .await
+        .unwrap();
+    let b = client()
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("a/b")
+                .algorithm("secp256k1")
+                .build(),
+        )
+        .await
+        .unwrap();
     assert_ne!(a.key, b.key);
 }
 
@@ -120,11 +231,21 @@ async fn different_domains_yield_different_keys() {
 #[tokio::test]
 async fn the_two_algorithms_never_share_key_material() {
     let secp = client()
-        .get_key("storage-encryption", "secp256k1")
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("storage-encryption")
+                .algorithm("secp256k1")
+                .build(),
+        )
         .await
         .unwrap();
     let ed = client()
-        .get_key("storage-encryption", "ed25519")
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("storage-encryption")
+                .algorithm("ed25519")
+                .build(),
+        )
         .await
         .unwrap();
     assert_ne!(secp.key, ed.key);
@@ -138,9 +259,22 @@ async fn the_two_algorithms_never_share_key_material() {
 // name the deprecated one.
 #[allow(deprecated)]
 async fn v1_keys_differ_from_v0_keys_for_the_same_name() {
-    let v1 = client().get_key("test", "secp256k1").await.unwrap();
+    let v1 = client()
+        .get_key(
+            GetKeyConfig::builder()
+                .domain("test")
+                .algorithm("secp256k1")
+                .build(),
+        )
+        .await
+        .unwrap();
     let v0 = dstack_sdk::dstack_client_v0::DstackClientV0::new(None)
-        .get_key(Some("test".to_string()), Some("signing".to_string()))
+        .get_key(
+            GetKeyConfigV0::builder()
+                .path("test")
+                .purpose("signing")
+                .build(),
+        )
         .await
         .unwrap();
     assert_ne!(v1.key, hex::decode(&v0.key).unwrap());
@@ -273,7 +407,15 @@ async fn derives_the_committed_key_vectors() {
         ),
     ];
     for (domain, algorithm, expected_key, expected_public_key) in vectors {
-        let response = client().get_key(domain, algorithm).await.unwrap();
+        let response = client()
+            .get_key(
+                GetKeyConfig::builder()
+                    .domain(domain)
+                    .algorithm(algorithm)
+                    .build(),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             hex::encode(&response.key),
             expected_key,

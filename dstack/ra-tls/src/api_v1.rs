@@ -9,10 +9,9 @@
 //! check a signature chain, so a change to a constant or a field order changes
 //! every key and every claim a deployed agent produces.
 //!
-//! This lives in `ra-tls` rather than in the guest agent so that the agent, the
-//! verifier and the Rust SDK link against one definition. The alternative is
-//! each of them transcribing the constants out of the specification prose,
-//! which is how cross-implementation crypto drift starts.
+//! This lives in `ra-tls` rather than in the guest agent so the agent and
+//! verifier can share the same definition. SDKs implement the wire behaviour
+//! independently against the specification.
 //!
 //! The module is named for the version of the construction, not for the API
 //! that happens to expose it: `ra-tls` hosts versioned crypto, and knowing

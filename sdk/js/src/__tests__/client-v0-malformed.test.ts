@@ -5,7 +5,9 @@
 import http from 'http'
 import type { AddressInfo } from 'net'
 import { describe, expect, it } from 'vitest'
-import { DstackClientV0 } from '../client-v0'
+import { DstackClientV0, TappdClient } from '../client-v0'
+import { DstackClient } from '../client-v1'
+import { encryptEnvVars } from '../encrypt-env-vars'
 
 async function withAgentAnswering(body: unknown, fn: (client: DstackClientV0) => Promise<void>) {
   const server = http.createServer((_req, res) => {
@@ -20,6 +22,41 @@ async function withAgentAnswering(body: unknown, fn: (client: DstackClientV0) =>
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 }
+
+it('uses the legacy Tappd routes and never sends GetKey to tappd', async () => {
+  const paths: string[] = []
+  const server = http.createServer((req, res) => {
+    paths.push(req.url!)
+    res.end(JSON.stringify({ tcb_info: '{}', version: '1', rev: 'a' }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const client = new TappdClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+    await client.info()
+    await client.version()
+    await expect(client.getKey('d')).rejects.toThrow()
+    expect(paths).toEqual(['/prpc/Tappd.Info', '/prpc/Tappd.Version'])
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+it('lets callers stop waiting for a slow agent', async () => {
+  const server = http.createServer((_req, res) => {
+    setTimeout(() => res.end(JSON.stringify({ version: '1', rev: 'a' })), 200)
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const client = new DstackClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { timeoutMs: 40 })
+    await expect(client.version()).rejects.toThrow()
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+it('does not encrypt to a different key when a hex pair is only partly valid', async () => {
+  await expect(encryptEnvVars([], '11'.repeat(31) + '1g')).rejects.toThrow()
+})
 
 const KEY = '11'.repeat(32)
 const CHAIN = ['aa'.repeat(64)]
