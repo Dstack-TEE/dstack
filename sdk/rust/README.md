@@ -44,7 +44,7 @@ dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git" }
 ## Quick Start
 
 ```rust
-use dstack_sdk::DstackClient;
+use dstack_sdk::{dstack_client_v1::GetKeyConfig, DstackClient};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,7 +52,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Derive an application key. `domain` is a caller-chosen
     // domain-separation string; `algorithm` is required.
-    let key = client.get_key("storage-encryption", "secp256k1").await?;
+    let config = GetKeyConfig::builder()
+        .domain("storage-encryption")
+        .algorithm("secp256k1")
+        .build();
+    let key = client.get_key(config).await?;
     println!("public key: {}", key.public_key);
 
     let info = client.info().await?;
@@ -69,15 +73,19 @@ or an `http://` URL.
 
 ```rust
 use dstack_sdk::DstackClient;
-use dstack_sdk::dstack_client_v1::IssueCertConfig;
+use dstack_sdk::dstack_client_v1::{GetKeyConfig, IssueCertConfig};
 
 let client = DstackClient::new(None);
 ```
 
-#### `get_key(domain: &str, algorithm: &str) -> GetKeyResponse`
+#### `get_key(config: GetKeyConfig) -> GetKeyResponse`
 
 ```rust
-let key = client.get_key("storage-encryption", "secp256k1").await?;
+let config = GetKeyConfig::builder()
+    .domain("storage-encryption")
+    .algorithm("secp256k1")
+    .build();
+let key = client.get_key(config).await?;
 let private_key: Vec<u8> = key.key;        // 32 bytes
 let public_key: Vec<u8> = key.public_key;  // SEC1 compressed, or 32 raw for ed25519
 ```
@@ -92,6 +100,11 @@ path. Derivation is **flat**: `a/b` is unrelated to `a`, and no key derives
 another. `algorithm` is required and must be `secp256k1` or `ed25519`; there is
 no default and no `k256` alias, so a typo is an error rather than a key of the
 wrong type.
+
+`root_epoch` and `app_epoch` select the KMS root and application key epochs;
+unset means the current ones. Set them only to reach a key from before a key
+rotation, for example to migrate off it:
+`GetKeyConfig::builder().domain("storage").algorithm("secp256k1").root_epoch(0).build()`.
 
 `signature_chain` has two links: the app root key's signature over the v1 key
 claim, then the KMS root key's signature over the app root public key.
@@ -247,18 +260,22 @@ these options; default requests still work without a probe.
 `get_key()` derives deterministic keys bound to your application's identity (`app_id`). The same path always produces the same key for your app, but different apps get different keys even with the same path.
 
 ```rust
-// Derive keys by path
-let eth_key = client.get_key(Some("wallet/ethereum".to_string()), None).await?;
-let btc_key = client.get_key(Some("wallet/bitcoin".to_string()), None).await?;
+use dstack_sdk::dstack_client_v0::GetKeyConfig;
 
-// Use path to separate keys
-let mainnet_key = client.get_key(Some("wallet/eth/mainnet".to_string()), None).await?;
-let testnet_key = client.get_key(Some("wallet/eth/testnet".to_string()), None).await?;
+// Derive keys by path
+let eth_key = client.get_key(GetKeyConfig::builder().path("wallet/ethereum").build()).await?;
+let btc_key = client.get_key(GetKeyConfig::builder().path("wallet/bitcoin").build()).await?;
+
+// Recover the key from before a KMS key rotation
+let old_key = client
+    .get_key(GetKeyConfig::builder().path("wallet/ethereum").root_epoch(0).app_epoch(0).build())
+    .await?;
 ```
 
-**Parameters:**
+**`GetKeyConfig` fields:**
 - `path`: Key derivation path (determines the key)
 - `purpose` (optional): Included in signature chain message, does not affect the derived key
+- `root_epoch`, `app_epoch` (optional): KMS key epochs to derive from; unset means the current ones
 
 The Rust SDK currently requests the default `secp256k1` key material. Use distinct paths when keys must be independent.
 
@@ -374,11 +391,13 @@ way. The v1 surface has no chain-related functionality: it returns key
 material, and what an application builds from those bytes is its own business.
 
 ```rust
-use dstack_sdk::dstack_client_v0::DstackClientV0;
+use dstack_sdk::dstack_client_v0::{DstackClientV0, GetKeyConfig};
 use dstack_sdk::ethereum::to_account;
 
 let client = DstackClientV0::new(None);
-let key = client.get_key(Some("wallet/ethereum".to_string()), None).await?;
+let key = client
+    .get_key(GetKeyConfig::builder().path("wallet/ethereum").build())
+    .await?;
 let signer = to_account(&key)?;
 println!("Ethereum address: {}", signer.address());
 ```

@@ -9,13 +9,16 @@
 #![allow(deprecated)]
 
 use dcap_qvl::quote::Quote;
-use dstack_sdk::dstack_client_v0::DstackClientV0 as AsyncDstackClient;
+use dstack_sdk::dstack_client_v0::{DstackClientV0 as AsyncDstackClient, GetKeyConfig};
 use sha2::{Digest, Sha256};
 
 #[tokio::test]
 async fn test_async_client_get_key() {
     let client = AsyncDstackClient::new(None);
-    let result = client.get_key(None, None).await.unwrap();
+    let result = client
+        .get_key(GetKeyConfig::builder().build())
+        .await
+        .unwrap();
     assert!(!result.key.is_empty());
     assert_eq!(result.decode_key().unwrap().len(), 32);
 }
@@ -114,7 +117,7 @@ fn stub_agent(body: String) -> String {
 /// A key from other epochs than the requested ones must not pass as them,
 /// including from an agent too old to report its epochs at all.
 #[tokio::test]
-async fn get_key_at_epochs_rejects_epochs_other_than_the_requested_ones() {
+async fn get_key_rejects_epochs_other_than_the_requested_ones() {
     let key = format!(r#""key":"{}","signature_chain":[]"#, "aa".repeat(32));
     let client = AsyncDstackClient::new(Some(&stub_agent(format!(
         r#"{{{key},"root_epoch":1,"app_epoch":2}}"#
@@ -127,7 +130,12 @@ async fn get_key_at_epochs_rejects_epochs_other_than_the_requested_ones() {
         (&old_agent, Some(0), None),
     ] {
         let err = client
-            .get_key_at_epochs(None, None, root, app)
+            .get_key(
+                GetKeyConfig::builder()
+                    .maybe_root_epoch(root)
+                    .maybe_app_epoch(app)
+                    .build(),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -136,11 +144,14 @@ async fn get_key_at_epochs_rejects_epochs_other_than_the_requested_ones() {
         );
     }
     let key = client
-        .get_key_at_epochs(None, None, Some(1), Some(2))
+        .get_key(GetKeyConfig::builder().root_epoch(1).app_epoch(2).build())
         .await
         .unwrap();
     assert_eq!((key.root_epoch, key.app_epoch), (Some(1), Some(2)));
-    let key = old_agent.get_key(None, None).await.unwrap();
+    let key = old_agent
+        .get_key(GetKeyConfig::builder().build())
+        .await
+        .unwrap();
     assert_eq!((key.root_epoch, key.app_epoch), (None, None));
 }
 
@@ -149,7 +160,7 @@ async fn test_async_client_get_key_k256_alias() {
     let client = AsyncDstackClient::new(None);
     // k256 should work as an alias for secp256k1
     let result = client
-        .get_key(Some("test".to_string()), None)
+        .get_key(GetKeyConfig::builder().path("test").build())
         .await
         .unwrap();
     assert!(!result.key.is_empty());

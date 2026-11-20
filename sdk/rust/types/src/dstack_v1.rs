@@ -57,6 +57,31 @@ mod hex_vec {
     }
 }
 
+/// Configuration for a `GetKey` request.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct GetKeyConfig {
+    /// A caller-chosen domain-separation string, not a DNS name and not a
+    /// path: derivation is flat, so `a/b` is unrelated to `a` and no key
+    /// derives another.
+    #[builder(into)]
+    pub domain: String,
+    /// `secp256k1` or `ed25519`. There is no default and no `k256` alias -- a
+    /// typo is an error rather than a key of the wrong type under a name the
+    /// caller misread.
+    #[builder(into)]
+    pub algorithm: String,
+    /// KMS root key epoch to derive from; unset is the current one. Epoch 0 is
+    /// the original keys. Name an older epoch only to reach a key from before a
+    /// rotation, for example to migrate off it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch: Option<u32>,
+    /// Application key epoch to derive from; unset is the current one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_epoch: Option<u32>,
+}
+
 /// Configuration for a certificate issuance request.
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]

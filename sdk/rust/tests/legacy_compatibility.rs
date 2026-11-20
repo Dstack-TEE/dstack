@@ -5,7 +5,7 @@
 #![allow(deprecated)]
 
 use axum::{routing::post, Router};
-use dstack_sdk::dstack_client_v0::{DstackClientV0, TlsKeyConfig};
+use dstack_sdk::dstack_client_v0::{DstackClientV0, GetKeyConfig, TlsKeyConfig};
 use dstack_sdk::tappd_client::TappdClient;
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -32,7 +32,14 @@ async fn legacy_keys_still_work_but_cannot_silently_ignore_new_options() {
         );
     let client = DstackClientV0::new(Some(&endpoint(routes).await));
 
-    assert_eq!(client.get_key(None, None).await.unwrap().key, "ab");
+    assert_eq!(
+        client
+            .get_key(GetKeyConfig::builder().build())
+            .await
+            .unwrap()
+            .key,
+        "ab"
+    );
 
     assert_eq!(
         client

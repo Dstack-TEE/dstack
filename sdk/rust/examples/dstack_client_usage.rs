@@ -7,7 +7,7 @@
 #![allow(deprecated)]
 
 use dstack_sdk::dstack_client_v0::DstackClientV0;
-use dstack_sdk_types::dstack_v0::TlsKeyConfig;
+use dstack_sdk_types::dstack_v0::{GetKeyConfig, TlsKeyConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,7 +37,12 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Derive a key
     let response = client
-        .get_key(Some("my-app".to_string()), Some("encryption".to_string()))
+        .get_key(
+            GetKeyConfig::builder()
+                .path("my-app")
+                .purpose("encryption")
+                .build(),
+        )
         .await?;
     println!("Key derived successfully!");
     println!("  Key length: {}", response.key.len());
@@ -82,7 +87,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // 6. Get a simple key without purpose
-    let response = client.get_key(Some("simple-key".to_string()), None).await?;
+    let response = client
+        .get_key(GetKeyConfig::builder().path("simple-key").build())
+        .await?;
     println!("Simple key derived successfully!");
     println!("  Key: {}", response.key);
 

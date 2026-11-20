@@ -9,13 +9,13 @@
 
 use dstack_sdk::dstack_client_v0::DstackClientV0;
 use dstack_sdk::ethereum::to_account;
-use dstack_sdk_types::dstack_v0::GetKeyResponse;
+use dstack_sdk_types::dstack_v0::{GetKeyConfig, GetKeyResponse};
 
 #[tokio::test]
 async fn test_async_to_keypair() {
     let client = DstackClientV0::new(None);
     let result = client
-        .get_key(Some("test".to_string()), None)
+        .get_key(GetKeyConfig::builder().path("test").build())
         .await
         .expect("get_key failed");
 

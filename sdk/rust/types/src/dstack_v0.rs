@@ -35,6 +35,28 @@ pub struct EventLog {
     pub preimage: Option<String>,
 }
 
+/// Configuration for a `GetKey` request. The key is always secp256k1; use the
+/// v1 client for ed25519.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct GetKeyConfig {
+    /// The key derivation path
+    #[builder(into, default = String::new())]
+    pub path: String,
+    /// The purpose recorded in the first link of the signature chain
+    #[builder(into, default = String::new())]
+    pub purpose: String,
+    /// KMS root key epoch to derive from; unset is the current one. Name an
+    /// older epoch only to reach a key from before a KMS key rotation, for
+    /// example to migrate off it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch: Option<u32>,
+    /// Application key epoch to derive from; unset is the current one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_epoch: Option<u32>,
+}
+
 /// Configuration for TLS key generation
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]

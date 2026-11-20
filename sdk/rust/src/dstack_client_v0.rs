@@ -229,40 +229,19 @@ impl DstackClientV0 {
         Ok(())
     }
 
-    pub async fn get_key(
-        &self,
-        path: Option<String>,
-        purpose: Option<String>,
-    ) -> Result<GetKeyResponse> {
-        self.get_key_at_epochs(path, purpose, None, None).await
-    }
-
-    /// [`Self::get_key`] under the given KMS root and application key epochs;
-    /// omitted values use this CVM's current keys. Name an older epoch only to
-    /// reach a key from before a KMS key rotation, for example to migrate off it.
-    pub async fn get_key_at_epochs(
-        &self,
-        path: Option<String>,
-        purpose: Option<String>,
-        root_epoch: Option<u32>,
-        app_epoch: Option<u32>,
-    ) -> Result<GetKeyResponse> {
-        let mut data = json!({
-            "path": path.unwrap_or_default(),
-            "purpose": purpose.unwrap_or_default(),
-            "algorithm": "secp256k1", // Default or specify as needed
-        });
-        if let Some(root_epoch) = root_epoch {
-            data["root_epoch"] = root_epoch.into();
-        }
-        if let Some(app_epoch) = app_epoch {
-            data["app_epoch"] = app_epoch.into();
-        }
+    /// Derive a secp256k1 key, by default under this CVM's current key epochs.
+    pub async fn get_key(&self, config: GetKeyConfig) -> Result<GetKeyResponse> {
+        let mut data = serde_json::to_value(&config)?;
+        data["algorithm"] = "secp256k1".into();
         let response = self.send_rpc_request("/GetKey", &data).await?;
         let response = serde_json::from_value::<GetKeyResponse>(response)?;
         // An agent older than the epoch fields ignores the selectors and omits them.
-        if root_epoch.is_some_and(|epoch| Some(epoch) != response.root_epoch)
-            || app_epoch.is_some_and(|epoch| Some(epoch) != response.app_epoch)
+        if config
+            .root_epoch
+            .is_some_and(|epoch| Some(epoch) != response.root_epoch)
+            || config
+                .app_epoch
+                .is_some_and(|epoch| Some(epoch) != response.app_epoch)
         {
             anyhow::bail!("GetKey returned different epochs than requested");
         }
