@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sidecar example: the key-recovery service holds the privileged passthrough,
+# the app only talks HTTP to it.
+#
+# Pin the image by digest in production, e.g.
+#   image: ghcr.io/dstack-tee/dstack-key-recovery@sha256:<digest>
+
+services:
+  key-recovery:
+    image: ghcr.io/dstack-tee/dstack-key-recovery:0.6.5
+    restart: unless-stopped
+    # Listen on the compose network, not the container loopback.
+    command: ["serve", "--addr", "0.0.0.0:8099", "--no-socket"]
+
+    # The quote goes through the host's vsock QGS service. Docker's default
+    # seccomp profile blocks AF_VSOCK, so unconfine it for this container only.
+    security_opt:
+      - seccomp=unconfined
+
+    environment:
+      # The CCEL is a sysfs file and cannot be bind-mounted into /sys inside
+      # the container, so mount it elsewhere and point the tool at it.
+      DSTACK_CCEL_FILE: /ccel.bin
+
+    volumes:
+      # .appkeys.json (KMS URL, pinned CA, current epochs) and
+      # .sys-config.json (launch ticket, collateral URLs, vm_config).
+      - /dstack/.host-shared:/dstack/.host-shared:ro
+
+      # Runtime RTMR3 events, folded into the quote.
+      - /run/log/dstack:/run/log/dstack:ro
+
+      # Boot event log (CCEL), mounted outside /sys.
+      - /sys/firmware/acpi/tables/data/CCEL:/ccel.bin:ro
+
+      # vsock QGS port. Present on 0.5.x and 0.6.x guests.
+      - /etc/tdx-attest.conf:/etc/tdx-attest.conf:ro
+
+    devices:
+      # TDX quote / report ioctl.
+      - /dev/tdx_guest:/dev/tdx_guest
+      # Host vsock transport for the QGS quote service.
+      - /dev/vsock:/dev/vsock
+
+    # Alternative on kernels with the TSM configfs provider: drop the vsock
+    # device and config file, and mount the report directory instead.
+    # - /sys/kernel/config/tsm/report:/sys/kernel/config/tsm/report
+
+    # The KMS is reached over the CVM's normal egress; nothing else is needed.
+
+  app:
+    image: your-app
+    depends_on:
+      - key-recovery
+    environment:
+      # Call http://key-recovery:8099/key?name=... from the app.
+      KEY_RECOVERY_URL: http://key-recovery:8099

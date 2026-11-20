@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Key Recovery Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release tag version without the key-recovery-v prefix
+        required: true
+        type: string
+  push:
+    tags:
+      - 'key-recovery-v*'
+
+permissions:
+  attestations: write
+  id-token: write
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse and check version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            VERSION=$DISPATCH_VERSION
+          else
+            case "$GITHUB_REF" in
+              refs/tags/key-recovery-v*) VERSION=${GITHUB_REF#refs/tags/key-recovery-v} ;;
+              *) echo "Expected a key-recovery-v* tag" >&2; exit 1 ;;
+            esac
+          fi
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Version must be a valid Docker tag" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=key-recovery-v$VERSION" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && env.RELEASE_TAG || github.sha }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve the revision to build
+        run: echo "GIT_REV=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: dstack/tools/key-recovery
+          file: dstack/tools/key-recovery/Dockerfile
+          push: true
+          provenance: true
+          sbom: true
+          build-args: |
+            DSTACK_REV=${{ env.GIT_REV }}
+          tags: |
+            ghcr.io/dstack-tee/dstack-key-recovery:${{ env.VERSION }}
+            ghcr.io/dstack-tee/dstack-key-recovery:latest
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        with:
+          subject-name: ghcr.io/dstack-tee/dstack-key-recovery
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "Key Recovery v${{ env.VERSION }}"
+          body: |
+            ## Docker Image
+
+            **Image**: `ghcr.io/dstack-tee/dstack-key-recovery:${{ env.VERSION }}`
+
+            **Digest (SHA256)**: `${{ steps.build.outputs.digest }}`
+
+            **Verification**: [Verify on Sigstore](https://search.sigstore.dev/?hash=${{ steps.build.outputs.digest }})
+
+            Build from source:
+
+            ```bash
+            docker build -f tools/key-recovery/Dockerfile -t dstack-key-recovery dstack
+            ```

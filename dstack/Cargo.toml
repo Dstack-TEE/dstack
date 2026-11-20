@@ -76,6 +76,7 @@ members = [
     "crates/qemu-acpi",
     "crates/pki-fetch",
     "crates/dstack-verifier-wasm",
+    "tools/key-recovery",
 ]
 # Vendored third-party crates are path dependencies but deliberately not members:
 # `--all-features` applies to members, and ktls declares its `ring` and
