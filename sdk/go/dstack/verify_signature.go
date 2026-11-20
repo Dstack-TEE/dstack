@@ -203,14 +203,10 @@ func VerifySealedEnvPublicKey(
 	signature []byte,
 	appID string,
 	rootEpoch uint32,
+	appEpoch uint32,
 	timestamp uint64,
 	opts *VerifyEnvEncryptPublicKeyOptions,
 ) ([]byte, error) {
-	return VerifySealedEnvPublicKeyAtEpochs(publicKey, signature, appID, rootEpoch, 0, timestamp, opts)
-}
-
-// VerifySealedEnvPublicKeyAtEpochs recovers the signer with both epoch bindings.
-func VerifySealedEnvPublicKeyAtEpochs(publicKey, signature []byte, appID string, rootEpoch, appEpoch uint32, timestamp uint64, opts *VerifyEnvEncryptPublicKeyOptions) ([]byte, error) {
 	if len(publicKey) != 32 {
 		return nil, fmt.Errorf("invalid public key length: expected 32 bytes, got %d", len(publicKey))
 	}

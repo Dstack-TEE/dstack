@@ -50,7 +50,7 @@ def test_sealed_env_round_trip(app_epoch):
 @pytest.mark.parametrize("epoch", [-1, 2**32, True, 0.5])
 def test_invalid_sealed_epoch(epoch):
     with pytest.raises(ValueError, match="uint32"):
-        seal_env([], "", epoch)
+        seal_env([], "", epoch, 0)
 
 
 @pytest.mark.parametrize("app_epoch", [0, 2])
@@ -79,13 +79,13 @@ def test_sealed_key_signature_context(app_epoch):
     trusted = "0x" + signer.public_key.to_compressed_bytes().hex()
     assert (
         verify_sealed_env_public_key(
-            public_key, signature, app.hex(), epoch, timestamp, app_epoch=app_epoch
+            public_key, signature, app.hex(), epoch, app_epoch, timestamp
         )
         == trusted
     )
     assert (
         verify_sealed_env_public_key(
-            public_key, signature, app.hex(), epoch + 1, timestamp, app_epoch=app_epoch
+            public_key, signature, app.hex(), epoch + 1, app_epoch, timestamp
         )
         != trusted
     )
@@ -95,15 +95,15 @@ def test_sealed_key_signature_context(app_epoch):
             signature,
             app.hex(),
             epoch,
+            app_epoch,
             timestamp - 1000,
-            app_epoch=app_epoch,
         )
         is None
     )
 
     assert (
         verify_sealed_env_public_key(
-            public_key, signature, app.hex(), epoch, timestamp, app_epoch=app_epoch + 1
+            public_key, signature, app.hex(), epoch, app_epoch + 1, timestamp
         )
         != trusted
     )

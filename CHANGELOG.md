@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   epoch. The receiver archives it without verifying it; relying parties verify
   it. `bootstrap-info.json` is gone: `GetMeta.bootstrap_info` reports the served
   epoch's attestation. Auto-bootstrap now records the attestation too (#539).
+- **Breaking:** SDKs: the SealedEnv helpers take the app epoch with no
+  default. `sealEnv`/`seal_env`/`SealEnv` and
+  `verifySealedEnvPublicKey`/`verify_sealed_env_public_key`/`VerifySealedEnvPublicKey`
+  take `root_epoch, app_epoch` in that order, and Go's `SealEnvAtEpochs` and
+  `VerifySealedEnvPublicKeyAtEpochs` and Rust's `seal_env_at_epochs` and
+  `verify_sealed_env_public_key_at_epochs` are folded into them. The app epoch
+  used to default to 0, so a key fetched after an app key rotation produced an
+  envelope the guest could not decrypt at boot. Pass both epochs
+  `GetSealedEnvPubKey` returns.
 
 ### Removed
 

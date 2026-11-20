@@ -136,13 +136,12 @@ export function verifySealedEnvPublicKey(
   signature: Uint8Array,
   appId: string,
   rootEpoch: number,
+  appEpoch: number,
   timestamp: bigint | number,
-  options?: VerifyOptions & { appEpoch?: number },
+  options?: VerifyOptions,
 ): string | null {
-  if (publicKey.length !== 32 || signature.length !== 65 ||
-      !Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff) return null
-  const appEpoch = options?.appEpoch ?? 0
-  if (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff) return null
+  if (publicKey.length !== 32 || signature.length !== 65) return null
+  if ([rootEpoch, appEpoch].some((epoch) => !Number.isInteger(epoch) || epoch < 0 || epoch > 0xffffffff)) return null
   const app = hexToBytes(appId)
   if (!app || app.length !== 20) return null
   if (typeof timestamp === 'number' && !Number.isSafeInteger(timestamp)) return null
