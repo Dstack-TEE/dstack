@@ -164,6 +164,16 @@ describe('DstackClientV1', () => {
         const response = await client.getKey('d', 'secp256k1', 1, 2)
         expect([response.root_epoch, response.app_epoch]).toEqual([1, 2])
       })
+      // An agent older than the epoch fields ignores the selectors and omits them.
+      const { root_epoch, app_epoch, ...omitted } = key
+      await withAgentAnswering(omitted, async client => {
+        for (const [rootEpoch, appEpoch] of [[0, undefined], [undefined, 0]]) {
+          await expect(client.getKey('d', 'secp256k1', rootEpoch, appEpoch))
+            .rejects.toThrow(/different epochs than requested/)
+        }
+        const response = await client.getKey('d', 'secp256k1')
+        expect([response.root_epoch, response.app_epoch]).toEqual([0, 0])
+      })
     })
 
     it('can select epoch zero rather than fall back to the current epoch', async () => {
@@ -172,9 +182,9 @@ describe('DstackClientV1', () => {
         let body = ''
         for await (const chunk of req) body += chunk
         const { root_epoch, app_epoch } = JSON.parse(body)
-        // Only explicit selectors get the archived key. Proto omits a zero response epoch.
+        // Only explicit selectors get the archived key.
         const selected = root_epoch === 0 && app_epoch === 2
-          ? { key: archivedKey, app_epoch: 2 }
+          ? { key: archivedKey, root_epoch: 0, app_epoch: 2 }
           : { key: 'cc'.repeat(32), root_epoch: 4, app_epoch: 3 }
         res.end(JSON.stringify({ ...selected, public_key: 'bb'.repeat(33), signature_chain: [] }))
       })

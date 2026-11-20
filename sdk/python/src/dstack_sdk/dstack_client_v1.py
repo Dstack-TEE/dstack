@@ -274,8 +274,13 @@ class AsyncDstackClientV1(AsyncBaseClient):
             data["app_epoch"] = app_epoch
         result = await self._send_rpc_request("GetKey", data)
         response = GetKeyResponseV1(**result)
-        if (root_epoch is not None and response.root_epoch != root_epoch) or (
-            app_epoch is not None and response.app_epoch != app_epoch
+        # An agent older than the epoch fields ignores the selectors and omits them.
+        if (
+            root_epoch is not None
+            and ("root_epoch" not in result or response.root_epoch != root_epoch)
+        ) or (
+            app_epoch is not None
+            and ("app_epoch" not in result or response.app_epoch != app_epoch)
         ):
             raise ValueError("GetKey returned different epochs than requested")
         return response

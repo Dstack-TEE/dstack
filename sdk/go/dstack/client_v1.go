@@ -536,7 +536,9 @@ func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm st
 		}
 	}
 
-	if (rootEpoch != nil && responseRootEpoch != *rootEpoch) || (appEpoch != nil && responseAppEpoch != *appEpoch) {
+	// An agent older than the epoch fields ignores the selectors and omits them.
+	if (rootEpoch != nil && (len(response.RootEpoch) == 0 || responseRootEpoch != *rootEpoch)) ||
+		(appEpoch != nil && (len(response.AppEpoch) == 0 || responseAppEpoch != *appEpoch)) {
 		return nil, fmt.Errorf("GetKey returned different epochs than requested")
 	}
 	return &GetKeyV1Response{

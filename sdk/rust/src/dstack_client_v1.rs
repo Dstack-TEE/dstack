@@ -130,7 +130,13 @@ impl DstackClientV1 {
         if let Some(app_epoch) = app_epoch {
             data["app_epoch"] = app_epoch.into();
         }
-        let response = self.send_rpc_request("GetKey", &data).await?;
+        let response: serde_json::Value = self.send_rpc_request("GetKey", &data).await?;
+        // An agent older than the epoch fields ignores the selectors and omits them.
+        let omitted =
+            |requested: Option<u32>, field| requested.is_some() && response.get(field).is_none();
+        if omitted(root_epoch, "root_epoch") || omitted(app_epoch, "app_epoch") {
+            anyhow::bail!("GetKey returned different epochs than requested");
+        }
         let response = serde_json::from_value::<GetKeyResponse>(response)?;
         if root_epoch.is_some_and(|epoch| epoch != response.root_epoch)
             || app_epoch.is_some_and(|epoch| epoch != response.app_epoch)

@@ -76,6 +76,43 @@ async fn get_key_rejects_epochs_other_than_the_requested_ones() {
     assert_eq!((key.root_epoch, key.app_epoch), (1, 2));
 }
 
+/// An agent older than the epoch fields ignores the selectors and omits them.
+#[tokio::test]
+async fn get_key_rejects_omitted_epochs_when_requested() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let body = format!(
+            r#"{{"key":"{}","public_key":"{}","signature_chain":[]}}"#,
+            "aa".repeat(32),
+            "bb".repeat(33)
+        );
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let _ = stream.read(&mut [0; 4096]);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    let client = DstackClientV1::new(Some(&endpoint));
+    for (root, app) in [(Some(0), None), (None, Some(0))] {
+        let err = client
+            .get_key_at_epochs("d", "secp256k1", root, app)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("different epochs than requested"),
+            "{err:#}"
+        );
+    }
+    let key = client.get_key("d", "secp256k1").await.unwrap();
+    assert_eq!((key.root_epoch, key.app_epoch), (0, 0));
+}
+
 #[tokio::test]
 async fn get_key_public_key_lengths_are_the_specified_ones() {
     let secp = client()

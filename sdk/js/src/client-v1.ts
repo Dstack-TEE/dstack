@@ -378,8 +378,9 @@ export class DstackClientV1 {
     throwOnRpcError(result)
     const responseRootEpoch = to_uint32(result.root_epoch, 'root_epoch')
     const responseAppEpoch = to_uint32(result.app_epoch, 'app_epoch')
-    if ((rootEpoch !== undefined && responseRootEpoch !== rootEpoch) ||
-        (appEpoch !== undefined && responseAppEpoch !== appEpoch)) {
+    // An agent older than the epoch fields ignores the selectors and omits them.
+    if ((rootEpoch !== undefined && (result.root_epoch === undefined || responseRootEpoch !== rootEpoch)) ||
+        (appEpoch !== undefined && (result.app_epoch === undefined || responseAppEpoch !== appEpoch))) {
       throw new Error('GetKey returned different epochs than requested')
     }
     return Object.freeze({

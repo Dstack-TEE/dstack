@@ -124,7 +124,11 @@ func TestV1GetKeyEpochWireNamesAndDefaults(t *testing.T) {
 						t.Errorf("unexpected %s in request: %s", field, raw)
 					}
 				}
-				_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[]}`))
+				epochs := ""
+				if tc.epoch != nil {
+					epochs = `,"root_epoch":0,"app_epoch":0`
+				}
+				_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[]` + epochs + `}`))
 			}))
 			defer server.Close()
 			client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
@@ -136,6 +140,22 @@ func TestV1GetKeyEpochWireNamesAndDefaults(t *testing.T) {
 				t.Errorf("omitted response epochs should default to zero, got %d/%d", res.RootEpoch, res.AppEpoch)
 			}
 		})
+	}
+}
+
+// An agent older than the epoch fields ignores the selectors and omits them.
+func TestV1GetKeyRejectsOmittedEpochsWhenRequested(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"key":"aa","public_key":"bb","signature_chain":[]}`))
+	}))
+	defer server.Close()
+	client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+	zero := uint32(0)
+	for _, tc := range []struct{ root, app *uint32 }{{&zero, nil}, {nil, &zero}} {
+		_, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", tc.root, tc.app)
+		if err == nil || !strings.Contains(err.Error(), "different epochs than requested") {
+			t.Errorf("root %v app %v: expected an epoch mismatch error, got %v", tc.root, tc.app, err)
+		}
 	}
 }
 
