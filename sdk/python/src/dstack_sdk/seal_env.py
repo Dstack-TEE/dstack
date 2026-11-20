@@ -17,7 +17,7 @@ from .encrypt_env_vars import EnvVar
 
 
 def seal_env(
-    envs: List[EnvVar], public_key_hex: str, root_epoch: int, app_epoch: int = 0
+    envs: List[EnvVar], public_key_hex: str, root_epoch: int, app_epoch: int
 ) -> str:
     """Seal envs to a trusted epoch public key and return the JSON envelope."""
     if (

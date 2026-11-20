@@ -315,7 +315,7 @@ def cmd_switch_vmm(args):
     print(f"Switched to VMM {selected['id'][:8]} ({url})")
 
 
-def seal_env(envs, hex_public_key: str, root_epoch: int, app_epoch: int = 0) -> str:
+def seal_env(envs, hex_public_key: str, root_epoch: int, app_epoch: int) -> str:
     """Return hex-encoded SealedEnv JSON using RFC 9180 base mode."""
     from pyhpke import AEADId, CipherSuite, KDFId, KEMId
 

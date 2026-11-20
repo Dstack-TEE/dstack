@@ -184,11 +184,10 @@ For example, Python `client.get_key("storage", "secp256k1", root_epoch=3,
 app_epoch=0)` selects exactly that pair. JavaScript uses
 `client.getKey("storage", "secp256k1", 3, 0)`. Rust provides
 `get_key_at_epochs(..., Some(3), Some(0))`; Go provides `GetKeyAtEpochs` with
-pointer selectors. Responses report both epochs. Existing root-only helpers
-continue to use the CVM's current app epoch.
+pointer selectors. Responses report both epochs.
 
-Sealing helpers also accept app epochs: `seal_env_at_epochs` (Rust),
-`SealEnvAtEpochs` (Go), and the optional final argument of `sealEnv` / `seal_env`
-(JavaScript / Python). See [SealedEnv](sealed-env.md) for the wire and signature
+Sealing helpers (`seal_env`, `SealEnv`, `sealEnv`) and the SealedEnv public-key
+verifiers take both epochs, with no default: they work offline and cannot know
+the current epochs, so pass the ones `GetSealedEnvPubKey` returned with the key. See [SealedEnv](sealed-env.md) for the wire and signature
 formats. The VMM UI and CLI use the epochs returned with the encryption key. SealedEnv
 uses a single version-1 format that always includes both epochs.

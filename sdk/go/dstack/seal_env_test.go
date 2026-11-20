@@ -39,7 +39,7 @@ func TestSealEnvRoundTripAndBinding(t *testing.T) {
 		{"nil_max_epoch", nil, ^uint32(0), 0, "", `{"env":[]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sealed, err := dstack.SealEnvAtEpochs(tc.envs, tc.prefix+hex.EncodeToString(key), tc.epoch, tc.appEpoch)
+			sealed, err := dstack.SealEnv(tc.envs, tc.prefix+hex.EncodeToString(key), tc.epoch, tc.appEpoch)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +110,7 @@ func TestSealEnvInvalidKey(t *testing.T) {
 		"zero": strings.Repeat("00", 32), "low_order": "01" + strings.Repeat("00", 31),
 	} {
 		t.Run(name, func(t *testing.T) {
-			sealed, err := dstack.SealEnv(nil, key, 0)
+			sealed, err := dstack.SealEnv(nil, key, 0, 0)
 			if err == nil || sealed != "" {
 				t.Fatal("expected invalid key error and no envelope")
 			}

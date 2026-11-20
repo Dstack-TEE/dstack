@@ -29,7 +29,7 @@ export async function sealEnv(
   envs: EnvVar[],
   publicKeyHex: string,
   rootEpoch: number,
-  appEpoch = 0,
+  appEpoch: number,
 ): Promise<string> {
   if (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff) {
     throw new Error('rootEpoch must be a uint32')
