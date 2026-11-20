@@ -117,10 +117,10 @@ def verify_sealed_env_public_key(
     signature: bytes,
     app_id: str,
     root_epoch: int,
+    app_epoch: int,
     timestamp: int,
     *,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
-    app_epoch: int = 0,
 ) -> Optional[str]:
     """Recover the signer; compare it with a trusted epoch root key or pin."""
     if len(public_key) != 32 or len(signature) != 65:

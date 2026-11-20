@@ -39,13 +39,13 @@ describe('sealed env', () => {
     const signed = secp256k1.sign(digest, signer)
     const signature = Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery])
     const trusted = '0x' + Buffer.from(secp256k1.getPublicKey(signer, true)).toString('hex')
-    expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, timestamp)).toBe(trusted)
-    expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 4, timestamp)).not.toBe(trusted)
-    expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, timestamp - 1000n)).toBeNull()
-    expect(verifySealedEnvPublicKey(publicKey, signature, '01', 3, timestamp)).toBeNull()
+    expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, 0, timestamp)).toBe(trusted)
+    expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 4, 0, timestamp)).not.toBe(trusted)
+    expect(verifySealedEnvPublicKey(publicKey, signature, app.toString('hex'), 3, 0, timestamp - 1000n)).toBeNull()
+    expect(verifySealedEnvPublicKey(publicKey, signature, '01', 3, 0, timestamp)).toBeNull()
   })
 
   it.each([-1, 2 ** 32, 0.5, NaN])('rejects invalid epoch %s', async (epoch) => {
-    await expect(sealEnv([], '', epoch)).rejects.toThrow('uint32')
+    await expect(sealEnv([], '', epoch, 0)).rejects.toThrow('uint32')
   })
 })

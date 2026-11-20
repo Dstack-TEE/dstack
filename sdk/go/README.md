@@ -241,7 +241,9 @@ go run -tags "ethereum solana" .
 `SealEnv` returns a version 1 HPKE JSON envelope for the VMM's `sealed_env`
 field (send its UTF-8 bytes). It requires a **trusted X25519 public key**:
 fetch `GetSealedEnvPubKey` for your app and authenticate the response before
-passing its key to `SealEnv`. `EncryptEnvVars` remains available for the legacy format.
+passing its key and both of its epochs to `SealEnv`. The guest decrypts with the
+key of the epochs the envelope names, so passing other epochs produces an
+envelope it cannot open. `EncryptEnvVars` remains available for the legacy format.
 
 `VerifySealedEnvPublicKey` checks the app ID and key widths, signature, and
 freshness (300 seconds maximum age, 60 seconds future skew by default). It
@@ -255,13 +257,13 @@ independently configured pin. Never take the pin from the same untrusted respons
 // publicKey and signature are decoded response bytes; appID is your requested
 // app. expectedEpoch and trustedSignerHex come from your trusted epoch policy.
 func sealTrustedEnv(envs []dstack.EnvVar, publicKey, signature []byte,
-    appID string, rootEpoch uint32, timestamp uint64,
+    appID string, rootEpoch, appEpoch uint32, timestamp uint64,
     expectedEpoch uint32, trustedSignerHex string) (string, error) {
     if rootEpoch != expectedEpoch {
         return "", fmt.Errorf("unexpected root epoch")
     }
     signer, err := dstack.VerifySealedEnvPublicKey(
-        publicKey, signature, appID, rootEpoch, timestamp, nil,
+        publicKey, signature, appID, rootEpoch, appEpoch, timestamp, nil,
     )
     if err != nil {
         return "", err
@@ -270,7 +272,7 @@ func sealTrustedEnv(envs []dstack.EnvVar, publicKey, signature []byte,
     if string(signer) != trustedSignerHex {
         return "", fmt.Errorf("unexpected epoch signer")
     }
-    return dstack.SealEnv(envs, hex.EncodeToString(publicKey), rootEpoch)
+    return dstack.SealEnv(envs, hex.EncodeToString(publicKey), rootEpoch, appEpoch)
 }
 ```
 

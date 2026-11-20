@@ -58,22 +58,12 @@ pub fn recover_sealed_env_public_key(
         .context("failed to recover sealed env public key signer")
 }
 
-/// Verify the app binding, expected epoch, trusted epoch signer, and freshness.
+/// Verify the app binding, expected epochs, trusted epoch signer, and freshness.
 ///
 /// `trusted_signer` must be the authenticated secp256k1 root public key for
 /// `expected_epoch`. `now` is trusted Unix time in seconds. Accepts keys at most
 /// 300 seconds old or 60 seconds ahead of `now`.
 pub fn verify_sealed_env_public_key(
-    app_id: &[u8; 20],
-    key: &SealedEnvPublicKey,
-    expected_epoch: u32,
-    trusted_signer: &VerifyingKey,
-    now: u64,
-) -> Result<()> {
-    verify_sealed_env_public_key_at_epochs(app_id, key, expected_epoch, 0, trusted_signer, now)
-}
-
-pub fn verify_sealed_env_public_key_at_epochs(
     app_id: &[u8; 20],
     key: &SealedEnvPublicKey,
     expected_epoch: u32,
@@ -98,18 +88,12 @@ pub fn verify_sealed_env_public_key_at_epochs(
 
 /// Seal environment key/value pairs to a trusted 32-byte X25519 public key.
 ///
-/// The caller must authenticate the public key and its root epoch before calling.
-/// Returns a version-1 JSON envelope using RFC 9180 base mode with
-/// X25519/HKDF-SHA256/AES-256-GCM and standard Base64 encoding.
+/// The caller must authenticate the public key and its epochs before calling,
+/// and pass the epochs the key was issued for: the guest decrypts with the key
+/// of the epochs the envelope names. Returns a version-1 JSON envelope using
+/// RFC 9180 base mode with X25519/HKDF-SHA256/AES-256-GCM and standard Base64
+/// encoding.
 pub fn seal_env<K: AsRef<str>, V: AsRef<str>>(
-    envs: &[(K, V)],
-    public_key: &[u8],
-    root_epoch: u32,
-) -> Result<String> {
-    seal_env_at_epochs(envs, public_key, root_epoch, 0)
-}
-
-pub fn seal_env_at_epochs<K: AsRef<str>, V: AsRef<str>>(
     envs: &[(K, V)],
     public_key: &[u8],
     root_epoch: u32,
@@ -155,7 +139,7 @@ mod tests {
             ("EMPTY", ""),
         ];
         for epoch in [0, 42, u32::MAX] {
-            let sealed = seal_env(&envs, &public.to_bytes(), epoch).unwrap();
+            let sealed = seal_env(&envs, &public.to_bytes(), epoch, 0).unwrap();
             let envelope: serde_json::Value = serde_json::from_str(&sealed).unwrap();
             assert_eq!(envelope.as_object().unwrap().len(), 5);
             assert_eq!(envelope["version"], 1);
@@ -218,27 +202,35 @@ mod tests {
             *signer.verifying_key()
         );
         for now in [940, 1_000, 1_300] {
-            verify_sealed_env_public_key(&app_id, &key, 42, signer.verifying_key(), now).unwrap();
+            verify_sealed_env_public_key(&app_id, &key, 42, 0, signer.verifying_key(), now)
+                .unwrap();
         }
         for now in [939, 1_301, u64::MAX] {
-            assert!(
-                verify_sealed_env_public_key(&app_id, &key, 42, signer.verifying_key(), now)
-                    .is_err()
-            );
+            assert!(verify_sealed_env_public_key(
+                &app_id,
+                &key,
+                42,
+                0,
+                signer.verifying_key(),
+                now
+            )
+            .is_err());
         }
         assert!(
-            verify_sealed_env_public_key(&app_id, &key, 41, signer.verifying_key(), 1_000).is_err()
+            verify_sealed_env_public_key(&app_id, &key, 41, 0, signer.verifying_key(), 1_000)
+                .is_err()
         );
         assert!(verify_sealed_env_public_key(
             &app_id,
             &key,
             42,
+            0,
             other_signer.verifying_key(),
             1_000
         )
         .is_err());
         assert!(
-            verify_sealed_env_public_key(&[8; 20], &key, 42, signer.verifying_key(), 1_000)
+            verify_sealed_env_public_key(&[8; 20], &key, 42, 0, signer.verifying_key(), 1_000)
                 .is_err()
         );
         for field in 0..4 {
@@ -253,6 +245,7 @@ mod tests {
                 &app_id,
                 &modified,
                 modified.root_epoch,
+                0,
                 signer.verifying_key(),
                 1_000
             )
@@ -285,11 +278,10 @@ mod tests {
             .unwrap();
         key.signature[..64].copy_from_slice(&signature.to_bytes());
         key.signature[64] = recovery_id.to_byte();
-        verify_sealed_env_public_key_at_epochs(&app_id, &key, 42, 2, signer.verifying_key(), 1_000)
-            .unwrap();
+        verify_sealed_env_public_key(&app_id, &key, 42, 2, signer.verifying_key(), 1_000).unwrap();
         for app_epoch in [0, 1, 3] {
             key.app_epoch = app_epoch;
-            assert!(verify_sealed_env_public_key_at_epochs(
+            assert!(verify_sealed_env_public_key(
                 &app_id,
                 &key,
                 42,
@@ -304,7 +296,7 @@ mod tests {
     #[test]
     fn rejects_invalid_public_keys() {
         for key in [vec![], vec![0; 31], vec![0; 32], vec![0; 33]] {
-            assert!(seal_env(&[("KEY", "value")], &key, 0).is_err());
+            assert!(seal_env(&[("KEY", "value")], &key, 0, 0).is_err());
         }
     }
 }
