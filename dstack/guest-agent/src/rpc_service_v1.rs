@@ -516,6 +516,7 @@ mod tests {
                 path: "storage-encryption".to_string(),
                 purpose: "signing".to_string(),
                 algorithm: "secp256k1".to_string(),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -540,6 +541,7 @@ mod tests {
                 path: "test".to_string(),
                 purpose: "signing".to_string(),
                 algorithm: String::new(),
+                ..Default::default()
             })
             .await
             .unwrap();

@@ -98,21 +98,10 @@ impl DstackClientV1 {
         self.request_key(domain, algorithm, None, None).await
     }
 
-    /// [`Self::get_key`] under the KMS root key epoch `root_epoch` instead of
-    /// the current one; epoch 0 is the original root keys. Name an older epoch
-    /// only to reach a key from before a KMS root key rotation, for example to
-    /// migrate off it.
-    pub async fn get_key_at_root_epoch(
-        &self,
-        domain: &str,
-        algorithm: &str,
-        root_epoch: u32,
-    ) -> Result<GetKeyResponse> {
-        self.request_key(domain, algorithm, Some(root_epoch), None)
-            .await
-    }
-
-    /// Select root and application epochs independently; omitted values use this CVM's current keys.
+    /// [`Self::get_key`] under the given KMS root key epoch and application key
+    /// epoch; `None` selects the current one. Epoch 0 is the original keys.
+    /// Name an older epoch only to reach a key from before a rotation, for
+    /// example to migrate off it.
     pub async fn get_key_at_epochs(
         &self,
         domain: &str,

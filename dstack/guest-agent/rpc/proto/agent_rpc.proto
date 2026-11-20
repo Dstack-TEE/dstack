@@ -36,7 +36,7 @@ service Tappd {
 
 // The service for the dstack guest agent.
 //
-// This surface is CLOSED. It is exactly the v0.5.11 surface and stays that way:
+// This surface is CLOSED. It is the v0.5.11 surface and stays that way:
 // no additions, no renumbering, no removals, and no semantic changes to
 // existing methods. It exists so a v0.5.x client keeps working against a 0.6
 // agent unchanged.
@@ -50,6 +50,11 @@ service Tappd {
 // additions" is how this surface acquired `GpuInfo`, `AttestGpu` and
 // `AttestArgs` between v0.5.11 and 0.6.0, none of which ever shipped and all
 // of which have been moved to v1.
+//
+// One addition is sanctioned: the epoch selectors on `GetKey`. A KMS key
+// rotation changes every v0 key, and v1 derives different keys, so without
+// them a v0 key from before a rotation would be unreachable. `Tappd`'s
+// `DeriveK256Key` shares `GetKeyArgs` and honours them too.
 //
 // Two behaviour-only changes are sanctioned and do not alter the wire shape:
 // `GetQuote` now fails on a platform without Intel TDX instead of returning an
@@ -164,6 +169,11 @@ message GetKeyArgs {
   string purpose = 2;
   // Algorithm of the key. Either `secp256k1` or `ed25519`. Defaults to `secp256k1`
   string algorithm = 3;
+  // KMS root and application key epochs to derive from. Unset means the
+  // current ones; epoch 0 is the original keys. Name an older epoch only to
+  // reach a key from before a KMS key rotation, for example to migrate off it.
+  optional uint32 root_epoch = 4;
+  optional uint32 app_epoch = 5;
 }
 
 // The response to a DeriveK256Key request
@@ -182,6 +192,10 @@ message GetKeyResponse {
   // [0] - the k256 signature of the derived pK signed by the app root key
   // [1] - the k256 signature of the app root pK signed by the KMS root key
   repeated bytes signature_chain = 2;
+  // KMS root and application key epochs the key was derived from. Absent
+  // from agents older than this field, which ignore the epoch selectors.
+  uint32 root_epoch = 3;
+  uint32 app_epoch = 4;
 }
 
 // The request to get a TDX quote

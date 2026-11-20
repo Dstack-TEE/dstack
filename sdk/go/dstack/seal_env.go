@@ -16,12 +16,10 @@ import (
 
 // SealEnv encrypts environment variables into a version 1 sealed-env JSON envelope.
 // It uses HPKE base mode with X25519, HKDF-SHA256 and AES-256-GCM, binding
-// rootEpoch in the info string. publicKeyHex accepts an optional 0x prefix.
-func SealEnv(envs []EnvVar, publicKeyHex string, rootEpoch uint32) (string, error) {
-	return SealEnvAtEpochs(envs, publicKeyHex, rootEpoch, 0)
-}
-
-func SealEnvAtEpochs(envs []EnvVar, publicKeyHex string, rootEpoch, appEpoch uint32) (string, error) {
+// rootEpoch and appEpoch in the info string. Pass the epochs GetSealedEnvPubKey
+// returned with publicKeyHex: the guest decrypts with the key of the epochs the
+// envelope names. publicKeyHex accepts an optional 0x prefix.
+func SealEnv(envs []EnvVar, publicKeyHex string, rootEpoch, appEpoch uint32) (string, error) {
 	publicKeyHex = strings.TrimPrefix(strings.TrimPrefix(publicKeyHex, "0x"), "0X")
 	key, err := hex.DecodeString(publicKeyHex)
 	if err != nil {

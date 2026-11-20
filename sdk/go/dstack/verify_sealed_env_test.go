@@ -49,7 +49,7 @@ func TestVerifySealedEnvPublicKey(t *testing.T) {
 	sig := sign("dstack-sealed-env-pubkey-v1:", now)
 	for _, prefix := range []string{"", "0x", "0X"} {
 		t.Run("valid_"+prefix, func(t *testing.T) {
-			key, err := dstack.VerifySealedEnvPublicKey(pub, sig, prefix+appID, epoch, now, nil)
+			key, err := dstack.VerifySealedEnvPublicKey(pub, sig, prefix+appID, epoch, 0, now, nil)
 			if err != nil || !bytes.Equal(key, pin) {
 				t.Fatalf("expected trusted signer, got %q, %v", key, err)
 			}
@@ -69,7 +69,7 @@ func TestVerifySealedEnvPublicKey(t *testing.T) {
 		{"domain", pub, sign("dstack-env-encrypt-pubkey:", now), appID, epoch, now},
 	} {
 		t.Run("context_"+tc.name, func(t *testing.T) {
-			key, err := dstack.VerifySealedEnvPublicKey(tc.pub, tc.sig, tc.app, tc.epoch, tc.timestamp, nil)
+			key, err := dstack.VerifySealedEnvPublicKey(tc.pub, tc.sig, tc.app, tc.epoch, 0, tc.timestamp, nil)
 			// Recovery can succeed for a different message; the trusted pin must not match.
 			if err == nil && bytes.Equal(key, pin) {
 				t.Fatal("changed context recovered trusted signer")
@@ -83,14 +83,14 @@ func TestVerifySealedEnvPublicKey(t *testing.T) {
 		{"old", now - 301}, {"future", now + 120}, {"zero", 0}, {"overflow", ^uint64(0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			key, err := dstack.VerifySealedEnvPublicKey(pub, sign("dstack-sealed-env-pubkey-v1:", tc.timestamp), appID, epoch, tc.timestamp, nil)
+			key, err := dstack.VerifySealedEnvPublicKey(pub, sign("dstack-sealed-env-pubkey-v1:", tc.timestamp), appID, epoch, 0, tc.timestamp, nil)
 			if err == nil || key != nil {
 				t.Fatal("expected timestamp error")
 			}
 		})
 	}
 	for _, timestamp := range []uint64{now - 290, now + 60} {
-		key, err := dstack.VerifySealedEnvPublicKey(pub, sign("dstack-sealed-env-pubkey-v1:", timestamp), appID, epoch, timestamp, nil)
+		key, err := dstack.VerifySealedEnvPublicKey(pub, sign("dstack-sealed-env-pubkey-v1:", timestamp), appID, epoch, 0, timestamp, nil)
 		if err != nil || !bytes.Equal(key, pin) {
 			t.Fatalf("timestamp within window rejected: %v", err)
 		}
@@ -115,7 +115,7 @@ func TestVerifySealedEnvPublicKeyInvalidInputs(t *testing.T) {
 		{"odd_app", pub, sig, app + "1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			key, err := dstack.VerifySealedEnvPublicKey(tc.pub, tc.sig, tc.app, 0, uint64(time.Now().Unix()), nil)
+			key, err := dstack.VerifySealedEnvPublicKey(tc.pub, tc.sig, tc.app, 0, 0, uint64(time.Now().Unix()), nil)
 			if err == nil || key != nil {
 				t.Fatal("expected invalid input error")
 			}

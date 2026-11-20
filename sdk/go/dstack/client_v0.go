@@ -57,6 +57,9 @@ func (r *GetTlsKeyResponse) AsUint8Array(maxLength ...int) ([]byte, error) {
 type GetKeyResponse struct {
 	Key            string   `json:"key"`
 	SignatureChain []string `json:"signature_chain"`
+	// Key epochs the key was derived from; nil from agents older than these fields.
+	RootEpoch *uint32 `json:"root_epoch,omitempty"`
+	AppEpoch  *uint32 `json:"app_epoch,omitempty"`
 }
 
 // DecodeKey returns the key as bytes
@@ -351,6 +354,15 @@ func (c *DstackClientV0) ensureAlgorithmSupported(ctx context.Context, algorithm
 
 // Gets a key from the dstack service.
 func (c *DstackClientV0) GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error) {
+	return c.getKey(ctx, path, purpose, algorithm, nil, nil)
+}
+
+// GetKeyAtEpochs selects the two independent key epochs. Nil means current.
+func (c *DstackClientV0) GetKeyAtEpochs(ctx context.Context, path, purpose, algorithm string, rootEpoch, appEpoch *uint32) (*GetKeyResponse, error) {
+	return c.getKey(ctx, path, purpose, algorithm, rootEpoch, appEpoch)
+}
+
+func (c *DstackClientV0) getKey(ctx context.Context, path, purpose, algorithm string, rootEpoch, appEpoch *uint32) (*GetKeyResponse, error) {
 	if err := c.ensureAlgorithmSupported(ctx, algorithm); err != nil {
 		return nil, err
 	}
@@ -358,6 +370,12 @@ func (c *DstackClientV0) GetKey(ctx context.Context, path string, purpose string
 		"path":      path,
 		"purpose":   purpose,
 		"algorithm": algorithm,
+	}
+	if rootEpoch != nil {
+		payload["root_epoch"] = *rootEpoch
+	}
+	if appEpoch != nil {
+		payload["app_epoch"] = *appEpoch
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/GetKey", payload)
@@ -369,7 +387,14 @@ func (c *DstackClientV0) GetKey(ctx context.Context, path string, purpose string
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
+	if epochDiffers(rootEpoch, response.RootEpoch) || epochDiffers(appEpoch, response.AppEpoch) {
+		return nil, fmt.Errorf("GetKey returned different epochs than requested")
+	}
 	return &response, nil
+}
+
+func epochDiffers(requested, got *uint32) bool {
+	return requested != nil && (got == nil || *got != *requested)
 }
 
 // Gets a TDX quote from the dstack service. Needs Intel TDX: on a platform

@@ -27,6 +27,9 @@ export interface GetKeyResponse {
 
   key: Uint8Array
   signature_chain: Uint8Array[]
+  /** Key epochs the key was derived from; undefined from agents older than these fields. */
+  root_epoch?: number
+  app_epoch?: number
 }
 
 export interface SignResponse {
@@ -197,19 +200,40 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
     }
   }
 
-  async getKey(path: string = '', purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
+  /**
+   * @param rootEpoch KMS root key epoch; unset is the current one. Name an older
+   * epoch only to reach a key from before a KMS key rotation, to migrate off it.
+   * @param appEpoch Application key epoch; unset is the current one.
+   */
+  async getKey(path: string = '', purpose: string = '', algorithm: string = 'secp256k1', rootEpoch?: number, appEpoch?: number): Promise<GetKeyResponse> {
+    if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff)) {
+      throw new Error('rootEpoch must be a uint32')
+    }
+    if (appEpoch !== undefined && (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff)) {
+      throw new Error('appEpoch must be a uint32')
+    }
     await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
       path: path,
       purpose: purpose,
-      algorithm: algorithm
+      algorithm: algorithm,
+      root_epoch: rootEpoch,
+      app_epoch: appEpoch,
     })
-    const result = await send_rpc_request<{ key: string, signature_chain: string[] }>(this.endpoint, '/GetKey', payload)
+    const result = await send_rpc_request<{ key: string, signature_chain: string[], root_epoch?: number, app_epoch?: number }>(
+      this.endpoint, '/GetKey', payload)
     throwOnRpcError(result)
+    // An agent older than the epoch fields ignores the selectors and omits them.
+    if ((rootEpoch !== undefined && result.root_epoch !== rootEpoch) ||
+        (appEpoch !== undefined && result.app_epoch !== appEpoch)) {
+      throw new Error('GetKey returned different epochs than requested')
+    }
     return Object.freeze({
       key: from_hex(result.key, 'key'),
       signature_chain: to_list(result.signature_chain, 'signature_chain', 'error')
         .map((sig, i) => from_hex(sig, `signature_chain[${i}]`)),
+      root_epoch: result.root_epoch,
+      app_epoch: result.app_epoch,
       __name__: 'GetKeyResponse',
     })
   }

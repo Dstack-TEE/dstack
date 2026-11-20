@@ -441,7 +441,8 @@ Migrate a surface at a time: both clients can talk to the same agent at once, so
 `sealEnv` produces the version-1 HPKE JSON for `.sealed-env`. Fetch
 `GetSealedEnvPubKey`, verify its signature and timestamp with
 `verifySealedEnvPublicKey`, and compare the returned signer with a trusted
-root key for the response's epoch before encrypting. Send the UTF-8 JSON bytes
+root key for the response's epoch before encrypting. Pass both epochs of the
+response: the guest decrypts with the key of the epochs the envelope names. Send the UTF-8 JSON bytes
 in the VMM's `sealed_env` field (hex for JSON RPC), not `encrypted_env`.
 
 ```ts
@@ -449,10 +450,10 @@ import { sealEnv, verifySealedEnvPublicKey } from '@phala/dstack-sdk'
 // response.public_key/signature are decoded bytes; trustedSigner comes from
 // an independently trusted epoch registry or local pin.
 const signer = verifySealedEnvPublicKey(
-  publicKeyBytes, signatureBytes, appId, response.root_epoch, response.timestamp,
+  publicKeyBytes, signatureBytes, appId, response.root_epoch, response.app_epoch, response.timestamp,
 )
 if (signer !== trustedSigner) throw new Error('untrusted SealedEnv key')
-const sealed = await sealEnv(envs, response.public_key, response.root_epoch)
+const sealed = await sealEnv(envs, response.public_key, response.root_epoch, response.app_epoch)
 ```
 
 Legacy `encryptEnvVars` remains available for old guest images. See

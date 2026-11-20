@@ -129,6 +129,9 @@ class GetTlsKeyResponse(BaseModel):
 class GetKeyResponse(BaseModel):
     key: str
     signature_chain: List[str]
+    # Key epochs the key was derived from; None from agents older than these fields.
+    root_epoch: Optional[int] = None
+    app_epoch: Optional[int] = None
 
     def decode_key(self) -> bytes:
         return bytes.fromhex(self.key)
@@ -482,16 +485,37 @@ class AsyncDstackClientV0(AsyncBaseClient):
         path: str | None = None,
         purpose: str | None = None,
         algorithm: str = "secp256k1",
+        root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
     ) -> GetKeyResponse:
-        """Derive a key from the given path, purpose, and algorithm."""
+        """Derive a key from the given path, purpose, and algorithm.
+
+        ``root_epoch`` and ``app_epoch`` select the KMS root and application key
+        epochs; the default ``None`` is the current one, and epoch 0 is the
+        original keys. Name an older epoch only to reach a key from before a KMS
+        key rotation, for example to migrate off it.
+        """
         await self._ensure_algorithm_supported(algorithm)
         data: Dict[str, Any] = {
             "path": path or "",
             "purpose": purpose or "",
             "algorithm": algorithm,
         }
+        if root_epoch is not None:
+            if type(root_epoch) is not int or not 0 <= root_epoch <= 0xFFFFFFFF:
+                raise ValueError("root_epoch must be a uint32")
+            data["root_epoch"] = root_epoch
+        if app_epoch is not None:
+            if type(app_epoch) is not int or not 0 <= app_epoch <= 0xFFFFFFFF:
+                raise ValueError("app_epoch must be a uint32")
+            data["app_epoch"] = app_epoch
         result = await self._send_rpc_request("GetKey", data)
-        return GetKeyResponse(**result)
+        response = GetKeyResponse(**result)
+        if (root_epoch is not None and response.root_epoch != root_epoch) or (
+            app_epoch is not None and response.app_epoch != app_epoch
+        ):
+            raise ValueError("GetKey returned different epochs than requested")
+        return response
 
     async def get_quote(
         self,
@@ -690,6 +714,8 @@ class DstackClientV0(BaseClient):
         path: str | None = None,
         purpose: str | None = None,
         algorithm: str = "secp256k1",
+        root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
     ) -> GetKeyResponse:
         """Derive a key from the given path, purpose, and algorithm."""
         raise NotImplementedError

@@ -48,6 +48,11 @@ the agent's own tests: `get_key_pins_the_frozen_chain_link` in
 `dstack/guest-agent/src/server.rs` exercise the real mount table rather than a
 restatement of it.
 
+One addition is sanctioned: the `root_epoch` and `app_epoch` selectors on
+`GetKey`, described in [Key epochs](#key-epochs). A KMS key rotation changes
+every key this surface derives, and v1 derives different keys altogether, so
+without them a v0 key from before a rotation would be unreachable.
+
 Two behaviour changes in 0.6.0 are sanctioned and do not alter the wire shape:
 `GetQuote` fails on a platform without Intel TDX instead of returning an empty
 quote, and `GetTlsKey` rejects a `not_before` that is not earlier than
@@ -116,13 +121,15 @@ with a two-link signature chain proving where it came from. It is the reason thi
 document exists: it is the one method on this surface whose output other parties
 depend on, and until now its bytes lived only in the implementation.
 
-`GetKeyArgs` has three fields.
+`GetKeyArgs` has five fields.
 
 | Field | Type | Reaches the KDF |
 |---|---|---|
 | `path` | string | **yes**, verbatim |
 | `purpose` | string | no |
 | `algorithm` | string | no |
+| `root_epoch` | optional uint32 | selects the IKM |
+| `app_epoch` | optional uint32 | selects the IKM |
 
 Only `path` reaches the KDF. `purpose` is echoed into the chain claim of link 0
 and has no other effect: two calls differing only in `purpose` return the same
@@ -138,7 +145,7 @@ and there is no BIP-32-style hierarchy. The empty string is a valid `path`.
 
 ```text
 salt = "RATLS"                          (5 bytes, ASCII: 52 41 54 4c 53)
-IKM  = app root secp256k1 private key   (32 bytes, `k256_key` from .appkeys.json)
+IKM  = app root secp256k1 private key   (32 bytes, of the selected key epochs)
 info = path                             (the caller's bytes, verbatim)
 L    = 32
 
@@ -154,6 +161,26 @@ no tag, and no length prefix.
 The salt is the constant `LEGACY_SALT` in `dstack/ra-tls/src/kdf.rs`. It is the
 five ASCII bytes `RATLS`. It is baked into every key deployed before the
 versioned API and must never change.
+
+### Key epochs
+
+`root_epoch` and `app_epoch` select the KMS root key epoch and the application
+key epoch whose app root key is the IKM. Each defaults to the CVM's current
+epoch, which is the app root key in `.appkeys.json`; epoch 0 is the original
+keys. A selector newer than the current epoch fails. An older one makes the agent
+fetch that epoch's app root key from the KMS, which must still authorize this
+instance under the policy of that epoch; the agent keeps it in memory afterwards.
+
+The epochs change the IKM and nothing else: the KDF, the algorithm handling and
+the chain encoding are as below, and link 1 is the KMS signature of the selected
+epoch. With no selector set, a CVM that never saw a key rotation derives exactly
+the keys v0.5.11 did.
+
+`GetKeyResponse.root_epoch` and `app_epoch` report the epochs the key was derived
+from. An agent older than these fields ignores the selectors and omits them from
+its response, so a client that sets a selector must check that the response
+carries the epochs it asked for. `Tappd.DeriveK256Key` takes `GetKeyArgs` too and
+honours the selectors, but its response has no epoch fields.
 
 ### Algorithm selection
 
