@@ -5,12 +5,11 @@
 # Sidecar example: the key-recovery service holds the privileged passthrough,
 # the app only talks HTTP to it.
 #
-# Pin the image by digest in production, e.g.
-#   image: ghcr.io/dstack-tee/dstack-key-recovery@sha256:<digest>
+# Pinned by digest. Verify it with the commands in README.md before use.
 
 services:
   key-recovery:
-    image: ghcr.io/dstack-tee/dstack-key-recovery:0.6.5
+    image: ghcr.io/dstack-tee/dstack-key-recovery:0.6.5@sha256:26803eb7eb34f69f367d7ebc0b4abc31f35caad5e58213de77a91dddcd2d0b6b
     restart: unless-stopped
     # Listen on the compose network, not the container loopback.
     command: ["serve", "--addr", "0.0.0.0:8099", "--no-socket"]
