@@ -2201,6 +2201,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-key-recovery"
+version = "0.6.5"
+dependencies = [
+ "anyhow",
+ "axum",
+ "cert-client",
+ "clap",
+ "dstack-attest",
+ "dstack-kms-rpc",
+ "dstack-types",
+ "ed25519-dalek",
+ "fs-err",
+ "hex",
+ "k256",
+ "ra-tls",
+ "semver",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dstack-kms"
 version = "0.6.5"
 dependencies = [
