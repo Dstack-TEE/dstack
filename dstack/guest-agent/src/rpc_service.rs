@@ -762,7 +762,11 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn get_key(self, request: GetKeyArgs) -> Result<GetKeyResponse> {
-        let k256_app_key = &self.state.inner.keys.k256_key;
+        let root = self
+            .state
+            .app_root(request.root_epoch, request.app_epoch)
+            .await?;
+        let k256_app_key = &root.k256_key;
 
         let algorithm = normalize_algorithm(&request.algorithm);
         let (key, pubkey_hex) = match algorithm {
@@ -791,16 +795,16 @@ impl DstackGuestRpc for InternalRpcHandler {
         };
 
         let msg_to_sign = format!("{}:{}", request.purpose, pubkey_hex);
-        let app_signing_key =
-            SigningKey::from_slice(k256_app_key).context("Failed to parse app k256 key")?;
         // The shared 65-byte `r || s || v` envelope. Byte-identical to the copy
         // this replaced -- `get_key_pins_the_frozen_chain_link` is the vector
         // that says so, and it exists for exactly this de-duplication.
-        let signature = sign_recoverable_keccak256(&app_signing_key, msg_to_sign.as_bytes())?;
+        let signature = sign_recoverable_keccak256(&root.signing_key, msg_to_sign.as_bytes())?;
 
         Ok(GetKeyResponse {
             key,
-            signature_chain: vec![signature, self.state.inner.keys.k256_signature.clone()],
+            signature_chain: vec![signature, root.kms_signature],
+            root_epoch: root.epoch,
+            app_epoch: root.app_epoch,
         })
     }
 
@@ -835,6 +839,7 @@ impl DstackGuestRpc for InternalRpcHandler {
                 path: "vms".to_string(),
                 purpose: "signing".to_string(),
                 algorithm: key_algorithm.to_string(),
+                ..Default::default()
             })
             .await?;
         let (signature, public_key) = match algorithm {
@@ -1150,6 +1155,7 @@ impl ExternalRpcHandler {
             path: "vms".to_string(),
             purpose: "signing".to_string(),
             algorithm: key_algorithm.to_string(),
+            ..Default::default()
         })
         .await?;
 
@@ -1887,6 +1893,7 @@ pNs85uhOZE8z2jr8Pg==
                 path: "test".to_string(),
                 purpose: "signing".to_string(),
                 algorithm: "secp256k1".to_string(),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -1894,6 +1901,28 @@ pNs85uhOZE8z2jr8Pg==
             hex::encode(&response.signature_chain[0]),
             "c8a3dcf06c4e95bd78a5d7a1c8fcff171fc5848cfae804c6fc11bda4dc5d4062379995390843827444992c4c0e4bac70f0f878e01b9fc8b98cd7126fe5a3876b01"
         );
+    }
+
+    #[tokio::test]
+    async fn get_key_selects_the_epochs() {
+        let (state, _guard) = setup_test_state().await;
+        let get_key = |root_epoch, app_epoch| {
+            InternalRpcHandler::new(state.clone()).get_key(GetKeyArgs {
+                path: "test".to_string(),
+                purpose: "signing".to_string(),
+                root_epoch,
+                app_epoch,
+                ..Default::default()
+            })
+        };
+
+        let current = get_key(None, None).await.unwrap();
+        assert_eq!((current.root_epoch, current.app_epoch), (0, 0));
+        let selected = get_key(Some(0), Some(0)).await.unwrap();
+        assert_eq!(selected.key, current.key);
+        assert_eq!(selected.signature_chain, current.signature_chain);
+        assert!(get_key(Some(1), None).await.is_err());
+        assert!(get_key(None, Some(1)).await.is_err());
     }
 
     #[test]
@@ -1919,11 +1948,13 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "k256".to_string(),
+            ..Default::default()
         };
         let req_secp = GetKeyArgs {
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "secp256k1".to_string(),
+            ..Default::default()
         };
 
         let resp_k256 = handler_k256.get_key(req_k256).await.unwrap();
@@ -1942,6 +1973,7 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "secp256k1_prehashed".to_string(),
+            ..Default::default()
         };
 
         let result = handler.get_key(request).await;
@@ -1958,6 +1990,7 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "ed25519".to_string(),
+            ..Default::default()
         };
 
         let response = handler.get_key(request).await.unwrap();
@@ -1979,11 +2012,13 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "".to_string(),
+            ..Default::default()
         };
         let req_secp = GetKeyArgs {
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "secp256k1".to_string(),
+            ..Default::default()
         };
 
         let resp_default = handler_default.get_key(req_default).await.unwrap();
@@ -2020,6 +2055,7 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "rsa".to_string(),
+            ..Default::default()
         };
 
         let result = handler.get_key(request).await;
