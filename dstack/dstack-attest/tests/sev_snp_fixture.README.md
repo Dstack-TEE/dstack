@@ -45,7 +45,7 @@ chip_id:    38d174589d2dff97a6d40cb9f9d90b9507c027491219083cef3ce73e
             d18f7289142d941ad61eabecd27d25f268c1095d665f6001358e98a4769c82734a6bb877
 measurement 7f51e17f72a04d5422cb2c00998166536019a217376f3aa45a630e59c805a599...
 host_data:  783f0057820acb99249af56cc3b07b4e8d80f65183167cba9cf437bb680f742f
-tcb_status: empty       (no sev_snp_tcb_requirements configured; see docs/amd-sev-snp.md)
+tcb_status: empty       (no sev_snp_tcb_requirements_file configured; see docs/amd-sev-snp.md)
 ```
 
 ## Refreshing

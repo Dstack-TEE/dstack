@@ -111,6 +111,9 @@ insecure_allow_external_trust_anchors = false
 # Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from; `*`
 # matches within one DNS label. Unset keeps Google's Private CA hosts.
 # allowed_collateral_hosts = ["privateca-content-*.storage.googleapis.com"]
+# Minimum SEV-SNP TCBs for CPUs the auth API publishes none for, as the same
+# JSON list; see docs/amd-sev-snp.md. A published minimum takes precedence.
+# sev_snp_tcb_requirements_file = "/etc/dstack/sev-snp-tcb-requirements.json"
 
 [core.attestation.urls]
 # pccs = "https://pccs.phala.network"

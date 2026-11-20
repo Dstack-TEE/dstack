@@ -20,6 +20,12 @@ insecure_allow_external_trust_anchors = false
 # Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from; `*`
 # matches within one DNS label. Unset keeps Google's Private CA hosts.
 # allowed_collateral_hosts = ["privateca-content-*.storage.googleapis.com"]
+# AMD SEV-SNP has no vendor TCB status: a report is `UpToDate` when its
+# reported, committed and launch TCBs meet the minimum listed for its CPU, and
+# `OutOfDate` when one does not. The list is a JSON file, the one the KMS reads
+# from its auth API; see docs/amd-sev-snp.md. Without a file, or with no entry
+# for the CPU, the status is empty.
+# sev_snp_tcb_requirements_file = "/etc/dstack/sev-snp-tcb-requirements.json"
 
 [attestation.urls]
 # pccs = "https://pccs.phala.network"
@@ -33,17 +39,3 @@ insecure_allow_external_trust_anchors = false
 # sev_snp_milan = "/etc/dstack/roots/amd-milan-ark.pem"
 # sev_snp_genoa = "/etc/dstack/roots/amd-genoa-ark.pem"
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
-
-# AMD SEV-SNP has no vendor TCB status: a report is `UpToDate` only when its
-# reported, committed and launch TCBs meet the minimum listed for its CPU, and
-# `OutOfDate` when one does not. With none listed for its CPU, the status is
-# empty. Name the CPU by CPUID
-# Fn0000_0001 EAX, as AMD's security bulletins print it, and take the highest
-# SVNs they require of it. Keep the list identical to the one the KMS reads from
-# its auth API. Family 1Ah (Turin) entries also set `fmc`.
-# [[attestation.sev_snp_tcb_requirements]]
-# cpuid = "00a00f11"  # Milan; Milan-X is 00a00f12
-# bootloader = 0
-# tee = 0
-# snp = 27
-# microcode = 222

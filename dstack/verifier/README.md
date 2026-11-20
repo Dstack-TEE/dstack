@@ -102,6 +102,7 @@ You usually don't need to edit the config file. Just using the default is fine, 
 - `image_download_timeout_secs`: Download timeout in seconds (default: 300)
 - `attestation.urls.pccs`: PCCS URL (default: production PCCS)
 - `attestation.urls.amd_kds`: AMD KDS URL (default: AMD production KDS)
+- `attestation.sev_snp_tcb_requirements_file`: JSON file with the minimum TCB of each AMD SEV-SNP CPU, read at startup (default: unset, which leaves the SEV-SNP `tcb_status` empty). See [AMD SEV-SNP](../../docs/amd-sev-snp.md)
 - `attestation.allowed_collateral_hosts`: hosts that the issuer certificates and CRLs named by a GCP TPM AK certificate may be fetched from; `*` matches within one DNS label (default: `privateca-content-*.storage.googleapis.com`, where Google's Private CA publishes them)
 
 ### Example Configuration File
@@ -180,6 +181,32 @@ services:
 ```
 
 Save the docker compose file as `docker-compose.yml` and run `docker compose up -d`.
+
+To judge the AMD SEV-SNP TCB status, write the list of minimum TCBs in the
+compose file, the same JSON the KMS reads from its auth API:
+
+```yaml
+services:
+  dstack-verifier:
+    image: ghcr.io/dstack-tee/dstack-verifier:latest
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    environment:
+      DSTACK_VERIFIER_ATTESTATION__SEV_SNP_TCB_REQUIREMENTS_FILE: /sev-snp-tcb-requirements.json
+    configs:
+      - sev-snp-tcb-requirements.json
+
+configs:
+  sev-snp-tcb-requirements.json:
+    content: |
+      [
+        {"cpuid": "00a00f11", "bootloader": 0, "tee": 0, "snp": 27, "microcode": 222}
+      ]
+```
+
+Inline `content` needs Docker Compose 2.23.1 or later. The verifier reads the
+file at startup and refuses to start if it does not parse.
 
 ### Request verification
 

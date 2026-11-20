@@ -103,8 +103,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     EnumerableSet.Bytes32Set private _kmsLaunchTickets;
 
     /// @notice The minimum TCB each CPU must meet for an SEV-SNP TCB to report "UpToDate", as the JSON list
-    /// the KMS parses: AMD publishes no TCB status. Covers every root epoch. While empty, the KMS refuses
-    /// every SEV-SNP request.
+    /// the KMS parses: AMD publishes no TCB status. Covers every root epoch. A KMS judges a CPU
+    /// it does not list against its own list, and refuses one neither lists.
     string public sevSnpTcbRequirements;
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);

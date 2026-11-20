@@ -159,7 +159,7 @@ The central governance contract that manages OS image whitelisting, app registra
 | `removeOsImageHashAtEpochs(uint256,uint256,bytes32)` | Remove an OS image from a range of root epochs; `0` through the latest revokes it |
 | `setGatewayAppId(string)` | Set the trusted Gateway app ID(s) |
 | `setAllowAnyTeeVariant(bool)` / `setAllowedTeeVariants(string[])` | Allow KMS instances and apps on any TEE platform, or only the listed ones, at every root epoch |
-| `setSevSnpTcbRequirements(string)` | Publish the minimum TCB each CPU must meet for an SEV-SNP TCB to report `UpToDate`, as a JSON list (see [AMD SEV-SNP](./amd-sev-snp.md)). While empty, the KMS refuses every SEV-SNP request |
+| `setSevSnpTcbRequirements(string)` | Publish the minimum TCB each CPU must meet for an SEV-SNP TCB to report `UpToDate`, as a JSON list (see [AMD SEV-SNP](./amd-sev-snp.md)). While empty, a KMS judges a CPU only against its own list, and refuses one neither lists |
 | `registerApp(address)` | Register an app contract |
 | `deployAndRegisterApp(...)` | Deploy and register app in one transaction |
 | `isAppAllowed(AppBootInfo)` | Check if an app is allowed to boot |

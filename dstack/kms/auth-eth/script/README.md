@@ -85,8 +85,8 @@ forge script script/Manage.s.sol:RemoveKmsLaunchTicket --broadcast --rpc-url $RP
 
 #### Set SEV-SNP TCB Requirements
 The minimum TCB each CPU must meet for an SEV-SNP TCB to report `UpToDate`, as a JSON list
-(see [AMD SEV-SNP](../../../../docs/amd-sev-snp.md)). While it is empty, the KMS
-refuses every SEV-SNP request.
+(see [AMD SEV-SNP](../../../../docs/amd-sev-snp.md)). While it is empty,
+a KMS judges a CPU only against its own list, and refuses one neither lists.
 ```bash
 KMS_CONTRACT_ADDR=0x... \
 SEV_SNP_TCB_REQUIREMENTS='[{"cpuid":"00a00f11","bootloader":0,"tee":0,"snp":27,"microcode":222}]' \

@@ -248,7 +248,9 @@ async fn sev_snp_tcb_requirements(
     static CACHE: OnceLock<Cache<String, Vec<AmdSnpTcbRequirement>>> = OnceLock::new();
     let fetch = async {
         let Response { requirements } = http_get(url, timeout).await?;
-        anyhow::ensure!(!requirements.is_empty(), "none are published");
+        if requirements.is_empty() {
+            return Ok(Vec::new());
+        }
         sev_snp_tcb_requirements_from_json(&requirements)
     };
     CACHE
@@ -304,8 +306,8 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 
 impl AuthApi {
     /// The boot info an authorization judges. An SEV-SNP TCB is judged against
-    /// the minimums governance publishes, not the verifier's own; the dev
-    /// backend publishes none and judges nothing.
+    /// the minimums governance publishes, and against the verifier's own for
+    /// a CPU governance does not list; the dev backend publishes none.
     pub async fn boot_info(
         &self,
         att: &VerifiedAttestation,
@@ -320,7 +322,7 @@ impl AuthApi {
                 .context("failed to read the SEV-SNP TCB requirements from the auth API")?;
             boot_info.tcb_status = report
                 .assess(&requirements)
-                .context("the auth API's SEV-SNP TCB requirements cannot judge this report")?
+                .context("the SEV-SNP TCB requirements cannot judge this report")?
                 .to_string();
         }
         Ok(boot_info)

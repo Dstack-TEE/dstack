@@ -58,28 +58,29 @@ pub struct AttestationVerifierConfig {
     /// the vendor hosts in `pki_fetch::DEFAULT_ALLOWED_HOSTS`.
     #[serde(default)]
     pub allowed_collateral_hosts: Option<Vec<String>>,
-    /// AMD SEV-SNP has no vendor TCB status, so it is judged against these
-    /// minimums. A report below the one for its CPU is `OutOfDate`; one whose
-    /// CPU has none carries an empty status.
+    /// AMD SEV-SNP has no vendor TCB status, so it is judged against the
+    /// minimums in this JSON file: the list the KMS reads from its auth API. A
+    /// report below the one for its CPU is `OutOfDate`; one whose CPU has
+    /// none, and any report without a file, carries an empty status.
     #[serde(default)]
-    pub sev_snp_tcb_requirements: Vec<SevSnpTcbRequirement>,
+    pub sev_snp_tcb_requirements_file: Option<std::path::PathBuf>,
 }
 
 /// The minimum TCB of one CPU: the highest SVNs AMD's security bulletins
 /// require of it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SevSnpTcbRequirement {
+struct SevSnpTcbRequirement {
     /// CPUID Fn0000_0001 EAX as the bulletins print it, in eight hex digits:
     /// `00a00f11` is Milan and `00a00f12` Milan-X.
-    pub cpuid: String,
-    pub bootloader: u8,
-    pub tee: u8,
-    pub snp: u8,
-    pub microcode: u8,
+    cpuid: String,
+    bootloader: u8,
+    tee: u8,
+    snp: u8,
+    microcode: u8,
     /// Family 1Ah (Turin) only.
     #[serde(default)]
-    pub fmc: Option<u8>,
+    fmc: Option<u8>,
 }
 
 impl TryFrom<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
@@ -112,18 +113,12 @@ impl TryFrom<&SevSnpTcbRequirement> for sev_snp_qvl::AmdSnpTcbRequirement {
     }
 }
 
-/// Parse `sev_snp_tcb_requirements` from the JSON list governance publishes.
+/// Parse the JSON list of minimum TCBs, as governance publishes it.
 pub fn sev_snp_tcb_requirements_from_json(
     json: &str,
 ) -> Result<Vec<sev_snp_qvl::AmdSnpTcbRequirement>> {
-    sev_snp_tcb_requirements(&serde_json::from_str::<Vec<SevSnpTcbRequirement>>(json)?)
-}
-
-fn sev_snp_tcb_requirements(
-    requirements: &[SevSnpTcbRequirement],
-) -> Result<Vec<sev_snp_qvl::AmdSnpTcbRequirement>> {
     let mut seen = std::collections::HashSet::new();
-    requirements
+    serde_json::from_str::<Vec<SevSnpTcbRequirement>>(json)?
         .iter()
         .map(|requirement| {
             let parsed = sev_snp_qvl::AmdSnpTcbRequirement::try_from(requirement)?;
@@ -213,6 +208,16 @@ impl AttestationVerifier {
                 sev_snp = sev_snp.with_root(product, root);
             }
         }
+        let sev_snp_tcb_requirements = config
+            .sev_snp_tcb_requirements_file
+            .as_deref()
+            .map(|path| {
+                sev_snp_tcb_requirements_from_json(&fs_err::read_to_string(path)?).with_context(
+                    || format!("invalid SEV-SNP TCB requirements in {}", path.display()),
+                )
+            })
+            .transpose()?
+            .unwrap_or_default();
         let pccs = config
             .urls
             .pccs
@@ -231,8 +236,7 @@ impl AttestationVerifier {
             gcp_tpm,
             aws_nitro_enclave: nsm(aws_nitro_enclave.as_deref(), "AWS Nitro Enclave")?,
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
-            sev_snp: sev_snp
-                .with_tcb_requirements(sev_snp_tcb_requirements(&config.sev_snp_tcb_requirements)?),
+            sev_snp: sev_snp.with_tcb_requirements(sev_snp_tcb_requirements),
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
             allowed_collateral_hosts: config
                 .allowed_collateral_hosts
@@ -2771,37 +2775,46 @@ mod tests {
     }
 
     #[test]
-    fn sev_snp_tcb_requirements_are_checked_during_load() {
-        let requirement = |cpuid: &str, fmc| SevSnpTcbRequirement {
-            cpuid: cpuid.into(),
-            bootloader: 1,
-            tee: 1,
-            snp: 1,
-            microcode: 1,
-            fmc,
-        };
-        let load = |requirements: Vec<SevSnpTcbRequirement>| {
+    fn sev_snp_tcb_requirements_are_read_and_checked_during_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("requirements.json");
+        let load = |json: Option<&str>| {
+            if let Some(json) = json {
+                fs_err::write(&file, json).unwrap();
+            }
             AttestationVerifier::load(&AttestationVerifierConfig {
-                sev_snp_tcb_requirements: requirements,
+                sev_snp_tcb_requirements_file: Some(file.clone()),
                 ..Default::default()
             })
             .err()
-            .map(|err| err.to_string())
+            .map(|err| format!("{err:#}"))
         };
-        let milan = requirement("00a00f11", None);
-        let milan_x = requirement("00A00F12", None);
-        let turin = requirement("00b00f21", Some(1));
-        assert_eq!(load(vec![milan.clone(), milan_x, turin]), None);
+        let entry = |cpuid: &str, fmc: &str| {
+            format!(r#"{{"cpuid":"{cpuid}","bootloader":1,"tee":1,"snp":1,"microcode":1{fmc}}}"#)
+        };
+        let (milan, turin) = (entry("00a00f11", ""), entry("00b00f21", r#","fmc":1"#));
+        assert!(load(None).unwrap().contains("requirements.json"));
+        let milan_x = entry("00A00F12", "");
+        assert_eq!(load(Some(&format!("[{milan},{milan_x},{turin}]"))), None);
+        assert_eq!(load(Some("[]")), None);
 
-        for (requirements, expected) in [
-            (vec![requirement("00b00f21", None)], "only for it"),
-            (vec![requirement("00a10f11", Some(1))], "only for it"),
-            (vec![requirement("milan", None)], "invalid cpuid"),
-            (vec![requirement("0x00a00f11", None)], "invalid cpuid"),
-            (vec![requirement("a00f11", None)], "invalid cpuid"),
-            (vec![milan.clone(), milan], "twice"),
+        for (json, expected) in [
+            (format!("[{}]", entry("00b00f21", "")), "only for it"),
+            (
+                format!("[{}]", entry("00a10f11", r#","fmc":1"#)),
+                "only for it",
+            ),
+            (format!("[{}]", entry("milan", "")), "invalid cpuid"),
+            (format!("[{}]", entry("0x00a00f11", "")), "invalid cpuid"),
+            (format!("[{}]", entry("a00f11", "")), "invalid cpuid"),
+            (format!("[{milan},{milan}]"), "twice"),
+            (
+                format!("[{}]", entry("00a00f11", r#","advisory_id":"AMD-SB-1""#)),
+                "unknown field",
+            ),
+            (String::new(), "invalid SEV-SNP TCB requirements"),
         ] {
-            let error = load(requirements).unwrap_or_default();
+            let error = load(Some(&json)).unwrap_or_default();
             assert!(error.contains(expected), "{error}");
         }
     }

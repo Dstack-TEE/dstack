@@ -536,8 +536,8 @@ app.get('/app/:appId', async (c) => {
 });
 
 // The JSON list the KMS judges an SEV-SNP TCB against; empty when governance
-// sets none. The KMS refuses SEV-SNP requests then, as it does while the
-// contract predates the list.
+// sets none. A contract that predates the list fails the read, and the KMS
+// refuses SEV-SNP requests.
 app.get('/sevSnpTcbRequirements', async (c) => {
   try {
     return c.json({ requirements: await ethereum.getSevSnpTcbRequirements() });
