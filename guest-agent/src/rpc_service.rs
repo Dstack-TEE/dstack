@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -89,11 +90,24 @@ pub struct AppState {
     inner: Arc<AppStateInner>,
 }
 
+/// The app root key of one pair of key epochs, with its KMS signature.
+#[derive(Clone)]
+struct AppRoot {
+    root_epoch: u32,
+    app_epoch: u32,
+    k256_key: Vec<u8>,
+    kms_signature: Vec<u8>,
+}
+
 struct AppStateInner {
     config: Config,
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
+    /// Successfully fetched roots of earlier epochs. The lock is not held
+    /// while fetching, so concurrent first requests for one epoch may each ask
+    /// the KMS.
+    historical_roots: tokio::sync::Mutex<HashMap<(u32, u32), AppRoot>>,
     demo_cert: tokio::sync::OnceCell<String>,
     /// When the last demo-cert request failed; held while one is running.
     demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
@@ -236,6 +250,7 @@ impl AppState {
                 config,
                 keys,
                 cert_client,
+                historical_roots: Default::default(),
                 demo_cert: Default::default(),
                 demo_cert_last_failure: Default::default(),
                 vm_config,
@@ -255,6 +270,55 @@ impl AppState {
 
     pub fn config(&self) -> &Config {
         &self.inner.config
+    }
+
+    /// The app root key and its KMS signature of the given epochs; the current
+    /// ones when unset. An older epoch is requested from the KMS once and kept
+    /// in memory.
+    async fn app_root(&self, root_epoch: Option<u32>, app_epoch: Option<u32>) -> Result<AppRoot> {
+        let keys = &self.inner.keys;
+        let (current, current_app) = (keys.root_epoch(), keys.app_epoch());
+        let epoch = root_epoch.unwrap_or(current);
+        let app_epoch = app_epoch.unwrap_or(current_app);
+        if app_epoch > current_app {
+            anyhow::bail!("app epoch {app_epoch} is newer than current {current_app}");
+        }
+        if epoch > current {
+            anyhow::bail!("root epoch {epoch} is newer than the current one, {current}");
+        }
+        if (epoch, app_epoch) == (current, current_app) {
+            return Ok(AppRoot {
+                root_epoch: epoch,
+                app_epoch,
+                k256_key: keys.k256_key.clone(),
+                kms_signature: keys.k256_signature.clone(),
+            });
+        }
+        if let Some(root) = self
+            .inner
+            .historical_roots
+            .lock()
+            .await
+            .get(&(epoch, app_epoch))
+        {
+            return Ok(root.clone());
+        }
+        let keys = self
+            .inner
+            .cert_client
+            .get_app_key(Some(epoch), Some(app_epoch))
+            .await
+            .with_context(|| {
+                format!("failed to fetch the app keys of root epoch {epoch}, app epoch {app_epoch}")
+            })?;
+        let root = AppRoot {
+            root_epoch: epoch,
+            app_epoch,
+            k256_key: keys.k256_key,
+            kms_signature: keys.k256_signature,
+        };
+        let mut roots = self.inner.historical_roots.lock().await;
+        Ok(roots.entry((epoch, app_epoch)).or_insert(root).clone())
     }
 
     async fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
@@ -383,7 +447,11 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn get_key(self, request: GetKeyArgs) -> Result<GetKeyResponse> {
-        let k256_app_key = &self.state.inner.keys.k256_key;
+        let root = self
+            .state
+            .app_root(request.root_epoch, request.app_epoch)
+            .await?;
+        let k256_app_key = &root.k256_key;
 
         let algorithm = normalize_algorithm(&request.algorithm);
         let (key, pubkey_hex) = match algorithm {
@@ -421,7 +489,9 @@ impl DstackGuestRpc for InternalRpcHandler {
 
         Ok(GetKeyResponse {
             key,
-            signature_chain: vec![signature, self.state.inner.keys.k256_signature.clone()],
+            signature_chain: vec![signature, root.kms_signature],
+            root_epoch: root.root_epoch,
+            app_epoch: root.app_epoch,
         })
     }
 
@@ -450,6 +520,7 @@ impl DstackGuestRpc for InternalRpcHandler {
                 path: "vms".to_string(),
                 purpose: "signing".to_string(),
                 algorithm: key_algorithm.to_string(),
+                ..Default::default()
             })
             .await?;
         let (signature, public_key) = match algorithm {
@@ -708,6 +779,7 @@ impl WorkerRpc for ExternalRpcHandler {
             path: "vms".to_string(),
             purpose: "signing".to_string(),
             algorithm: request.algorithm.clone(),
+            ..Default::default()
         })
         .await?;
 
@@ -992,6 +1064,7 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
+            historical_roots: Default::default(),
             demo_cert: Default::default(),
             demo_cert_last_failure: Default::default(),
             identity: Default::default(),
@@ -1270,11 +1343,13 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "k256".to_string(),
+            ..Default::default()
         };
         let req_secp = GetKeyArgs {
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "secp256k1".to_string(),
+            ..Default::default()
         };
 
         let resp_k256 = handler_k256.get_key(req_k256).await.unwrap();
@@ -1293,6 +1368,7 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "secp256k1_prehashed".to_string(),
+            ..Default::default()
         };
 
         let result = handler.get_key(request).await;
@@ -1309,11 +1385,37 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "ed25519".to_string(),
+            ..Default::default()
         };
 
         let response = handler.get_key(request).await.unwrap();
         assert!(!response.key.is_empty());
         assert_eq!(response.signature_chain.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_key_selects_the_epochs() {
+        let (state, _guard) = setup_test_state().await;
+        let get_key = |root_epoch, app_epoch| {
+            InternalRpcHandler {
+                state: state.clone(),
+            }
+            .get_key(GetKeyArgs {
+                path: "test".to_string(),
+                purpose: "signing".to_string(),
+                root_epoch,
+                app_epoch,
+                ..Default::default()
+            })
+        };
+
+        let current = get_key(None, None).await.unwrap();
+        assert_eq!((current.root_epoch, current.app_epoch), (0, 0));
+        let selected = get_key(Some(0), Some(0)).await.unwrap();
+        assert_eq!(selected.key, current.key);
+        assert_eq!(selected.signature_chain, current.signature_chain);
+        assert!(get_key(Some(1), None).await.is_err());
+        assert!(get_key(None, Some(1)).await.is_err());
     }
 
     #[tokio::test]
@@ -1330,11 +1432,13 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "".to_string(),
+            ..Default::default()
         };
         let req_secp = GetKeyArgs {
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "secp256k1".to_string(),
+            ..Default::default()
         };
 
         let resp_default = handler_default.get_key(req_default).await.unwrap();
@@ -1371,6 +1475,7 @@ pNs85uhOZE8z2jr8Pg==
             path: "test".to_string(),
             purpose: "signing".to_string(),
             algorithm: "rsa".to_string(),
+            ..Default::default()
         };
 
         let result = handler.get_key(request).await;
