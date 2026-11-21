@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Gramine Sealing Key Provider
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c '\
+    if /usr/bin/docker inspect gramine-sealing-key-provider >/dev/null 2>&1; then \
+        /usr/bin/docker start -a gramine-sealing-key-provider; \
+    else \
+        /usr/bin/docker run \
+            --name gramine-sealing-key-provider \
+            --privileged \
+            --device /dev/sgx_enclave:/dev/sgx_enclave \
+            --device /dev/sgx_provision:/dev/sgx_provision \
+            -v /etc/dstack-key-provider/sgx_default_qcnl.conf:/etc/sgx_default_qcnl.conf \
+            -p 127.0.0.1:3443:3443 \
+            dstacktee/dstack-gramine-key-provider:0.1.0; \
+    fi'
+ExecStop=/usr/bin/docker stop gramine-sealing-key-provider
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
