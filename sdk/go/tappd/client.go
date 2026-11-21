@@ -3,9 +3,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Provides a dstack SDK Tappd client and related utilities
+// Package tappd provides the legacy TappdClient for retired tappd
+// deployments (dstack OS 0.3.x and its /var/run/tappd.sock API).
 //
-// Author: Franco Barpp Gomes <franco@nethermind.io>
+// Deprecated: TappdClient predates the dstack guest API and will be removed.
+// Use the dstack package instead — DstackClient (v1) or DstackClientV0 (the
+// frozen v0 surface), both on /var/run/dstack.sock. See the "Migration from
+// TappdClient" section of the SDK README.
 package tappd
 
 import (
