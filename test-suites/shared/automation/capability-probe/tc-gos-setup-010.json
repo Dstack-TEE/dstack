@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-gos-setup-010",
+  "capability": "host-api-sealing-suite",
+  "reason": "The fixture has a boot Host API path but no declared ordered queued/direct event capture and no controlled timeout, malformed, wrong-quote, PCCS-outage, restart, or second-identity sealing-key matrix.",
+  "expires_when": "the fixture declares the complete Host API notification and sealing-key suite available, at which point the probe fails and this registration must be replaced by a real harness"
+}

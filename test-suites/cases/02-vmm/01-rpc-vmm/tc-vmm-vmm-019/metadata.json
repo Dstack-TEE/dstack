@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-vmm-019",
+  "title": "Vmm.SvStop",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-vmm-019"
+  ],
+  "risks": [
+    "risk-vmm-vmm-019"
+  ],
+  "tags": [
+    "vmm",
+    "vmm-rpc"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Vmm.SvStop"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

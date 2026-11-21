@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-observabil-002",
+  "title": "Socket activation and listener isolation",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-observabil-002"
+  ],
+  "risks": [
+    "risk-gos-observabil-002"
+  ],
+  "tags": [
+    "guest",
+    "observability-and-network"
+  ],
+  "fixture": {
+    "profile": "network-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Socket activation and listener isolation"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

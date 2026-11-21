@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-storage-an-004",
+  "title": "Supervisor lifecycle and restart policy",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-storage-an-004"
+  ],
+  "risks": [
+    "risk-gos-storage-an-004"
+  ],
+  "tags": [
+    "guest",
+    "storage-and-containers"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "component-raw-substrate",
+    "simulation_allowed": true,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Supervisor lifecycle and restart policy"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-tools-003",
+  "title": "Attestation encode decode round trip and versioning",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-tools-003"
+  ],
+  "risks": [
+    "risk-ver-tools-003"
+  ],
+  "tags": [
+    "ver",
+    "measurement-tools-and-library-apis"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Attestation encode decode round trip and versioning"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

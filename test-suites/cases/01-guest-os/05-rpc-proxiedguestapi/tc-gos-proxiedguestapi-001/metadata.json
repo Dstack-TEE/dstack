@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-proxiedguestapi-001",
+  "title": "ProxiedGuestApi.Info",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-proxiedguestapi-001"
+  ],
+  "risks": [
+    "risk-gos-proxiedguestapi-001"
+  ],
+  "tags": [
+    "guest",
+    "proxiedguestapi-rpc"
+  ],
+  "fixture": {
+    "profile": "guest-readonly",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "ProxiedGuestApi.Info"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-024",
+  "title": "KMS GetKeys CLI transport and output safety",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-024"
+  ],
+  "risks": [
+    "risk-gos-setup-024"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "KMS GetKeys CLI transport and output safety"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "id": "tc-int-compatibil-008",
+  "title": "In-place app OS upgrade after KMS root rotation",
+  "priority": "P0",
+  "requirements": [
+    "req-int-compatibil-008"
+  ],
+  "risks": [
+    "risk-int-compatibil-008"
+  ],
+  "tags": [
+    "kms",
+    "onboarding",
+    "key-handover",
+    "rotation",
+    "disk-migration",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS root rotation followed by in-place app OS upgrade and disk-key migration",
+    "KMS contract upgrade with unchanged App contract",
+    "KMS and App contract upgrades together"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+    "args": [],
+    "timeout_seconds": 1800
+  }
+}

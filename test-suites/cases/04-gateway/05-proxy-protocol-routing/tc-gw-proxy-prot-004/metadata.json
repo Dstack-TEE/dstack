@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-proxy-prot-004",
+  "title": "TLS termination routing and HTTP semantics",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-proxy-prot-004"
+  ],
+  "risks": [
+    "risk-gw-proxy-prot-004"
+  ],
+  "tags": [
+    "gateway",
+    "proxy-protocol-routing"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "TLS termination routing and HTTP semantics"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

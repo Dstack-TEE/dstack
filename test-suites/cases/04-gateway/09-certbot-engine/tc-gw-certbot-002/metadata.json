@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certbot-002",
+  "title": "DNS-01 authorization propagation and cleanup",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-certbot-002"
+  ],
+  "risks": [
+    "risk-gw-certbot-002"
+  ],
+  "tags": [
+    "gw",
+    "certbot-acme-and-dns-engine"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "DNS-01 authorization propagation and cleanup"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

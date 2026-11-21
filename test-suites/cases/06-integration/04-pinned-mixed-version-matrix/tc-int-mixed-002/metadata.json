@@ -1,0 +1,37 @@
+{
+  "id": "tc-int-mixed-002",
+  "title": "Mixed KMS versions remain online during application operations",
+  "priority": "P0",
+  "requirements": [
+    "req-int-mixed-002"
+  ],
+  "risks": [
+    "risk-int-mixed-002"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Mixed KMS versions remain online during application operations"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-mixed-002-capability-case.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}

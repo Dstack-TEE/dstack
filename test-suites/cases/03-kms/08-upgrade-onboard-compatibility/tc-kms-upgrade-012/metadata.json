@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-012",
+  "title": "Post-KMS gateway 0.6.0 upgrade order",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-012"
+  ],
+  "risks": [
+    "risk-kms-upgrade-012"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Post-KMS gateway 0.6.0 upgrade order"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 1500
+  }
+}

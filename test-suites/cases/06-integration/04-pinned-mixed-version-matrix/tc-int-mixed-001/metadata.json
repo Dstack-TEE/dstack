@@ -1,0 +1,37 @@
+{
+  "id": "tc-int-mixed-001",
+  "title": "Latest VMM hosts the full pinned guest matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-int-mixed-001"
+  ],
+  "risks": [
+    "risk-int-mixed-001"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Latest VMM hosts the full pinned guest matrix"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-mixed-001-capability-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

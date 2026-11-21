@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-tools-004",
+  "title": "Verifier library concurrent API isolation",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-tools-004"
+  ],
+  "risks": [
+    "risk-ver-tools-004"
+  ],
+  "tags": [
+    "ver",
+    "measurement-tools-and-library-apis"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Verifier library concurrent API isolation"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-verifier-case.py",
+    "args": [],
+    "timeout_seconds": 420
+  }
+}

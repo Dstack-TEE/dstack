@@ -1,0 +1,38 @@
+{
+  "id": "tc-gos-setup-009",
+  "title": "Gateway registration refresh and key-store persistence",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-009"
+  ],
+  "risks": [
+    "risk-gos-setup-009"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "no-tee-guest-lifecycle",
+    "simulation_allowed": true,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "System and user configuration materialization",
+    "Gateway registration refresh and key-store persistence",
+    "Multi-cluster Gateway proxy data plane"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

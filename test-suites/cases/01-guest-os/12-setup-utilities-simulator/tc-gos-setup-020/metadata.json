@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-020",
+  "title": "RA CA and app key generation CLI",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-020"
+  ],
+  "risks": [
+    "risk-gos-setup-020"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "RA CA and app key generation CLI"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

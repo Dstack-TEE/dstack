@@ -1,0 +1,333 @@
+commit	subject	disposition	target
+275031817	fix(os): omit built-in FUSE module package	RETAINED	codex/fix-os-fuse-package
+83ec8739b	fix(os): fail multi-flavor builds on first error	RETAINED	codex/fix-os-multiflavor-failure
+dc549cfaa	fix(simulator): support current FUSE soname	MANUAL	codex/fix-simulator-fuse-soname,codex/fix-simulator-tdx-configfs-shadow
+52befa748	fix(simulator): tolerate udev TPM node race	REJECTED	discarded; master platform selection already enforces strict device creation
+450e51b8d	fix(simulator): wait for GCP vTPM readiness	RETAINED	codex/fix-simulator-gcp-vtpm-readiness
+dc0a1cf2e	fix(os): install TPM device TCTI for simulator	RETAINED	codex/fix-os-simulator-tpm-tcti
+a83750d83	fix(simulator): expose GCP TPM event log	MANUAL	codex/fix-simulator-gcp-event-log
+846f72194	fix(simulator): shadow securityfs for GCP event log	RETAINED	codex/fix-simulator-gcp-event-log
+d547a559d	test(simulator): log NitroTPM vendor commands	RETAINED	codex/fix-simulator-nitrotpm-pcrs
+93a00d6d9	fix(simulator): advertise NitroTPM vendor command	RETAINED	codex/fix-simulator-nitrotpm-pcrs
+703f9fecb	style(simulator): apply repository rustfmt	RETAINED	codex/fix-simulator-nitrotpm-pcrs
+0d3d6adba	fix(vmm): generate simulated SEV-SNP mr_config	RETAINED	codex/fix-vmm-simulated-snp-mr-config
+caf875fdc	fix(vmm): pass cloud image measurements to guests	RETAINED	codex/fix-vmm-cloud-image-measurements,codex/fix-vmm-image-artifact-confinement,codex/fix-vmm-simulated-nitrotpm-measurement
+d570101b9	style(vmm): apply repository rustfmt	RETAINED	codex/fix-vmm-cloud-image-measurements,codex/fix-vmm-image-artifact-confinement,codex/fix-vmm-simulated-nitrotpm-measurement
+266e647b1	fix(vmm): align simulated NitroTPM measurement	MANUAL	codex/fix-vmm-simulated-nitrotpm-measurement
+b019aa9d3	style(vmm): apply repository rustfmt	RETAINED	codex/fix-vmm-simulated-nitrotpm-measurement
+7b936abfa	fix(simulator): retry interrupted vTPM reads	RETAINED	codex/fix-simulator-interrupted-vtpm-read
+93b75b1b3	fix(simulator): report live NitroTPM PCRs	RETAINED	codex/fix-simulator-nitrotpm-pcrs
+523fdd197	chore(simulator): remove NitroTPM debug output	RETAINED	codex/fix-simulator-nitrotpm-pcrs
+d3ce0365f	fix(simulator): notify after NSM registration	RETAINED	codex/fix-simulator-measured-nitro-pcrs,codex/fix-simulator-nitro-pcr-state,codex/fix-simulator-nsm-readiness
+9c9b83b9d	fix(simulator): publish NSM device before ready	RETAINED	codex/fix-simulator-measured-nitro-pcrs,codex/fix-simulator-nitro-pcr-state,codex/fix-simulator-nsm-readiness
+7ea071ec8	fix(simulator): stabilize NSM node before ready	RETAINED	codex/fix-simulator-measured-nitro-pcrs,codex/fix-simulator-nitro-pcr-state,codex/fix-simulator-nsm-readiness
+31f6cbb98	fix(simulator): detect Nitro Enclave DMI	RETAINED	codex/fix-nitro-enclave-platform-detection
+90d5edb84	fix(vmm): expose simulated platform through SMBIOS	RETAINED	codex/fix-nitro-enclave-platform-detection
+ef923dcee	fix(guest): skip TDX config check on Nitro Enclave	RETAINED	codex/fix-nitro-enclave-platform-detection
+764e798c5	test(fixtures): require mkosi guest images	TEST_ONLY	move/account in test-infrastructure PR
+a85d8bfa0	fix(guest): avoid ZFS cache writes on immutable root	REVERTED	net-zero historical pair
+a7d524d39	"Revert ""fix(guest): avoid ZFS cache writes on immutable root"""	REVERTED	net-zero historical pair
+88466ed3d	fix(guest): report ZFS pool creation errors	RETAINED	codex/fix-guest-zfs-pool-errors,codex/fix-guest-zfs-root-mountpoint
+57f430e76	fix(guest): disable the ZFS pool root mountpoint	RETAINED	codex/fix-guest-zfs-root-mountpoint
+0fc9488c9	fix(os/mkosi): install the volume helper	RETAINED	codex/fix-mkosi-volume-helper
+a30fd23eb	fix(os/mkosi): stage the volume helper	RETAINED	codex/fix-mkosi-volume-helper
+5a895283c	fix(os/mkosi): enable Docker IPv4 NAT modules	RETAINED	codex/fix-mkosi-docker-ipv4-nat
+dbfd6f385	fix(os/mkosi): use current xtables NAT symbols	RETAINED	codex/fix-mkosi-docker-ipv4-nat
+6a06b1a54	fix(vmm): stop VM launchers gracefully through SvStop	REVERTED	net-zero historical pair
+63d402278	"Revert ""fix(vmm): stop VM launchers gracefully through SvStop"""	REVERTED	net-zero historical pair
+a72084da2	fix(vmm): reap VM launcher children on SvStop	RETAINED	codex/fix-vmm-svstop-child-reaping
+93fccce42	fix(vmm): keep SvStop unknown IDs rejected	RETAINED	codex/fix-vmm-svstop-child-reaping
+0f1748cd4	fix(vmm): resize uninitialized stopped VM manifests	RETAINED	codex/fix-vmm-resize-validation,codex/fix-vmm-stopped-manifest-resize
+f68dcf7c3	test(vmm): cover per-instance TEE simulator matrix	TEST_ONLY	move/account in test-infrastructure PR
+c7c2322b4	test(vmm): complete swtpm simulator decision matrix	TEST_ONLY	move/account in test-infrastructure PR
+3a85ae4a7	fix(vmm): keep Host API on private vsock listener	RETAINED	codex/fix-vmm-private-host-api
+12c2d4da6	fix(vmm): reject empty and zero ResizeVm updates	MANUAL	codex/fix-vmm-resize-validation
+07b38ea5b	fix(vmm): reject conflicting host port mappings	MANUAL	codex/fix-vmm-host-port-conflicts
+9d6706ff4	fix(testing): import port protocol in conflict test	TEST_ONLY	move/account in test-infrastructure PR
+d8200f25b	fix(kms): validate onboarding domains	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-bootstrap-once,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-onboarding-domains,codex/fix-kms-private-key-permissions,codex/fix-kms-repeated-onboarding
+a16919222	fix(kms): integrate onboarding domain tests	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-bootstrap-once,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-onboarding-domains,codex/fix-kms-private-key-permissions,codex/fix-kms-repeated-onboarding
+7c67d46bd	fix(kms): make Bootstrap one-time	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-bootstrap-once,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-private-key-permissions,codex/fix-kms-repeated-onboarding
+daf8c1a02	fix(kms): persist private keys owner-only	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-private-key-permissions,codex/fix-kms-repeated-onboarding
+f9a9e560b	fix(kms): import fs-err Unix extensions	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-private-key-permissions,codex/fix-kms-repeated-onboarding
+401c04b32	fix(guest-agent): report effective quote prefix	RETAINED	codex/fix-guest-agent-quote-prefix
+cd64c1f1d	fix(gateway): validate WireGuard public keys	EXISTING_PR	#839 fix/gateway-wg-public-key-validation
+5ea75edba	fix(gateway): tolerate empty handshake cache	RETAINED	codex/fix-gateway-empty-handshakes
+ff9690d54	fix(gateway): align RPC and health routes	RETAINED	codex/fix-gateway-rpc-health-routes
+785c65f60	fix(kms): return Finish response before exit	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-repeated-onboarding
+4ffbed5ce	fix(rpc): emit empty JSON unit responses	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-repeated-onboarding
+e5947dc3d	fix(kms): shut down after Finish response	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-ca-restart,codex/fix-kms-finish-response-order,codex/fix-kms-repeated-onboarding
+64b695557	fix(gateway): reject invalid reported ports	RETAINED	codex/fix-gateway-reported-ports
+9504ad0b6	fix(gateway): validate ZT domain inputs	RETAINED	codex/fix-gateway-zt-domain-crud,codex/fix-gateway-zt-domain-inputs
+5a7065d5b	fix(gateway): return Exit response before shutdown	RETAINED	codex/fix-gateway-exit-response-order
+a79efd432	fix(gateway): reject zero DNS timing values	RETAINED	codex/fix-gateway-dns-timings
+3f36afd0d	fix(kms): reject production auth mock startup	RETAINED	codex/fix-kms-production-auth-mock
+f4bc45843	fix(verifier): emit structured oneshot results	RETAINED	codex/fix-verifier-oneshot-output
+90cf19e8e	fix(util): honor random output path	RETAINED	codex/fix-util-random-output-path
+299586b50	chore(kms): refresh auth mock lockfile	RETAINED	codex/fix-kms-production-auth-mock
+e4d6d4a7b	fix(verifier): keep oneshot stdout machine-readable	RETAINED	codex/fix-verifier-oneshot-output
+6237ea211	fix(util): import fs err Unix options	RETAINED	codex/fix-util-random-output-path
+4e84015ee	fix(simulator): implement Nitro PCR state	RETAINED	codex/fix-simulator-measured-nitro-pcrs,codex/fix-simulator-nitro-pcr-state
+187a98b57	fix(simulator): compile Nitro ABI coverage	RETAINED	codex/fix-simulator-measured-nitro-pcrs,codex/fix-simulator-nitro-pcr-state
+48ba48833	test(simulator): cover SEV-SNP device boundaries	TEST_ONLY	move/account in test-infrastructure PR
+1938b3ba7	test(simulator): cover TDX filesystem boundaries	TEST_ONLY	move/account in test-infrastructure PR
+920133fee	fix(attestation): reject trailing legacy bytes	RETAINED	codex/fix-attestation-trailing-bytes
+2f91b0274	fix(attestation): reject trailing msgpack bytes	RETAINED	codex/fix-attestation-trailing-bytes
+3b01e4d47	fix(attestation): validate V2 event preimages	RETAINED	codex/fix-attestation-v2-event-preimages
+8f135661f	fix(verifier): label development trust evidence	REJECTED	discarded; verifier trust roots already separate development and production evidence
+b6aa008bf	chore(attestation): update development test lockfile	TEST_ONLY	move/account in test-infrastructure PR
+e11edcd50	fix(verifier): confine image archive extraction	RETAINED	codex/fix-verifier-archive-confinement
+113c9547d	test(verifier): use valid cache manifest digest	RETAINED	codex/fix-verifier-archive-confinement
+ec1908a64	chore(verifier): update archive dependency lockfile	RETAINED	codex/fix-verifier-archive-confinement
+6d23260c1	fix(verifier): version measurement cache keys	REJECTED	discarded; embedded cache-entry versions already enforce compatibility
+b316ea22b	test(dstack-mr): cover unsupported swtpm measurement	TEST_ONLY	move/account in test-infrastructure PR
+146cb8d15	fix(guest): write generated credentials atomically	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-tpm-quotes
+5f5885938	build(guest): lock CLI filesystem dependency	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-tpm-quotes
+a6ee9b550	fix(guest): fail JSON vTPM attestation errors	RETAINED	codex/fix-guest-vtpm-json-errors
+431751f41	fix(guest): write attestation outputs atomically	RETAINED	codex/fix-guest-atomic-attestation-output
+8b0ace8dc	fix(guest): protect KMS key output	RETAINED	codex/fix-guest-kms-key-permissions
+c5b3f9c69	fix(guest): defer failed KMS measurements	RETAINED	codex/fix-guest-deferred-kms-measurement
+18d1c16ab	fix(guest): type captured KMS measurement	RETAINED	codex/fix-guest-deferred-kms-measurement
+475a37737	fix(guest): own captured KMS measurement	RETAINED	codex/fix-guest-deferred-kms-measurement
+0d38f2087	fix(guest): keep LUKS keys out of argv	RETAINED	codex/fix-guest-luks-key-argv
+12f487758	fix(guest): disable active swap before replacement	REJECTED	discarded; normal boot starts with no active swap from the previous boot
+d39a69efe	fix(guest): compare resolved swap paths safely	REJECTED	discarded with the active-swap replacement logic
+af2166b33	fix(guest): protect gateway private state	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
+5777880c3	test(guest): import Unix permission metadata	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
+6f7f8cecc	fix(guest): bound Host API operations	RETAINED	codex/fix-guest-host-api-bounds
+1eedd9c89	fix(supervisor): reject untrusted client sockets	REJECTED	discarded; normal Unix socket and directory permissions enforce the trust boundary
+dd5bd0c85	build(supervisor): lock client libc dependency	REJECTED	discarded with concurrent UDS auto-start
+367a16db2	fix(supervisor): retain socket path for validation	REJECTED	discarded with client-side socket path validation
+6422f2efc	test(supervisor): add socket fixture dependency	TEST_ONLY	move/account in test-infrastructure PR
+3ccfc4394	test(supervisor): expose trusted socket rejection	TEST_ONLY	move/account in test-infrastructure PR
+f10543399	test(supervisor): secure trusted socket directory	TEST_ONLY	move/account in test-infrastructure PR
+fa58967e9	fix(guest-agent): reject inverted certificate validity	RETAINED	codex/fix-guest-agent-cert-validity
+d02b42fcd	fix(simulator): model measured Nitro enclave PCRs	RETAINED	codex/fix-simulator-measured-nitro-pcrs
+333270fe8	test(attestation): verify simulated trust policy	TEST_ONLY	move/account in test-infrastructure PR
+adb26ea51	test(attestation): generate signed SNP policy mutations	TEST_ONLY	move/account in test-infrastructure PR
+f8d5b4d46	test(attestation): add cloud TPM mutation matrix	TEST_ONLY	move/account in test-infrastructure PR
+882953826	fix(attestation): extract TPM matrix errors explicitly	TEST_ONLY	move/account in test-infrastructure PR
+eba48b2da	test(attestation): generate Nitro document matrix	TEST_ONLY	move/account in test-infrastructure PR
+32abcf206	feat(supervisor): expose trusted UDS auto-start	REJECTED	discarded; the supported deployment has one VMM owner per runtime directory
+b3376f90a	fix(supervisor): serialize UDS auto-start	REJECTED	discarded with concurrent UDS auto-start
+2f0ff74be	fix(supervisor): remove duplicate startup lock helper	REJECTED	discarded with concurrent UDS auto-start
+64dc5549d	fix(supervisor): restrict auto-start socket permissions	REJECTED	discarded with concurrent UDS auto-start
+634b3c502	fix(supervisor): keep client JSON output clean	RETAINED	codex/fix-supervisor-client-json-output
+624acbbee	fix(supervisor): reply before graceful shutdown	RETAINED	codex/fix-supervisor-shutdown-response
+b81b946de	fix(simulator): publish TPM resource manager device	RETAINED	codex/fix-simulator-tpm-resource-manager
+0b4ba7576	fix(simulator): reject occupied mountpoints	RETAINED	codex/fix-simulator-occupied-mountpoints
+989b0a3a2	fix(simulator): await NitroTPM resource manager	REVERTED	net-zero historical pair
+e60f1295d	"Revert ""fix(simulator): await NitroTPM resource manager"""	REVERTED	net-zero historical pair
+106675ecd	fix(attest): commit event log after measurement	RETAINED	codex/fix-attest-event-log-order
+d0df60ecc	fix(util): reject oversized quote input	RETAINED	codex/fix-util-quote-size-limit
+53f415ec7	fix(util): honor quote report sys config	RETAINED	codex/fix-util-quote-report-config
+297c0e202	fix(cert): reject mismatched CA key	RETAINED	codex/fix-ra-tls-ca-key-match
+e6a2577b2	fix(util): stage certificate and key together	REJECTED	discarded; sequential renames cannot atomically publish a two-file pair
+c4c09f466	test(simulator): provision legacy EK certificate	TEST_ONLY	move/account in test-infrastructure PR
+3c2a86b16	test(simulator): serve TPM collateral in guest	TEST_ONLY	move/account in test-infrastructure PR
+f727de4c9	test(simulator): publish guest TPM trust root	TEST_ONLY	move/account in test-infrastructure PR
+bf74f2db4	fix(util): write TPM quotes atomically	RETAINED	codex/fix-util-atomic-tpm-quotes
+c6038d6ca	feat(vmm-cli): separate environment encryption KMS URL	RETAINED	codex/fix-vmm-cli-encryption-kms-url
+9018b2e5e	fix(test): sign seeded simulator attestations	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+990ea9c01	test(simulator): import TDX evidence helpers	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+6f159a327	build(simulator): lock attestation dependencies	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+37df16725	feat(simulator): trust explicit guest attestation roots	MANUAL	codex/feat-simulator-seeded-attestation
+024ec4816	fix(vmm): import simulator seed error macro	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+8415bc8f4	fix(simulator): make seeded TDX PKI deterministic	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+e0068492c	fix(simulator): share exact TDX trust root	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+04efa1b27	fix(simulator): deterministically sign seeded TDX PKI	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+7743dc3db	test(simulator): cover seeded TDX process parity	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+5860d0037	refactor(simulator): drop retained TDX certificate key	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation
+74dccff50	fix(os): omit nondeterministic package logs	RETAINED	codex/fix-os-deterministic-package-logs,codex/fix-os-guest-ssh-host-keys
+b32e73d92	fix(os): generate SSH host keys per guest	RETAINED	codex/fix-os-guest-ssh-host-keys
+6e5872a6b	fix(mock-attestation): serve legacy DCAP paths	RETAINED	codex/fix-mock-attestation-dcap-collateral
+5434007d0	fix(mock-attestation): model the PCK CA chain	RETAINED	codex/fix-mock-attestation-dcap-collateral
+88c7e75fe	fix(mock-attestation): serve the PCK issuer CRL	RETAINED	codex/fix-mock-attestation-dcap-collateral
+dfd787a8b	feat(vmm): add configuration validation command	RETAINED	codex/feat-vmm-config-validation
+ea7df8e4f	fix(vmm): enforce configured ID pool bounds	RETAINED	codex/fix-vmm-id-pool-bounds
+f66520780	test(vmm): cover ID pool concurrency and reconstruction	RETAINED	codex/fix-vmm-id-pool-bounds
+57e5a947e	fix(vmm): confine image artifacts to image root	RETAINED	codex/fix-vmm-image-artifact-confinement
+1c3484071	test(vmm): cover image metadata trust boundaries	RETAINED	codex/fix-vmm-image-artifact-confinement
+82e577885	"Revert ""test(vmm): cover image metadata trust boundaries"""	RETAINED	codex/fix-vmm-image-artifact-confinement
+4b46ac606	test(vmm): cover image metadata trust boundaries	RETAINED	codex/fix-vmm-image-artifact-confinement
+aab82dcb1	fix(vmm): retain image boundary diagnostics	RETAINED	codex/fix-vmm-image-artifact-confinement
+f90878de7	fix(vmm): enforce image artifact confinement	RETAINED	codex/fix-vmm-image-artifact-confinement
+ccc6c8108	test(vmm): cover MR configuration derivation matrix	TEST_ONLY	move/account in test-infrastructure PR
+c4f3c28e6	test(vmm): cover VM info projection boundaries	TEST_ONLY	move/account in test-infrastructure PR
+8461ee2a9	fix(testing): construct complete networking fixture	TEST_ONLY	move/account in test-infrastructure PR
+2524bc484	fix(vmm): publish host-share disks atomically	RETAINED	codex/fix-vmm-atomic-host-share-disk
+24016d336	test(vmm): cover host-share disk boundaries	RETAINED	codex/fix-vmm-atomic-host-share-disk
+b04025fcb	fix(vmm): reborrow temporary host-share image	RETAINED	codex/fix-vmm-atomic-host-share-disk
+29665021e	fix(testing): retain owned image borrows	RETAINED	codex/fix-vmm-atomic-host-share-disk
+f4933688b	test(vmm): cover launcher readiness and cleanup	RETAINED	codex/fix-vmm-one-shot-failures
+fe88d2c29	fix(vmm): return one-shot launch failures	RETAINED	codex/fix-vmm-one-shot-failures
+39c278192	fix(vmm): declare host-share tempfile dependency	RETAINED	codex/fix-vmm-atomic-host-share-disk
+c6a4f0ef2	test(vmm): cover TDX variant compatibility recovery	TEST_ONLY	move/account in test-infrastructure PR
+9aa3d4a17	test(vmm): cover verity volume validation and launch	TEST_ONLY	move/account in test-infrastructure PR
+22810a97c	test(vmm): exercise lease-owned network lifecycle	TEST_ONLY	move/account in test-infrastructure PR
+4fd1c97cd	test(vmm): correct prefixed network MAC	TEST_ONLY	move/account in test-infrastructure PR
+c4be6776a	test(vmm): restore custom network fixture state	TEST_ONLY	move/account in test-infrastructure PR
+cb23f6898	fix(vmm): verify registry layer integrity	RETAINED	codex/fix-vmm-registry-layer-integrity
+c767fbc15	fix(vmm): confine registry pull tags	RETAINED	codex/fix-vmm-registry-layer-integrity
+fc83dec8d	fix(vmm): reject skipped registry archive entries	RETAINED	codex/fix-vmm-registry-layer-integrity
+25178c1d9	test(vmm): cover QEMU platform command matrix	TEST_ONLY	move/account in test-infrastructure PR
+8481ae09d	test(vmm): verify platform command stability	TEST_ONLY	move/account in test-infrastructure PR
+dff2ce167	test(vmm): fix platform matrix literals	TEST_ONLY	move/account in test-infrastructure PR
+2375e01b9	fix(vmm): bound automatic restart retries	MANUAL	codex/fix-vmm-restart-policy
+f7002375a	fix(vmm): validate automatic restart timing	RETAINED	codex/fix-vmm-restart-policy,codex/fix-vmm-serial-log-cap
+d67e4710a	test(vmm): exercise automatic restart policy matrix	RETAINED	codex/fix-vmm-restart-policy,codex/fix-vmm-serial-log-cap
+2fb012215	fix(vmm): confine console log requests	RETAINED	codex/fix-vmm-console-log-confinement
+8feb8bda3	test(vmm): cover serial rotation boundaries	RETAINED	codex/fix-vmm-serial-log-cap
+0aaef6fdf	test(vmm): read serial default through config	RETAINED	codex/fix-vmm-serial-log-cap
+7bbee3ee5	fix(vmm): retain serial boot delimiter at cap	RETAINED	codex/fix-vmm-serial-log-cap
+6115071d5	test(attestation): reject mutated simulator evidence	TEST_ONLY	move/account in test-infrastructure PR
+27511d608	fix(test): isolate GCP simulator collateral port	TEST_ONLY	move/account in test-infrastructure PR
+805cc28aa	test(kms): generate key-bound attested CSR	TEST_ONLY	move/account in test-infrastructure PR
+e04a67bbe	fix(test): request CSR evidence from fixture agent	TEST_ONLY	move/account in test-infrastructure PR
+e5c186129	chore(deps): record SignCert fixture dependencies	TEST_ONLY	move/account in test-infrastructure PR
+df0d9c59e	fix(kms): reject repeated onboarding	RETAINED	codex/feat-kms-historical-root-keys,codex/fix-kms-ca-restart,codex/fix-kms-repeated-onboarding
+61951fc7c	fix(guest): escape Prometheus label values	RETAINED	codex/fix-guest-prometheus-labels
+d27991512	fix(gateway): apply CAA records to all domains	RETAINED	codex/fix-gateway-caa-reconciliation
+47fac084f	fix(gateway): serialize CAA reconciliation	RETAINED	codex/fix-gateway-caa-reconciliation
+58dae006b	fix(gateway): encrypt persisted DNS credentials	REJECTED	discarded; Gateway storage is already inside the CVM trust boundary and admin-token-derived encryption creates unsafe key coupling
+4b1162e5e	fix(gateway): validate DNS credential inputs	REJECTED	discarded; the additional constraints do not justify changing existing credential semantics
+f7851c483	build(gateway): lock credential encryption dependency	REJECTED	discarded with DNS credential envelope encryption
+22c6e32b9	fix(gateway): normalize ZT domain CRUD keys	RETAINED	codex/fix-gateway-zt-domain-crud
+1c76ea0c9	fix(certbot): preserve unrelated CAA records	RETAINED	codex/fix-certbot-caa-preservation
+2b2040abd	fix(gateway): reject mismatched certificate keys	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-cert-key-match,codex/fix-gateway-corrupt-acme-credentials,codex/fix-gateway-expired-cert-reload
+8448933bd	test(gateway): retain cert on mismatched hot reload	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-cert-key-match,codex/fix-gateway-corrupt-acme-credentials,codex/fix-gateway-expired-cert-reload
+eaad78d3e	fix(gateway): reject expired certificate reloads	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-corrupt-acme-credentials,codex/fix-gateway-expired-cert-reload
+5ef18a3bf	test(gateway): retain cert on expired hot reload	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-corrupt-acme-credentials,codex/fix-gateway-expired-cert-reload
+988195605	feat(gateway): support exact SNI certificates	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-corrupt-acme-credentials
+a4d174238	test(gateway): cover SNI precedence and atomic reload	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-corrupt-acme-credentials
+525053131	test(gateway): retain cert on corrupt hot reload	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-corrupt-acme-credentials
+cba333e8c	fix(gateway): fail closed on corrupt ACME credentials	RETAINED	codex/fix-gateway-corrupt-acme-credentials
+80f375c67	test(gateway): cover corrupt ACME credential handling	RETAINED	codex/fix-gateway-corrupt-acme-credentials
+d5da61a66	refactor(gateway): isolate legacy port-policy parsing	RETAINED	codex/refactor-gateway-port-policy
+f4556c626	test(gateway): cover legacy port-policy compatibility	RETAINED	codex/refactor-gateway-port-policy
+f970d0fbf	test(gateway): make policy fetch failures diagnosable	RETAINED	codex/refactor-gateway-port-policy
+0638e0123	fix(gateway): reject registration identity collisions	RETAINED	codex/fix-gateway-registration-collisions
+c495f192b	fix(gateway): validate peer synchronization URLs	RETAINED	codex/fix-gateway-app-info-peer-identity,codex/fix-gateway-peer-sync-urls
+a3bd7c2f2	fix(gateway): accept app-info peer identities	RETAINED	codex/fix-gateway-app-info-peer-identity
+2d7db7d2f	fix(gateway): decode app-info peer identity	RETAINED	codex/fix-gateway-app-info-peer-identity
+e80abbbfb	test(gateway): cover dashboard model invariants	TEST_ONLY	move/account in test-infrastructure PR
+4459de80b	fix(test): match Rinja HTML escaping	TEST_ONLY	move/account in test-infrastructure PR
+a2c781b96	test(gateway): exercise concurrent counter guards	TEST_ONLY	move/account in test-infrastructure PR
+763eb4e14	test(gateway): expose port policy decision matrix	TEST_ONLY	move/account in test-infrastructure PR
+4ecf7b772	test(gateway): cover local TLS stream boundaries	TEST_ONLY	move/account in test-infrastructure PR
+2f66441f5	test(gateway): make RPC route separation explicit	REVERTED	net-zero historical pair
+4b588c521	fix(gateway): retain Rocket main entrypoint	REVERTED	net-zero historical pair
+3c770d0bb	fix(test): compare RPC route paths	REVERTED	net-zero historical pair
+50f4bc1a0	"Revert ""fix(test): compare RPC route paths"""	REVERTED	net-zero historical pair
+4cac05854	"Revert ""fix(gateway): retain Rocket main entrypoint"""	REVERTED	net-zero historical pair
+dfe49ef18	"Revert ""test(gateway): make RPC route separation explicit"""	REVERTED	net-zero historical pair
+aa66f6713	fix(gateway): publish debug keys safely	RETAINED	codex/fix-gateway-debug-key-publication
+83df122a6	fix(test): consume debug key workers	RETAINED	codex/fix-gateway-debug-key-publication
+d40f42ede	fix(gateway): write TLS material privately	MANUAL	codex/fix-gateway-private-tls-material
+a9766ad42	fix(gateway): remove stale proxy writer import	RETAINED	codex/fix-gateway-private-tls-material
+70a71cba4	test(gateway): exercise bounded SNI host failover	TEST_ONLY	move/account in test-infrastructure PR
+86fa05e24	fix(test): import Gateway proxy address fixture	TEST_ONLY	move/account in test-infrastructure PR
+dec56be5b	feat(gateway): configure app-address DNS server	RETAINED	codex/feat-gateway-app-address-dns
+53d34f037	fix(gateway): use public DNS runtime provider	RETAINED	codex/feat-gateway-app-address-dns
+4abb56304	fix(gateway): maintain healthy Top-N cache	RETAINED	codex/fix-gateway-top-n-cache
+8f974936a	fix(gateway): support workspace Rust edition	RETAINED	codex/fix-gateway-top-n-cache
+0b751ccb8	test(gateway): cover Top-N cache lifecycle	TEST_ONLY	move/account in test-infrastructure PR
+19257cda3	test(gateway): cover WaveKV lifecycle matrix	TEST_ONLY	move/account in test-infrastructure PR
+4617eff90	test(certbot): enable Cloudflare client tests	TEST_ONLY	move/account in test-infrastructure PR
+cb7ac1f57	test(certbot): exercise workdir lifecycle	TEST_ONLY	move/account in test-infrastructure PR
+f201cc4ac	fix(certbot): pace daemon and run once hook	RETAINED	codex/fix-certbot-daemon-lifecycle
+e1c65f7df	fix(certbot): stop daemon gracefully	RETAINED	codex/fix-certbot-daemon-lifecycle
+4e3b06424	feat(certbot): configure DNS API endpoint	RETAINED	codex/feat-certbot-dns-api-endpoint
+1e1c497b6	fix(certbot): default DNS endpoint settings	RETAINED	codex/feat-certbot-dns-api-endpoint
+7b0700aa3	fix(mkosi): enable memory cgroup controller	RETAINED	codex/fix-mkosi-memory-cgroup
+088bdc1b4	fix(simulator): preserve legacy certificate attestation	RETAINED	codex/fix-simulator-legacy-attestation
+6f7eec0ac	fix(simulator): preserve legacy attest responses	RETAINED	codex/fix-simulator-legacy-attestation
+7188be852	feat(kms): support unquoted compatibility RPC certificates	SUPERSEDED	#830 upstream implementation
+f6112e858	fix(ra-rpc): accept empty JSON unit responses	RETAINED	codex/fix-ra-rpc-empty-json
+4f13d087e	fix(http-client): accept empty JSON unit responses	RETAINED	codex/fix-http-client-empty-json
+53161a902	fix(os): enforce artifact manifest schema	RETAINED	codex/fix-os-artifact-manifest-schema
+6b9b20afd	test(verifier): cover image download security matrix	TEST_ONLY	move/account in test-infrastructure PR
+abfb8a33a	style(verifier): format image download matrix	TEST_ONLY	move/account in test-infrastructure PR
+df83ed979	fix(verifier): import string formatting trait in test	TEST_ONLY	move/account in test-infrastructure PR
+c2eb2a627	fix(verifier): configure image download matrix correctly	TEST_ONLY	move/account in test-infrastructure PR
+c6f02bdea	fix(test): isolate malicious image destination	TEST_ONLY	move/account in test-infrastructure PR
+f5b0a1d60	test(attestation): cover TDX collateral and TCB matrix	TEST_ONLY	move/account in test-infrastructure PR
+28a28530c	test(attestation): cover TDX V2 event log matrix	TEST_ONLY	move/account in test-infrastructure PR
+cca794807	fix(test): compile TDX V2 event log matrix	TEST_ONLY	move/account in test-infrastructure PR
+0e2e8212c	refactor(verifier): make image strategies exhaustive	RETAINED	codex/refactor-verifier-image-strategies,codex/refactor-verifier-tcb-policy
+f71d959fa	test(verifier): cover six-platform image strategies	RETAINED	codex/refactor-verifier-image-strategies,codex/refactor-verifier-tcb-policy
+38623631d	test(verifier): cover GCP and Nitro image bindings	RETAINED	codex/refactor-verifier-image-strategies,codex/refactor-verifier-tcb-policy
+2c3ae5452	test(measurement): cover ACPI and swtpm policy matrix	TEST_ONLY	move/account in test-infrastructure PR
+68828bf5d	fix(test): inspect ACPI version policy errors	TEST_ONLY	move/account in test-infrastructure PR
+bf98ad09e	fix(test): inspect nested QEMU version error	TEST_ONLY	move/account in test-infrastructure PR
+e29289da0	test(verifier): accept matching swtpm lite evidence	TEST_ONLY	move/account in test-infrastructure PR
+cfd829c45	fix(ra-tls): validate certificate security profile	RETAINED	codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile
+800f1f251	fix(test): satisfy RA certificate SAN profile	RETAINED	codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile
+2a030801a	fix(ra-tls): bind certificate app extensions	RETAINED	codex/fix-ra-tls-app-extensions
+7a398d07e	test(ra-tls): cover certificate mutation matrix	RETAINED	codex/fix-ra-tls-app-extensions
+ddc4b10eb	test(ra-tls): complete certificate mutation coverage	RETAINED	codex/fix-ra-tls-app-extensions
+9780f90b5	fix(test): mutate legacy-compatible quote corpus	RETAINED	codex/fix-ra-tls-app-extensions
+cf3328530	fix(test): keep RA mutation corpus on V0 wire format	RETAINED	codex/fix-ra-tls-app-extensions
+a19c42dd6	refactor(verifier): make TCB policy sources exhaustive	RETAINED	codex/refactor-verifier-tcb-policy
+9eb1794db	fix(measurement): accept historical image versions	RETAINED	codex/fix-measurement-historical-images
+9a71c55db	fix(verifier): validate configuration precedence	MANUAL	codex/fix-verifier-config-precedence
+ba5b88557	fix(verifier): escape image template diagnostic	RETAINED	codex/fix-verifier-config-precedence,codex/fix-verifier-service-config
+da9062e8a	fix(verifier): separate service and Rocket config	RETAINED	codex/fix-verifier-service-config
+d9fbe7dba	fix(test): use valid unsupported image URL	RETAINED	codex/fix-verifier-service-config
+6eaaa672b	test(kms): cover application key hierarchy signatures	TEST_ONLY	move/account in test-infrastructure PR
+bea8fe244	fix(kms): preserve CA certificates across restart	MANUAL	codex/fix-kms-ca-restart
+25ad5523d	feat(kms): return configured historical root keys	RETAINED	codex/feat-kms-historical-root-keys
+caa1785d5	test(kms): cover historical root key inventory	RETAINED	codex/feat-kms-historical-root-keys
+2f428fb88	docs(kms): define cold backup recovery procedure	RETAINED	codex/feat-kms-historical-root-keys
+d3b7b5c09	test(kms): generate legacy and current CSR fixtures	TEST_ONLY	move/account in test-infrastructure PR
+c90b1ef0b	fix(test): encode legacy KMS CSR fixture	TEST_ONLY	move/account in test-infrastructure PR
+994c5c2c6	fix(build): synchronize mock attestation lock entry	TEST_ONLY	move/account in test-infrastructure PR
+3013ebad7	fix(test): use CSR canonical encoding API	TEST_ONLY	move/account in test-infrastructure PR
+0881c3818	fix(test): retain attestation for legacy CSR	TEST_ONLY	move/account in test-infrastructure PR
+81c019a42	fix(kms): synchronize authorization Bun locks	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-auth-boot-schema,codex/fix-kms-auth-endpoint-redaction,codex/fix-kms-auth-locks,codex/fix-kms-node-auth-safety
+9eb3a351c	fix(kms): bound authorization boot schema	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-auth-boot-schema,codex/fix-kms-auth-endpoint-redaction,codex/fix-kms-node-auth-safety
+4b651e2ad	fix(kms): preserve unprefixed auth measurements	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-auth-boot-schema,codex/fix-kms-auth-endpoint-redaction,codex/fix-kms-node-auth-safety
+06e7c0b1c	fix(kms): redact authorization backend endpoint	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-auth-endpoint-redaction,codex/fix-kms-node-auth-safety
+e36e38c66	fix(kms): align Node authorization safety	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+c1f33e683	fix(test): isolate Node authorization mocks	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+fed5f4570	fix(kms): align Node authorization build entrypoint	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+409240b7b	fix(kms): align authorization validation errors	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+b84a275d5	fix(kms): narrow authorization validation errors	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+0c95f4a5e	fix(kms): resolve test upgrade artifacts	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+7618996cb	fix(kms): align authorization container runtime	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth,codex/fix-kms-node-auth-safety
+4f6a4b84f	fix(kms): make certificate log writes atomic	RETAINED	codex/fix-kms-certificate-logs
+b8cb53add	fix(kms): enable certificate log module	RETAINED	codex/fix-kms-certificate-logs
+a3362c3ea	fix(kms): parse certificate log names correctly	RETAINED	codex/fix-kms-certificate-logs
+264a46a3d	fix(kms): commit certificate logs atomically	RETAINED	codex/fix-kms-certificate-logs
+553a1f19e	chore(kms): remove stale certificate log import	RETAINED	codex/fix-kms-certificate-logs
+b21e12ead	feat(kms): expose startup health endpoint	MANUAL	codex/feat-kms-startup-health
+3cda53791	feat(dstack-mr): restore measurement diagnosis	RETAINED	codex/feat-dstack-mr-diagnosis
+ab4670f84	fix(dstack-mr): align diagnosis with current OVMF	RETAINED	codex/feat-dstack-mr-diagnosis
+3326cb87f	feat(dstack-mr): locate divergent RTMR events	RETAINED	codex/feat-dstack-mr-diagnosis
+c6b39faac	test(verifier): cover cache upgrade boundaries	TEST_ONLY	move/account in test-infrastructure PR
+2e2bf783a	test(verifier): compare serialized cache measurements	TEST_ONLY	move/account in test-infrastructure PR
+d72963927	test(kms): cover Ethereum authorization freshness	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth
+d2dd5d868	test(kms): define Ethereum finalized snapshots	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth
+f3dabbe00	feat(kms): authorize from finalized Ethereum snapshots	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth
+f548c2d41	fix(kms): assert redacted backend diagnostics	RETAINED	codex/feat-kms-auth-policy-audit,codex/feat-kms-finalized-ethereum-auth
+f9f2d7937	feat(kms): emit authorization policy audit events	RETAINED	codex/feat-kms-auth-policy-audit
+c839596e6	test(kms): reconstruct policy from audit events	RETAINED	codex/feat-kms-auth-policy-audit
+f85469609	test(kms): prove authorization decisions are uncached	RETAINED	codex/feat-kms-auth-policy-audit
+8962ce289	fix(test): own captured authorization headers	RETAINED	codex/feat-kms-auth-policy-audit
+392c32fef	test(guest): define configuration entry matrix	TEST_ONLY	move/account in test-infrastructure PR
+203e136c6	fix(mkosi): install Sysbox rsync dependency	RETAINED	codex/fix-mkosi-sysbox-rsync
+639bb13d0	fix(guest): force refresh after missing handshake	RETAINED	codex/fix-guest-missing-handshake-refresh
+7e281627e	fix(guest): make KMS failover ordering testable	RETAINED	codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
+3bb241a46	style(guest): format KMS failover tests	RETAINED	codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
+ba5583ad6	fix(guest): isolate local key providers from KMS inventory	RETAINED	codex/fix-guest-gateway-refresh-failover,codex/fix-guest-local-provider-inventory
+78a6786a1	style(guest): format provider route test	RETAINED	codex/fix-guest-gateway-refresh-failover,codex/fix-guest-local-provider-inventory
+300da2a1f	fix(guest): make gateway refresh failover atomic	RETAINED	codex/fix-guest-gateway-refresh-failover
+19af570e0	style(guest): format gateway refresh tests	RETAINED	codex/fix-guest-gateway-refresh-failover
+7a1f885a1	fix(guest): retain gateway keys across failover attempts	RETAINED	codex/fix-guest-gateway-refresh-failover
+ce59b0ba7	style(guest): format gateway failover closure	RETAINED	codex/fix-guest-gateway-refresh-failover
+716e7772b	test(integration): exercise verifier evidence compatibility	TEST_ONLY	move/account in test-infrastructure PR
+17731c107	fix(test): diagnose evidence compatibility failures	TEST_ONLY	move/account in test-infrastructure PR
+c21218fb0	feat(gateway): allow static proxy domain from app config	RETAINED	codex/feat-gateway-static-proxy-domain
+ec1d30598	fix(guest): decouple Gateway outage from app boot	RETAINED	codex/fix-guest-gateway-outage-boot
+35f84738f	fix(vmm): avoid double-reserving reloaded VM CIDs	RETAINED	codex/fix-vmm-reloaded-cids
+43f669717	style(rust): format product fixes	TEST_ONLY	move/account in test-infrastructure PR
+574c0d364	fix(gateway): restore upstream build compatibility	MANUAL	codex/fix-gateway-private-tls-material

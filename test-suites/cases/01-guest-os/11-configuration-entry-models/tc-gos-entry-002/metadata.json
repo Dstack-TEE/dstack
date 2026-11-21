@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-entry-002",
+  "title": "Guest-agent startup modes and partial listener failure",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-entry-002"
+  ],
+  "risks": [
+    "risk-gos-entry-002"
+  ],
+  "tags": [
+    "gos",
+    "configuration-entry-points-and-presentation-models"
+  ],
+  "fixture": {
+    "profile": "multi-identity",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Guest-agent startup modes and partial listener failure"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

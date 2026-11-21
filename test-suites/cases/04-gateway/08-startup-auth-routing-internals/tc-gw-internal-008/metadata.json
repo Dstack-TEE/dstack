@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-008",
+  "title": "Combined route index RPC exposure",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-internal-008"
+  ],
+  "risks": [
+    "risk-gw-internal-008"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Combined route index RPC exposure"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

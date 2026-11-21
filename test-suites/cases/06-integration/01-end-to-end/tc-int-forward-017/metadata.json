@@ -1,0 +1,10 @@
+{
+  "id": "tc-int-forward-017",
+  "title": "Forward interval product regression matrix (#1555-#1589)",
+  "priority": "P0",
+  "requirements": ["req-int-forward-017"],
+  "risks": ["risk-int-forward-017"],
+  "tags": ["regression", "kms", "gateway", "vmm", "guest", "verifier", "ra-tls"],
+  "actions_under_test": ["Product changes between 9b87d9f9a6 and #1587"],
+  "execution": {"entrypoint": "run.py", "args": [], "timeout_seconds": 3600}
+}

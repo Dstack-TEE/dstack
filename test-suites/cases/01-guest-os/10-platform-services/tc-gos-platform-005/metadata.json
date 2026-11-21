@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-platform-005",
+  "title": "Guest kernel and userspace hardening",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-platform-005"
+  ],
+  "risks": [
+    "risk-gos-platform-005"
+  ],
+  "tags": [
+    "gos",
+    "platform-services-and-image-integrity"
+  ],
+  "fixture": {
+    "profile": "guest-readonly",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Guest kernel and userspace hardening"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}
