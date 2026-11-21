@@ -5,16 +5,16 @@
 name: Publish Go SDK
 on:
   push:
-    tags: ['sdk/go*']
+    tags: ['sdk/go/dstack*', 'sdk/go/ratls*']
   workflow_dispatch:
     inputs:
       module:
         description: 'Module to (re)index on pkg.go.dev'
         required: true
-        default: 'sdk/go'
+        default: 'sdk/go/dstack'
         type: choice
         options:
-          - sdk/go
+          - sdk/go/dstack
           - sdk/go/ratls
       version:
         description: 'Version, with the leading v (e.g. v0.6.1)'
@@ -45,8 +45,9 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          # The `go` directive in the released sdk/go/go.mod. sdk/go/ratls
-          # asks for 1.24, so this one toolchain covers both modules.
+          # The `go` directive in the released sdk/go/dstack/go.mod. sdk/go/ratls
+          # and sdk/go/tappd ask for 1.24, so this one toolchain covers all
+          # three modules.
           go-version: '1.25'
 
       - name: Go SDK tests against the simulator
@@ -57,16 +58,21 @@ jobs:
           trap simulator_stop EXIT INT TERM
           simulator_start
 
-          unformatted=$(gofmt -l sdk/go sdk/go/ratls)
+          unformatted=$(gofmt -l sdk/go)
           if [ -n "$unformatted" ]; then
             echo "::error::unformatted Go files: $unformatted"
             exit 1
           fi
 
-          # sdk/go/ratls is its own module, so ./... here never covers it.
-          pushd sdk/go
+          # Each of the three directories under sdk/go is its own module
+          # (dstack, tappd, ratls), so they are vetted and tested separately.
+          pushd sdk/go/dstack
           go vet ./...
-          go test -v ./dstack ./tappd
+          go test -v .
+          popd
+
+          pushd sdk/go/tappd
+          go test -v .
           popd
 
           pushd sdk/go/ratls
@@ -94,10 +100,10 @@ jobs:
           else
             tag="${GITHUB_REF_NAME}"
             case "$tag" in
+              sdk/go/dstack/v*) module="sdk/go/dstack" ;;
               sdk/go/ratls/v*) module="sdk/go/ratls" ;;
-              sdk/go/v*) module="sdk/go" ;;
               *)
-                echo "::error::unexpected tag $tag, expected sdk/go/v* or sdk/go/ratls/v*"
+                echo "::error::unexpected tag $tag, expected sdk/go/dstack/v* or sdk/go/ratls/v*"
                 exit 1
                 ;;
             esac

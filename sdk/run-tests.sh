@@ -25,10 +25,13 @@ cargo run --example dstack_client_usage
 cargo test -p dstack-sdk-types --test no_std_test --no-default-features
 popd
 
-pushd "$ROOT_DIR/go"
+pushd "$ROOT_DIR/go/dstack"
 go clean -testcache
-go test -v ./dstack
-DSTACK_SIMULATOR_ENDPOINT=$TAPPD_SIMULATOR_ENDPOINT go test -v ./tappd
+go test -v .
+popd
+
+pushd "$ROOT_DIR/go/tappd"
+go test -v .
 popd
 
 pushd "$ROOT_DIR/python"

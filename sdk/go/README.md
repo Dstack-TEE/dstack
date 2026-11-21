@@ -5,7 +5,7 @@ The dstack SDK provides a Go client for secure communication with the dstack Tru
 ## Installation
 
 ```bash
-go get github.com/Dstack-TEE/dstack/sdk/go
+go get github.com/Dstack-TEE/dstack/sdk/go/dstack
 ```
 
 ## Overview
@@ -225,8 +225,8 @@ cert2, _ := client.IssueCert(ctx)
 You can validate SDK changes immediately from another Go project by using `replace`:
 
 ```go
-require github.com/Dstack-TEE/dstack/sdk/go v0.0.0
-replace github.com/Dstack-TEE/dstack/sdk/go => ../dstack/sdk/go
+require github.com/Dstack-TEE/dstack/sdk/go/dstack v0.0.0
+replace github.com/Dstack-TEE/dstack/sdk/go/dstack => ../dstack/sdk/go/dstack
 ```
 
 Then run your starter normally:
@@ -754,15 +754,17 @@ simulator_start
 
 # from sdk/go; simulator_start exports both endpoint variables
 # (DSTACK_SIMULATOR_ENDPOINT and TAPPD_SIMULATOR_ENDPOINT)
-go test -v ./dstack ./tappd
+(cd dstack && go test -v .)
+(cd tappd && go test -v .)
 
-cd ratls && go test -v ./...         # standalone module, no simulator needed
+(cd ratls && go build ./...)           # standalone module; its tests link libdcap_qvl
 ```
 
-A Go SDK release is cut by pushing an `sdk/go/v*` (or `sdk/go/ratls/v*`)
-tag. The [release workflow](../../.github/workflows/go-sdk-release.yml) gates
-the tag on these simulator tests, publishes the GitHub release, and warms
-pkg.go.dev so the new version shows up in search immediately.
+A Go SDK release is cut by pushing an `sdk/go/dstack/v*` (or
+`sdk/go/ratls/v*`) tag. The [release
+workflow](../../.github/workflows/go-sdk-release.yml) gates the tag on these
+simulator tests, publishes the GitHub release, and warms pkg.go.dev so the new
+version shows up in search immediately.
 
 ---
 
