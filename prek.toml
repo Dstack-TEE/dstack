@@ -52,7 +52,7 @@ repo = "local"
 [[repos.hooks]]
 id = "go-vet"
 name = "go vet"
-entry = "bash -c 'cd sdk/go && go vet ./...'"
+entry = "bash -c 'cd sdk/go/dstack && go vet ./... && cd ../tappd && go vet ./... && cd ../ratls && go vet ./...'"
 language = "system"
 files = "sdk/go/.*\\.go$"
 pass_filenames = false

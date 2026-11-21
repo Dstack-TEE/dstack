@@ -139,7 +139,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 | Python | `pip install dstack-sdk` | [README](./sdk/python/README.md) |
 | TypeScript | `npm install @phala/dstack-sdk` | [README](./sdk/js/README.md) |
 | Rust | `cargo add dstack-sdk` | [README](./sdk/rust/README.md) |
-| Go | `go get github.com/Dstack-TEE/dstack/sdk/go` | [README](./sdk/go/README.md) |
+| Go | `go get github.com/Dstack-TEE/dstack/sdk/go/dstack` | [README](./sdk/go/README.md) |
 
 ## Documentation
 

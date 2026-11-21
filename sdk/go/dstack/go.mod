@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-module github.com/Dstack-TEE/dstack/sdk/go
+module github.com/Dstack-TEE/dstack/sdk/go/dstack
 
 go 1.25.0
 
