@@ -735,18 +735,34 @@ cd dstack/sdk/simulator
 
 ### Running Tests
 
+The client tests exercise the real guest-agent wire surface, so they need the
+[simulator](#running-the-simulator) built and running. The easiest path runs
+every SDK suite from the repo root, with the simulator started and stopped by
+the script:
+
 ```bash
-# Set environment variables and run tests
-TAPPD_SIMULATOR_ENDPOINT=/path/to/simulator/tappd.sock \
-DSTACK_SIMULATOR_ENDPOINT=/path/to/simulator/dstack.sock \
+cd sdk
+./run-tests.sh
+```
+
+For a Go-only run, start the simulator yourself and export the endpoints the
+test suites read (`sdk/simulator/lifecycle.sh` does both for you):
+
+```bash
+source sdk/simulator/lifecycle.sh
+simulator_start
+
+# from sdk/go; simulator_start exports both endpoint variables
+# (DSTACK_SIMULATOR_ENDPOINT and TAPPD_SIMULATOR_ENDPOINT)
 go test -v ./dstack ./tappd
+
+cd ratls && go test -v ./...         # standalone module, no simulator needed
 ```
 
-Run tests:
-
-```bash
-go test -v ./dstack
-```
+A Go SDK release is cut by pushing an `sdk/go/v*` (or `sdk/go/ratls/v*`)
+tag. The [release workflow](../../.github/workflows/go-sdk-release.yml) gates
+the tag on these simulator tests, publishes the GitHub release, and warms
+pkg.go.dev so the new version shows up in search immediately.
 
 ---
 
