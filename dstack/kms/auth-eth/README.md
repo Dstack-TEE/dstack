@@ -144,6 +144,15 @@ those images remain available.
 #### GET /
 health check and system information
 
+The response also reports how far behind the chain head the served policy is,
+so callers can tell users how long a policy change (app registration,
+compose-hash or device allowlist update) takes to be honored:
+
+- `blockTag` - the configured `ETH_BLOCK_TAG` (`latest`, `safe` or `finalized`)
+- `finalityConfirmations` - the configured `ETH_FINALITY_CONFIRMATIONS`
+- `policyBlockNumber` - the block number the reported policy state was read
+  at: the resolved tag minus `finalityConfirmations`
+
 #### POST /bootAuth/app
 application boot authentication
 

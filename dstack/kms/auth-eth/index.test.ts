@@ -93,6 +93,28 @@ describe('API Compatibility Tests', () => {
       });
     });
 
+    it('should report the finality config and the block policy was read at', async () => {
+      mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
+        if (params.functionName === 'gatewayAppId') {
+          return '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+        }
+        if (params.functionName === 'appImplementation') {
+          return '0x9876543210987654321098765432109876543210';
+        }
+      });
+
+      const response = await appFetch(new Request('http://localhost:3001/'));
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      // ETH_BLOCK_TAG is unset (default 'finalized'),
+      // ETH_FINALITY_CONFIRMATIONS=2 and the tag resolves to block 100.
+      expect(data.blockTag).toBe('finalized');
+      expect(data.finalityConfirmations).toBe(2);
+      expect(data.policyBlockNumber).toBe(98);
+    });
+
     it('should handle errors gracefully', async () => {
       // Mock contract calls to throw error
       mockReadContract.mockRejectedValue(new Error('contract error'));
