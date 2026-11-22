@@ -81,6 +81,18 @@ message GetMetaResponse {
   // Whether `os_image_hash` is checked against the booted image; always true
   // now. Unset on older KMS; do not treat unset as true.
   optional bool os_image_verification = 10;
+  // Backend-specific metadata reported by the auth API, as a JSON object,
+  // passed through verbatim; opaque to KMS. GetMeta is unauthenticated, so
+  // KMS forwards only an agreed sub-object of the auth API's GET / response,
+  // never the whole body. The keys are spelled exactly as auth-eth emits
+  // them, and each is absent when the backend does not report it; treat
+  // absent as unknown:
+  //   "blockTag": one of "latest", "safe", "finalized"
+  //   "finalityConfirmations": number
+  //   "policyBlockNumber": number
+  // Unset for the dev backend and for auth backends that report none of
+  // these; unset is not "{}".
+  optional string auth_api_info = 11;
 }
 
 message GetKmsKeyRequest {
