@@ -5,7 +5,9 @@
 name: Publish Go SDK
 on:
   push:
-    tags: ['sdk/go/dstack*', 'sdk/go/ratls*']
+    # sdk/go/v0.6.1 is special: it tags the package-less deprecation stub and
+    # must be pushed before the carved-out modules get theirs.
+    tags: ['sdk/go/dstack*', 'sdk/go/ratls*', 'sdk/go/v0.6.1']
   workflow_dispatch:
     inputs:
       module:
@@ -14,6 +16,7 @@ on:
         default: 'sdk/go/dstack'
         type: choice
         options:
+          - sdk/go
           - sdk/go/dstack
           - sdk/go/ratls
       version:
@@ -105,12 +108,21 @@ jobs:
             case "$tag" in
               sdk/go/dstack/v*) module="sdk/go/dstack" ;;
               sdk/go/ratls/v*) module="sdk/go/ratls" ;;
+              sdk/go/v0.6.1) module="sdk/go" ;;
               *)
-                echo "::error::unexpected tag $tag, expected sdk/go/dstack/v* or sdk/go/ratls/v*"
+                echo "::error::unexpected tag $tag, expected sdk/go/dstack/v*, sdk/go/ratls/v*, or sdk/go/v0.6.1"
                 exit 1
                 ;;
             esac
             version="v${tag##*/v}"
+            # sdk/go/dstack and sdk/go/tappd require the package-less sdk/go
+            # v0.6.1 to defuse ambiguous imports for importers pinned to
+            # sdk/go v0.6.0, so that tag must be indexed on the proxy first.
+            if [ "$module" != "sdk/go" ] && ! curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+                -o /dev/null "https://proxy.golang.org/github.com/!dstack-!t!e!e/dstack/sdk/go/@v/v0.6.1.mod"; then
+              echo "::error::sdk/go v0.6.1 is not on the module proxy; tag sdk/go/v0.6.1 first"
+              exit 1
+            fi
           fi
           if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::invalid version $version"
