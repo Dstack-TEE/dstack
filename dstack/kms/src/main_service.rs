@@ -2829,31 +2829,4 @@ mod tests {
             1
         );
     }
-
-    #[rocket::async_test]
-    async fn get_meta_reports_the_auth_api_info_sub_object() {
-        let dir = tempfile::tempdir().unwrap();
-        let (url, _) = serve_concurrent_auth_api(
-            r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":8453,"appImplementation":"0ximpl","blockTag":"finalized","finalityConfirmations":0,"policyBlockNumber":12345}"#,
-        );
-        let state = kms_state(dir.path(), &url);
-        let meta = RpcHandler {
-            state,
-            attestation: None,
-            remote_endpoint: None,
-        }
-        .get_meta()
-        .await
-        .unwrap();
-        let forwarded: serde_json::Value =
-            serde_json::from_str(meta.auth_api_info.as_deref().unwrap()).unwrap();
-        assert_eq!(
-            forwarded,
-            serde_json::json!({
-                "blockTag": "finalized",
-                "finalityConfirmations": 0,
-                "policyBlockNumber": 12345,
-            })
-        );
-    }
 }

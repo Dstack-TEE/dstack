@@ -144,14 +144,11 @@ those images remain available.
 #### GET /
 health check and system information
 
-The response also reports how far behind the chain head the served policy is,
-so callers can tell users how long a policy change (app registration,
-compose-hash or device allowlist update) takes to be honored:
-
-- `blockTag` - the configured `ETH_BLOCK_TAG` (`latest`, `safe` or `finalized`)
-- `finalityConfirmations` - the configured `ETH_FINALITY_CONFIRMATIONS`
-- `policyBlockNumber` - the block number the reported policy state was read
-  at: the resolved tag minus `finalityConfirmations`
+`authApiInfo` is a JSON-encoded object the KMS forwards verbatim through its
+unauthenticated `GetMeta` RPC, so it carries public data only:
+`kmsContractAddr`, `chainId`, `appImplementation`, `ethRpcUrl`, `blockTag`
+(`ETH_BLOCK_TAG`), `finalityConfirmations` (`ETH_FINALITY_CONFIRMATIONS`) and
+`policyBlockNumber` (the block the policy was read at).
 
 #### POST /bootAuth/app
 application boot authentication

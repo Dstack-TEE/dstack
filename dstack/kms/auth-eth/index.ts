@@ -224,8 +224,6 @@ export class EthereumBackend {
   private client: ReturnType<typeof createPublicClient>;
   private kmsContractAddr: Address;
   private expectedChainId?: number;
-  // Exposed read-only so the info endpoint can report how fresh the policy
-  // it serves is; resolveBlock() applies both.
   readonly blockTag: BlockTag;
   readonly finalityConfirmations: bigint;
 
@@ -515,11 +513,16 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
-      // How far behind the chain head the policy below was read, so callers
-      // can tell users how long a policy change takes to be honored.
-      blockTag: ethereum.blockTag,
-      finalityConfirmations: Number(ethereum.finalityConfirmations),
-      policyBlockNumber: Number(block),
+      // Forwarded verbatim by the KMS's unauthenticated GetMeta: public only.
+      authApiInfo: JSON.stringify({
+        kmsContractAddr,
+        chainId: batch[1],
+        appImplementation: batch[2],
+        ethRpcUrl: publicRpcEndpoint(rpcUrl),
+        blockTag: ethereum.blockTag,
+        finalityConfirmations: Number(ethereum.finalityConfirmations),
+        policyBlockNumber: Number(block),
+      }),
       ...batch[3],
       ...(rootCaPubkey && { rootCaPubkey }),
     });

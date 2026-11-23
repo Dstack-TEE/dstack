@@ -93,7 +93,7 @@ describe('API Compatibility Tests', () => {
       });
     });
 
-    it('should report the finality config and the block policy was read at', async () => {
+    it('should report public chain info in authApiInfo', async () => {
       mockReadContract.mockImplementation((params) => {
         if (params.functionName === 'rootEpochCount') return 0n;
         if (params.functionName === 'gatewayAppId') {
@@ -104,15 +104,23 @@ describe('API Compatibility Tests', () => {
         }
       });
 
+      mockGetChainId.mockResolvedValue(1337);
+
       const response = await appFetch(new Request('http://localhost:3001/'));
       const data = await response.json();
 
       expect(response.status).toBe(200);
       // ETH_BLOCK_TAG is unset (default 'finalized'),
       // ETH_FINALITY_CONFIRMATIONS=2 and the tag resolves to block 100.
-      expect(data.blockTag).toBe('finalized');
-      expect(data.finalityConfirmations).toBe(2);
-      expect(data.policyBlockNumber).toBe(98);
+      expect(JSON.parse(data.authApiInfo)).toEqual({
+        kmsContractAddr: '0x1234567890123456789012345678901234567890',
+        chainId: 1337,
+        appImplementation: '0x9876543210987654321098765432109876543210',
+        ethRpcUrl: 'http://localhost:8545',
+        blockTag: 'finalized',
+        finalityConfirmations: 2,
+        policyBlockNumber: 98,
+      });
     });
 
     it('should handle errors gracefully', async () => {

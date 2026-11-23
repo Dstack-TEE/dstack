@@ -207,10 +207,7 @@ pub(crate) struct AuthApiInfoResponse {
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
-    // Absent on auth backends that predate the finality report.
-    pub block_tag: Option<String>,
-    pub finality_confirmations: Option<u64>,
-    pub policy_block_number: Option<u64>,
+    pub auth_api_info: Option<String>,
     #[serde(flatten)]
     pub root_epoch: RootEpochFields,
 }
@@ -225,28 +222,7 @@ pub(crate) struct GetInfoResponse {
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
     pub root_epochs: RootEpochRegistry,
-    /// Backend-specific metadata to forward in `GetMeta`, as a JSON object;
-    /// opaque to KMS. `None` for the dev backend and when the auth backend
-    /// reports none of the agreed keys.
     pub auth_api_info: Option<String>,
-}
-
-/// The agreed sub-object of the auth API's info response that `GetMeta`
-/// forwards: backend-specific metadata KMS never interprets. `GetMeta` is
-/// unauthenticated, so only these keys are forwarded, never the whole body;
-/// the keys are spelled exactly as auth-eth emits them.
-fn auth_api_info_json(info: &AuthApiInfoResponse) -> Option<String> {
-    let mut obj = serde_json::Map::new();
-    if let Some(block_tag) = &info.block_tag {
-        obj.insert("blockTag".into(), block_tag.clone().into());
-    }
-    if let Some(confirmations) = info.finality_confirmations {
-        obj.insert("finalityConfirmations".into(), confirmations.into());
-    }
-    if let Some(block) = info.policy_block_number {
-        obj.insert("policyBlockNumber".into(), block.into());
-    }
-    (!obj.is_empty()).then(|| serde_json::Value::Object(obj).to_string())
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -561,7 +537,7 @@ impl AuthApi {
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
                     root_epochs: info.root_epoch.registry()?,
-                    auth_api_info: auth_api_info_json(&info),
+                    auth_api_info: info.auth_api_info,
                 })
             }
         }
@@ -1177,35 +1153,6 @@ pub(crate) mod tests {
         assert_eq!(requests[2].1["rootEpochHash"], hash);
         assert_eq!(requests[2].1["appId"], requests[3].1["appId"]);
         assert!(requests[3].1.get("rootEpoch").is_none());
-    }
-
-    #[rocket::async_test]
-    async fn auth_api_info_sub_object_passes_through_and_defaults_to_unknown() {
-        let (url, server) = serve(vec![
-            r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":8453,
-                "appImplementation":"0x00","blockTag":"finalized","finalityConfirmations":0,
-                "policyBlockNumber":12345}"#,
-            // An auth backend that predates the finality report omits them.
-            r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
-                "appImplementation":"0x00"}"#,
-        ]);
-        let auth = webhook(url);
-
-        let info = auth.get_info().await.unwrap();
-        let forwarded: serde_json::Value =
-            serde_json::from_str(info.auth_api_info.as_deref().unwrap()).unwrap();
-        assert_eq!(
-            forwarded,
-            serde_json::json!({
-                "blockTag": "finalized",
-                "finalityConfirmations": 0,
-                "policyBlockNumber": 12345,
-            })
-        );
-
-        let info = auth.get_info().await.unwrap();
-        assert_eq!(info.auth_api_info, None);
-        assert_eq!(server.join().unwrap().len(), 2);
     }
 
     #[rocket::async_test]

@@ -352,22 +352,9 @@
             "type": "string",
             "description": "App implementation address"
           },
-          "blockTag": {
+          "authApiInfo": {
             "type": "string",
-            "enum": [
-              "latest",
-              "safe",
-              "finalized"
-            ],
-            "description": "Block tag policy is read at (ETH_BLOCK_TAG)"
-          },
-          "finalityConfirmations": {
-            "type": "integer",
-            "description": "Confirmations subtracted from the resolved block tag before reading policy (ETH_FINALITY_CONFIRMATIONS)"
-          },
-          "policyBlockNumber": {
-            "type": "integer",
-            "description": "Block number the reported policy state was read at: the resolved tag minus finalityConfirmations. Together with the chain's block time, these fields bound how long a policy change (app registration, compose-hash or device allowlist update) takes to be honored."
+            "description": "JSON-encoded public metadata the KMS forwards verbatim through GetMeta: kmsContractAddr, chainId, appImplementation, ethRpcUrl, blockTag, finalityConfirmations, policyBlockNumber"
           },
           "rootEpoch": {
             "type": "integer",
