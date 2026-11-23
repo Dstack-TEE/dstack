@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
+  `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
+  lists it under its product name instead of "go". The `dstack` package import
+  path is unchanged — importers only update the module line in `go.mod`. The
+  retired tappd client becomes its own module at its unchanged path
+  (`sdk/go/tappd`), frozen and deprecated. The old `sdk/go` module is
+  deprecated and contains no packages from v0.6.1; both new modules require
+  that version, so `go get` upgrades an existing v0.6.0 pin instead of failing
+  with an ambiguous import. Releases tag `sdk/go/dstack/v*` or
+  `sdk/go/ratls/v*`, gated by a new release workflow that also warms
+  pkg.go.dev indexing.
+
 ## [0.6.6] - 2026-11-20
 
 ### Upgrade notes

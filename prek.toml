@@ -52,7 +52,7 @@ repo = "local"
 [[repos.hooks]]
 id = "go-vet"
 name = "go vet"
-entry = "bash -c 'cd sdk/go && go vet ./...'"
+entry = "bash -c 'for m in dstack tappd ratls; do (cd sdk/go/$m && go vet ./...) || exit 1; done'"
 language = "system"
 files = "sdk/go/.*\\.go$"
 pass_filenames = false
