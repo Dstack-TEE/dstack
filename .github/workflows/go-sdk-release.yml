@@ -177,6 +177,14 @@ jobs:
             sleep 10
           done
           echo "proxy serves ${module_path}@${version}"
+          if [ "$module" = "sdk/go" ]; then
+            # The package-less deprecation stub is never indexed by
+            # pkg.go.dev (observed: 404 for 50+ minutes while the proxy
+            # serves it). It only needs the proxy, where `go get` resolves
+            # it for importers pinned to v0.6.0.
+            echo "sdk/go is a package-less stub; skipping pkg.go.dev"
+            exit 0
+          fi
           until curl -fsSL -o /dev/null "https://pkg.go.dev/${module_path}@${version}"; do
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "::error::pkg.go.dev never indexed ${module_path}@${version}"
