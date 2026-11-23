@@ -224,8 +224,8 @@ export class EthereumBackend {
   private client: ReturnType<typeof createPublicClient>;
   private kmsContractAddr: Address;
   private expectedChainId?: number;
-  private blockTag: BlockTag;
-  private finalityConfirmations: bigint;
+  readonly blockTag: BlockTag;
+  readonly finalityConfirmations: bigint;
 
   constructor(
     client: ReturnType<typeof createPublicClient>,
@@ -513,6 +513,16 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
+      // Forwarded verbatim by the KMS's unauthenticated GetMeta: public only.
+      authApiInfo: JSON.stringify({
+        kmsContractAddr,
+        chainId: batch[1],
+        appImplementation: batch[2],
+        ethRpcUrl: publicRpcEndpoint(rpcUrl),
+        blockTag: ethereum.blockTag,
+        finalityConfirmations: Number(ethereum.finalityConfirmations),
+        policyBlockNumber: Number(block),
+      }),
       ...batch[3],
       ...(rootCaPubkey && { rootCaPubkey }),
     });

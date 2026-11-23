@@ -1075,6 +1075,7 @@ impl KmsRpc for RpcHandler {
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
             os_image_verification: Some(true),
+            auth_api_info: info.auth_api_info,
         })
     }
 

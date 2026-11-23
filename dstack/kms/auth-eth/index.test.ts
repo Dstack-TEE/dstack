@@ -93,6 +93,36 @@ describe('API Compatibility Tests', () => {
       });
     });
 
+    it('should report public chain info in authApiInfo', async () => {
+      mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
+        if (params.functionName === 'gatewayAppId') {
+          return '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+        }
+        if (params.functionName === 'appImplementation') {
+          return '0x9876543210987654321098765432109876543210';
+        }
+      });
+
+      mockGetChainId.mockResolvedValue(1337);
+
+      const response = await appFetch(new Request('http://localhost:3001/'));
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      // ETH_BLOCK_TAG is unset (default 'finalized'),
+      // ETH_FINALITY_CONFIRMATIONS=2 and the tag resolves to block 100.
+      expect(JSON.parse(data.authApiInfo)).toEqual({
+        kmsContractAddr: '0x1234567890123456789012345678901234567890',
+        chainId: 1337,
+        appImplementation: '0x9876543210987654321098765432109876543210',
+        ethRpcUrl: 'http://localhost:8545',
+        blockTag: 'finalized',
+        finalityConfirmations: 2,
+        policyBlockNumber: 98,
+      });
+    });
+
     it('should handle errors gracefully', async () => {
       // Mock contract calls to throw error
       mockReadContract.mockRejectedValue(new Error('contract error'));

@@ -144,6 +144,12 @@ those images remain available.
 #### GET /
 health check and system information
 
+`authApiInfo` is a JSON-encoded object the KMS forwards verbatim through its
+unauthenticated `GetMeta` RPC, so it carries public data only:
+`kmsContractAddr`, `chainId`, `appImplementation`, `ethRpcUrl`, `blockTag`
+(`ETH_BLOCK_TAG`), `finalityConfirmations` (`ETH_FINALITY_CONFIRMATIONS`) and
+`policyBlockNumber` (the block the policy was read at).
+
 #### POST /bootAuth/app
 application boot authentication
 

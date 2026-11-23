@@ -352,6 +352,10 @@
             "type": "string",
             "description": "App implementation address"
           },
+          "authApiInfo": {
+            "type": "string",
+            "description": "JSON-encoded public metadata the KMS forwards verbatim through GetMeta: kmsContractAddr, chainId, appImplementation, ethRpcUrl, blockTag, finalityConfirmations, policyBlockNumber"
+          },
           "rootEpoch": {
             "type": "integer",
             "description": "Current KMS root epoch; absent when none is registered"

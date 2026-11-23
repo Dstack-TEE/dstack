@@ -207,6 +207,7 @@ pub(crate) struct AuthApiInfoResponse {
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
+    pub auth_api_info: Option<String>,
     #[serde(flatten)]
     pub root_epoch: RootEpochFields,
 }
@@ -221,6 +222,7 @@ pub(crate) struct GetInfoResponse {
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
     pub root_epochs: RootEpochRegistry,
+    pub auth_api_info: Option<String>,
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -518,6 +520,7 @@ impl AuthApi {
                 chain_id: None,
                 app_implementation: None,
                 root_epochs: RootEpochRegistry::Unchecked,
+                auth_api_info: None,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
@@ -534,6 +537,7 @@ impl AuthApi {
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
                     root_epochs: info.root_epoch.registry()?,
+                    auth_api_info: info.auth_api_info,
                 })
             }
         }

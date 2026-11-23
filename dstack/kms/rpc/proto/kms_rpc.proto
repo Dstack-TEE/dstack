@@ -75,12 +75,20 @@ message GetMetaResponse {
   BootstrapResponse bootstrap_info = 4;
   bool is_dev = 5;
   optional string gateway_app_id = 6;
+  // Deprecated: read `kmsContractAddr` from `auth_api_info` instead.
   optional string kms_contract_address = 7;
+  // Deprecated: read `chainId` from `auth_api_info` instead.
   optional uint64 chain_id = 8;
+  // Deprecated: read `appImplementation` from `auth_api_info` instead.
   optional string app_auth_implementation = 9;
   // Whether `os_image_hash` is checked against the booted image; always true
   // now. Unset on older KMS; do not treat unset as true.
   optional bool os_image_verification = 10;
+  // Public metadata the auth backend reports as `authApiInfo` in its GET /
+  // response, forwarded verbatim and opaque to KMS; its format is defined by
+  // the backend (a JSON object for auth-eth). Unset when the backend reports
+  // none.
+  optional string auth_api_info = 11;
 }
 
 message GetKmsKeyRequest {
