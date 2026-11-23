@@ -85,7 +85,9 @@ jobs:
 
   release:
     needs: test
-    if: github.event_name == 'workflow_dispatch' || needs.test.result == 'success'
+    # Without a status function the condition gets an implicit `success()`,
+    # which is false once `test` is skipped on workflow_dispatch.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.test.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - name: Resolve module and version
