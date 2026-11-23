@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Provides a dstack SDK client and related utilities
 package dstack
 
 import (
