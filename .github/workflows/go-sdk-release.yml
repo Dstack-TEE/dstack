@@ -7,7 +7,7 @@ on:
   push:
     # sdk/go/v0.6.1 is special: it tags the package-less deprecation stub and
     # must be pushed before the carved-out modules get theirs.
-    tags: ['sdk/go/dstack*', 'sdk/go/ratls*', 'sdk/go/v0.6.1']
+    tags: ['sdk/go/dstack/v*', 'sdk/go/ratls/v*', 'sdk/go/v0.6.1']
   workflow_dispatch:
     inputs:
       module:
@@ -115,10 +115,11 @@ jobs:
                 ;;
             esac
             version="v${tag##*/v}"
-            # sdk/go/dstack and sdk/go/tappd require the package-less sdk/go
-            # v0.6.1 to defuse ambiguous imports for importers pinned to
-            # sdk/go v0.6.0, so that tag must be indexed on the proxy first.
-            if [ "$module" != "sdk/go" ] && ! curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+            # sdk/go/dstack requires the package-less sdk/go v0.6.1 to defuse
+            # ambiguous imports for importers pinned to sdk/go v0.6.0, so that
+            # tag must be indexed on the proxy first. ratls does not require
+            # the stub and is not gated on it.
+            if [ "$module" = "sdk/go/dstack" ] && ! curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
                 -o /dev/null "https://proxy.golang.org/github.com/!dstack-!t!e!e/dstack/sdk/go/@v/v0.6.1.mod"; then
               echo "::error::sdk/go v0.6.1 is not on the module proxy; tag sdk/go/v0.6.1 first"
               exit 1
@@ -155,21 +156,29 @@ jobs:
       # its own crawl finishes.
       - name: Index the module on pkg.go.dev
         run: |
-          module_path="github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}"
+          module="${{ steps.meta.outputs.module }}"
+          module_path="github.com/Dstack-TEE/dstack/$module"
           version="${{ steps.meta.outputs.version }}"
-          # Go module proxy escaping: every uppercase letter becomes
-          # "!" + its lowercase form (BSD sed has no \L, so loop in bash).
-          proxy_path=""
-          for ((i = 0; i < ${#module_path}; i++)); do
-            c="${module_path:i:1}"
-            if [[ "$c" =~ [A-Z] ]]; then
-              proxy_path+="!${c,,}"
-            else
-              proxy_path+="$c"
-            fi
-          done
-          deadline=$((SECONDS + 480))
-          until curl -fsSL -o /dev/null "https://proxy.golang.org/${proxy_path}/@v/${version}.info"; do
+          # Go module proxy escaping applies to both the path and the version:
+          # every uppercase letter becomes "!" + its lowercase form (BSD sed
+          # has no \L, so loop in bash). A raw uppercase prerelease like
+          # v0.6.1-RC1 is rejected by the proxy as an invalid escaped version.
+          escape() {
+            local s="$1" out="" c i
+            for ((i = 0; i < ${#s}; i++)); do
+              c="${s:i:1}"
+              if [[ "$c" =~ [A-Z] ]]; then
+                out+="!${c,,}"
+              else
+                out+="$c"
+              fi
+            done
+            echo "$out"
+          }
+          proxy_path=$(escape "$module_path")
+          proxy_version=$(escape "$version")
+          deadline=$((SECONDS + 240))
+          until curl -fsSL --max-time 30 -o /dev/null "https://proxy.golang.org/${proxy_path}/@v/${proxy_version}.info"; do
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "::error::module proxy never served ${module_path}@${version}"
               exit 1
@@ -185,12 +194,17 @@ jobs:
             echo "sdk/go is a package-less stub; skipping pkg.go.dev"
             exit 0
           fi
-          until curl -fsSL -o /dev/null "https://pkg.go.dev/${module_path}@${version}"; do
+          deadline=$((SECONDS + 480))
+          until curl -fsSL --max-time 30 -o /dev/null "https://pkg.go.dev/${module_path}@${version}"; do
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "::error::pkg.go.dev never indexed ${module_path}@${version}"
               exit 1
             fi
             sleep 10
           done
-          curl -fsSL -o /dev/null "https://pkg.go.dev/${module_path}"
           echo "pkg.go.dev indexed ${module_path}@${version}"
+          # Best effort: the unversioned page can lag minutes behind the
+          # versioned one, and a transient error here says nothing about the
+          # indexing above.
+          curl -fsSL --max-time 30 -o /dev/null "https://pkg.go.dev/${module_path}" || \
+            echo "::warning::unversioned pkg.go.dev page not refreshed yet"
