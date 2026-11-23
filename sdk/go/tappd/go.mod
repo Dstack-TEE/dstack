@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Deprecated: tappd is retired; use github.com/Dstack-TEE/dstack/sdk/go/dstack.
 module github.com/Dstack-TEE/dstack/sdk/go/tappd
 
 go 1.24.0
