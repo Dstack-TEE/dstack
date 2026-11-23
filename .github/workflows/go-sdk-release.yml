@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Publish Go SDK
+on:
+  push:
+    # sdk/go/v0.6.1 is special: it tags the package-less deprecation stub and
+    # must be pushed before the carved-out modules get theirs.
+    tags: ['sdk/go/dstack*', 'sdk/go/ratls*', 'sdk/go/v0.6.1']
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'Module to (re)index on pkg.go.dev'
+        required: true
+        default: 'sdk/go/dstack'
+        type: choice
+        options:
+          - sdk/go
+          - sdk/go/dstack
+          - sdk/go/ratls
+      version:
+        description: 'Version, with the leading v (e.g. v0.6.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    # workflow_dispatch is only for re-indexing pkg.go.dev after a release, so
+    # it skips the gate.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      # The simulator is built from the dstack workspace; without the cache
+      # this build is most of the job's wall time.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          # The `go` directive in the released sdk/go/dstack/go.mod. sdk/go/ratls
+          # and sdk/go/tappd ask for 1.24, so this one toolchain covers all
+          # three modules.
+          go-version: '1.25'
+
+      - name: Go SDK tests against the simulator
+        run: |
+          set -Eeuo pipefail
+          source sdk/simulator/lifecycle.sh
+          trap 'simulator_print_logs' ERR
+          trap simulator_stop EXIT INT TERM
+          simulator_start
+
+          unformatted=$(gofmt -l sdk/go)
+          if [ -n "$unformatted" ]; then
+            echo "::error::unformatted Go files: $unformatted"
+            exit 1
+          fi
+
+          # Each of the three directories under sdk/go is its own module
+          # (dstack, tappd, ratls), so they are vetted and tested separately.
+          pushd sdk/go/dstack
+          go vet ./...
+          go test -v .
+          popd
+
+          pushd sdk/go/tappd
+          go vet ./...
+          go test -v .
+          popd
+
+          pushd sdk/go/ratls
+          go vet ./...
+          # Compiling is as far as this goes: the test binary links against
+          # libdcap_qvl, which no CI job installs (run-tests.sh and the compat
+          # runner don't exercise ratls either).
+          go build ./...
+          popd
+
+  release:
+    needs: test
+    # Without a status function the condition gets an implicit `success()`,
+    # which is false once `test` is skipped on workflow_dispatch.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.test.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve module and version
+        id: meta
+        env:
+          MODULE_INPUT: ${{ github.event.inputs.module }}
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            module="$MODULE_INPUT"
+            version="$VERSION_INPUT"
+          else
+            tag="${GITHUB_REF_NAME}"
+            case "$tag" in
+              sdk/go/dstack/v*) module="sdk/go/dstack" ;;
+              sdk/go/ratls/v*) module="sdk/go/ratls" ;;
+              sdk/go/v0.6.1) module="sdk/go" ;;
+              *)
+                echo "::error::unexpected tag $tag, expected sdk/go/dstack/v*, sdk/go/ratls/v*, or sdk/go/v0.6.1"
+                exit 1
+                ;;
+            esac
+            version="v${tag##*/v}"
+            # sdk/go/dstack and sdk/go/tappd require the package-less sdk/go
+            # v0.6.1 to defuse ambiguous imports for importers pinned to
+            # sdk/go v0.6.0, so that tag must be indexed on the proxy first.
+            if [ "$module" != "sdk/go" ] && ! curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+                -o /dev/null "https://proxy.golang.org/github.com/!dstack-!t!e!e/dstack/sdk/go/@v/v0.6.1.mod"; then
+              echo "::error::sdk/go v0.6.1 is not on the module proxy; tag sdk/go/v0.6.1 first"
+              exit 1
+            fi
+          fi
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::invalid version $version"
+            exit 1
+          fi
+          echo "module=$module" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: "Go SDK ${{ steps.meta.outputs.version }}"
+          body: |
+            ## Go module
+
+            **Module**: `github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}`
+            **Version**: `${{ steps.meta.outputs.version }}`
+
+            ```bash
+            go get github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}@${{ steps.meta.outputs.version }}
+            ```
+
+            **Docs**: https://pkg.go.dev/github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}@${{ steps.meta.outputs.version }}
+
+      # pkg.go.dev crawls on demand: the first request after a tag push is
+      # what starts the fetch from the Go module proxy, so without this step a
+      # release stays absent from search until someone happens to open its
+      # page.
+      - name: Index the module on pkg.go.dev
+        run: |
+          module_path="github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}"
+          version="${{ steps.meta.outputs.version }}"
+          for url in \
+            "https://pkg.go.dev/${module_path}@${version}" \
+            "https://pkg.go.dev/${module_path}"; do
+            echo "indexing $url"
+            curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o /dev/null "$url"
+          done

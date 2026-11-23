@@ -5,7 +5,7 @@ The dstack SDK provides a Go client for secure communication with the dstack Tru
 ## Installation
 
 ```bash
-go get github.com/Dstack-TEE/dstack/sdk/go
+go get github.com/Dstack-TEE/dstack/sdk/go/dstack
 ```
 
 ## Overview
@@ -225,8 +225,8 @@ cert2, _ := client.IssueCert(ctx)
 You can validate SDK changes immediately from another Go project by using `replace`:
 
 ```go
-require github.com/Dstack-TEE/dstack/sdk/go v0.0.0
-replace github.com/Dstack-TEE/dstack/sdk/go => ../dstack/sdk/go
+require github.com/Dstack-TEE/dstack/sdk/go/dstack v0.0.0
+replace github.com/Dstack-TEE/dstack/sdk/go/dstack => ../dstack/sdk/go/dstack
 ```
 
 Then run your starter normally:
@@ -735,18 +735,39 @@ cd dstack/sdk/simulator
 
 ### Running Tests
 
-```bash
-# Set environment variables and run tests
-TAPPD_SIMULATOR_ENDPOINT=/path/to/simulator/tappd.sock \
-DSTACK_SIMULATOR_ENDPOINT=/path/to/simulator/dstack.sock \
-go test -v ./dstack ./tappd
-```
-
-Run tests:
+The client tests exercise the real guest-agent wire surface, so they need the
+[simulator](#running-the-simulator) built and running. The easiest path runs
+every SDK suite from the repo root, with the simulator started and stopped by
+the script:
 
 ```bash
-go test -v ./dstack
+cd sdk
+./run-tests.sh
 ```
+
+For a Go-only run, start the simulator yourself and export the endpoints the
+test suites read (`sdk/simulator/lifecycle.sh` does both for you):
+
+```bash
+source sdk/simulator/lifecycle.sh
+simulator_start
+
+# from sdk/go; simulator_start exports both endpoint variables
+# (DSTACK_SIMULATOR_ENDPOINT and TAPPD_SIMULATOR_ENDPOINT)
+(cd dstack && go test -v .)
+(cd tappd && go test -v .)
+
+(cd ratls && go build ./...)           # standalone module; its tests link libdcap_qvl
+```
+
+A Go SDK release is cut by pushing an `sdk/go/dstack/v*` (or
+`sdk/go/ratls/v*`) tag. The [release
+workflow](../../.github/workflows/go-sdk-release.yml) gates the tag on these
+simulator tests, publishes the GitHub release, and warms pkg.go.dev so the new
+version shows up in search immediately. The gate is advisory: the Go module
+proxy serves a tag as soon as it is pushed, so run the tests before tagging. `sdk/go/dstack` and `sdk/go/tappd`
+require the package-less `sdk/go` v0.6.1, so the `sdk/go/v0.6.1` tag must exist
+before the first release of either module.
 
 ---
 

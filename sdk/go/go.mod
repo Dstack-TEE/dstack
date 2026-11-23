@@ -1,21 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Nethermind <contact@nethermind.io>
-// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Deprecated: the Go SDK moved to github.com/Dstack-TEE/dstack/sdk/go/dstack.
+// From v0.6.1 on this module contains no packages; it is kept only so that
+// minimal version selection drops the v0.6.0 copies of the dstack and tappd
+// packages, which now live in their own modules.
 module github.com/Dstack-TEE/dstack/sdk/go
 
-go 1.25.0
-
-require (
-	github.com/cloudflare/circl v1.6.4
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1
-	github.com/ethereum/go-ethereum v1.17.4
-	golang.org/x/crypto v0.52.0
-)
-
-require (
-	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
-	github.com/holiman/uint256 v1.3.2 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-)
+go 1.24.0

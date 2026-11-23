@@ -45,7 +45,7 @@ path = [
     "sdk/simulator/*.json",
     "sdk/fixtures/sealed-env/*.json",
     "sdk/tests/compose-hash-fixture.json",
-    "sdk/go/go.sum",
+    "sdk/go/dstack/go.sum",
     "sdk/go/ratls/go.sum",
     "dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt",
     "dstack/kms/dstack-app/builder/shared/pinned-packages.txt",
