@@ -75,8 +75,11 @@ message GetMetaResponse {
   BootstrapResponse bootstrap_info = 4;
   bool is_dev = 5;
   optional string gateway_app_id = 6;
+  // Deprecated: read `kmsContractAddr` from `auth_api_info` instead.
   optional string kms_contract_address = 7;
+  // Deprecated: read `chainId` from `auth_api_info` instead.
   optional uint64 chain_id = 8;
+  // Deprecated: read `appImplementation` from `auth_api_info` instead.
   optional string app_auth_implementation = 9;
   // Whether `os_image_hash` is checked against the booted image; always true
   // now. Unset on older KMS; do not treat unset as true.
