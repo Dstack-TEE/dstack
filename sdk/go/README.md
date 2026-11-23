@@ -764,7 +764,8 @@ A Go SDK release is cut by pushing an `sdk/go/dstack/v*` (or
 `sdk/go/ratls/v*`) tag. The [release
 workflow](../../.github/workflows/go-sdk-release.yml) gates the tag on these
 simulator tests, publishes the GitHub release, and warms pkg.go.dev so the new
-version shows up in search immediately. `sdk/go/dstack` and `sdk/go/tappd`
+version shows up in search immediately. The gate is advisory: the Go module
+proxy serves a tag as soon as it is pushed, so run the tests before tagging. `sdk/go/dstack` and `sdk/go/tappd`
 require the package-less `sdk/go` v0.6.1, so the `sdk/go/v0.6.1` tag must exist
 before the first release of either module.
 
