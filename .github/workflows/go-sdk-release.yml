@@ -148,17 +148,41 @@ jobs:
 
             **Docs**: https://pkg.go.dev/github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}@${{ steps.meta.outputs.version }}
 
-      # pkg.go.dev crawls on demand: the first request after a tag push is
-      # what starts the fetch from the Go module proxy, so without this step a
-      # release stays absent from search until someone happens to open its
-      # page.
+      # pkg.go.dev and the module proxy both crawl on demand, and the crawl
+      # takes minutes after a tag push. A plain curl right after the release
+      # races the crawl and 404s. Pull the version through the proxy first
+      # (that request is what indexes the proxy), then poll pkg.go.dev until
+      # its own crawl finishes.
       - name: Index the module on pkg.go.dev
         run: |
           module_path="github.com/Dstack-TEE/dstack/${{ steps.meta.outputs.module }}"
           version="${{ steps.meta.outputs.version }}"
-          for url in \
-            "https://pkg.go.dev/${module_path}@${version}" \
-            "https://pkg.go.dev/${module_path}"; do
-            echo "indexing $url"
-            curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o /dev/null "$url"
+          # Go module proxy escaping: every uppercase letter becomes
+          # "!" + its lowercase form (BSD sed has no \L, so loop in bash).
+          proxy_path=""
+          for ((i = 0; i < ${#module_path}; i++)); do
+            c="${module_path:i:1}"
+            if [[ "$c" =~ [A-Z] ]]; then
+              proxy_path+="!${c,,}"
+            else
+              proxy_path+="$c"
+            fi
           done
+          deadline=$((SECONDS + 480))
+          until curl -fsSL -o /dev/null "https://proxy.golang.org/${proxy_path}/@v/${version}.info"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::module proxy never served ${module_path}@${version}"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "proxy serves ${module_path}@${version}"
+          until curl -fsSL -o /dev/null "https://pkg.go.dev/${module_path}@${version}"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::pkg.go.dev never indexed ${module_path}@${version}"
+              exit 1
+            fi
+            sleep 10
+          done
+          curl -fsSL -o /dev/null "https://pkg.go.dev/${module_path}"
+          echo "pkg.go.dev indexed ${module_path}@${version}"
