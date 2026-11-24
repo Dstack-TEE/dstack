@@ -60,7 +60,7 @@ pub const SEV_FEATURE_SECURE_TSC: u64 = 1 << 9;
 ///
 /// dstack has exactly one launch path, `sev-snp-guest,id=sev0,policy=0x30000,...`
 /// in `dstack/vmm/src/app/qemu.rs`. It starts the guest with `SNPActive`, plus
-/// `SecureTSC` when the host sets `cvm.snp_secure_tsc`, and the VMM writes the
+/// `SecureTSC` when the app compose sets `secure_time`, and the VMM writes the
 /// matching `guest_features` into the measurement document
 /// (`dstack/vmm/src/app.rs`). Those are the only bits accepted; accepting bits
 /// nothing emits would only ever admit a guest dstack did not configure.

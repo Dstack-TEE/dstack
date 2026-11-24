@@ -1789,6 +1789,7 @@ impl App {
             &hex::encode(compose_hash),
             mr_config,
             app_compose.requirements.as_ref(),
+            app_compose.secure_time,
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
@@ -2147,6 +2148,7 @@ pub(crate) fn make_sys_config(
     compose_hash: &str,
     mr_config: Option<String>,
     requirements: Option<&dstack_types::Requirements>,
+    secure_time: bool,
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
@@ -2188,6 +2190,7 @@ pub(crate) fn make_sys_config(
         compose_hash,
         mr_config.clone(),
         requirements,
+        secure_time,
     )?;
     let mut sys_config = json!({
         "kms_urls": kms_urls,
@@ -2275,6 +2278,7 @@ fn make_vm_config(
     _compose_hash: &str,
     mr_config: Option<String>,
     requirements: Option<&dstack_types::Requirements>,
+    secure_time: bool,
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
@@ -2447,7 +2451,7 @@ fn make_vm_config(
             measurement: image_measurement.measurement.clone(),
             vcpus: effective_vcpus,
             vcpu_type: Some("EPYC-v4".to_string()),
-            guest_features: if cfg.cvm.snp_secure_tsc {
+            guest_features: if secure_time {
                 1 | dstack_mr::sev::SEV_FEATURE_SECURE_TSC
             } else {
                 1
@@ -4266,10 +4270,24 @@ mod tests {
         let image = test_tdx_image(true);
         let compose_hash = hex_of(0x22, 32);
 
-        let bridge_config =
-            make_vm_config(&config, &bridge_manifest, &image, &compose_hash, None, None)?;
-        let user_config =
-            make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
+        let bridge_config = make_vm_config(
+            &config,
+            &bridge_manifest,
+            &image,
+            &compose_hash,
+            None,
+            None,
+            false,
+        )?;
+        let user_config = make_vm_config(
+            &config,
+            &user_manifest,
+            &image,
+            &compose_hash,
+            None,
+            None,
+            false,
+        )?;
 
         assert_eq!(bridge_config, user_config);
         Ok(())
@@ -4294,6 +4312,7 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             None,
+            false,
         )?;
 
         assert_eq!(vm_config["num_verity_volumes"], 2);
@@ -4313,6 +4332,7 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             None,
+            false,
         )?;
 
         assert_eq!(vm_config["swtpm"], true);
@@ -4327,20 +4347,43 @@ mod tests {
         manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackTdx);
         for platform in [CvmPlatform::Tdx, CvmPlatform::AmdSevSnp] {
             config.cvm.platform = Some(platform);
-            let vm_config =
-                make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+            let vm_config = make_vm_config(
+                &config,
+                &manifest,
+                &test_tdx_image(true),
+                "",
+                None,
+                None,
+                false,
+            )?;
             assert_eq!(vm_config["tdx_attestation_variant"], "lite");
             assert!(vm_config.get("tdx_measurement").is_some());
         }
 
         config.cvm.platform = Some(CvmPlatform::Tdx);
         manifest.swtpm = true;
-        let vm_config = make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &test_tdx_image(true),
+            "",
+            None,
+            None,
+            false,
+        )?;
         assert!(vm_config.get("tdx_measurement").is_none());
 
         manifest.swtpm = false;
         manifest.simulated_tee = None;
-        let vm_config = make_vm_config(&config, &manifest, &test_tdx_image(true), "", None, None)?;
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &test_tdx_image(true),
+            "",
+            None,
+            None,
+            false,
+        )?;
         assert!(vm_config.get("tdx_measurement").is_none());
         Ok(())
     }
@@ -4353,7 +4396,15 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(1024);
         let image = test_tdx_image(true);
-        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &image,
+            &hex_of(0x22, 32),
+            None,
+            None,
+            false,
+        )?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
         assert!(vm_config.get("tdx_measurement").is_some());
@@ -4371,7 +4422,15 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(2048);
         let image = test_tdx_image(true);
-        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &image,
+            &hex_of(0x22, 32),
+            None,
+            None,
+            false,
+        )?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
         assert!(vm_config.get("tdx_measurement").is_some());
@@ -4389,7 +4448,15 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(3072);
         let image = test_tdx_image(false);
-        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &image,
+            &hex_of(0x22, 32),
+            None,
+            None,
+            false,
+        )?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
         assert!(vm_config.get("tdx_measurement").is_none());
@@ -4419,6 +4486,7 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             Some(&requirements),
+            false,
         )?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
@@ -4445,6 +4513,7 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             Some(&requirements),
+            false,
         )?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
@@ -4545,8 +4614,14 @@ mod tests {
         let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
         fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
-        let sys_config_document =
-            make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
+        let sys_config_document = make_sys_config(
+            &config,
+            &manifest,
+            &compose_hash,
+            Some(mr_config),
+            None,
+            false,
+        )?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
         // A host must never nominate the trust anchor that authenticates its

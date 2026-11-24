@@ -265,6 +265,7 @@ struct PreparedQemuLaunch {
     tdx_mr_config_id: Option<String>,
     snp_host_data: Option<String>,
     snp_launch_params: Option<AmdSevSnpLaunchParams>,
+    snp_secure_tsc: bool,
 }
 
 impl PreparedQemuLaunch {
@@ -367,6 +368,7 @@ impl PreparedQemuLaunch {
             tdx_mr_config_id,
             snp_host_data,
             snp_launch_params,
+            snp_secure_tsc: app_compose.secure_time,
         })
     }
 }
@@ -1100,7 +1102,14 @@ impl VmConfig {
                 let launch_params = prepared.snp_launch_params.context(
                     "snp launch parameters should be detected during launch preparation",
                 )?;
-                self.configure_amd_sev_snp_guest(command, cfg, mem, host_data, launch_params);
+                self.configure_amd_sev_snp_guest(
+                    command,
+                    cfg,
+                    mem,
+                    host_data,
+                    launch_params,
+                    prepared.snp_secure_tsc,
+                );
             }
         }
         Ok(())
@@ -1159,6 +1168,7 @@ impl VmConfig {
         mem: u32,
         host_data: &str,
         snp_params: AmdSevSnpLaunchParams,
+        secure_tsc: bool,
     ) {
         command
             .arg("-object")
@@ -1167,7 +1177,7 @@ impl VmConfig {
             "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}{}",
             snp_params.cbitpos,
             snp_params.reduced_phys_bits,
-            if cfg.snp_secure_tsc { ",secure-tsc=on" } else { "" }
+            if secure_tsc { ",secure-tsc=on" } else { "" }
         ));
         command.arg("-machine").arg(
             "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",
@@ -1538,6 +1548,7 @@ mod tests {
             tdx_mr_config_id: None,
             snp_host_data: None,
             snp_launch_params: None,
+            snp_secure_tsc: false,
         };
         (config, vm, prepared)
     }

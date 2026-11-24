@@ -250,6 +250,7 @@ Compose file content (first 200 chars):
         &compose_hash,
         mr_config,
         app_compose.requirements.as_ref(),
+        app_compose.secure_time,
     )?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
     fs_err::write(&sys_config_path, &sys_config_str).context("Failed to write sys config")?;
