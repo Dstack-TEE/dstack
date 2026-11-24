@@ -12,7 +12,7 @@ The key difference from self-hosting: users don't have to trust you. They can cr
 
 ## What Makes It Confidential
 
-Four protections keep data confidential. dstack also makes the application using those protections verifiable:
+Four protections keep data confidential. Attestation lets you verify which application handles that data.
 
 **TLS terminates inside the VM.** Your HTTPS connection ends inside the Confidential VM, not at some load balancer outside. The operator never sees plaintext traffic.
 
@@ -22,31 +22,22 @@ Four protections keep data confidential. dstack also makes the application using
 
 **Disk is encrypted.** Anything written to storage uses keys derived from the TEE. The storage backend only sees ciphertext.
 
-**The application is verifiable through [attestation](#how-attestation-works).** CPU TEE attestation covers the measured software and application configuration. Users can compare the reported configuration hash with the hash of the configuration they reviewed.
-
-Together, the four protections keep data encrypted from network ingress to egress. The attestation evidence lets users verify the application and environment providing those protections.
+**The application is verifiable.** You can use CPU attestation to check that the deployed application configuration matches the one you reviewed. See [how attestation works](#how-attestation-works).
 
 ## How Attestation Works
 
-Encryption keeps data private. Attestation lets users verify the application and the hardware environment that protects it.
-
-A confidential AI deployment combines two forms of evidence that answer different questions:
-
-- **CPU TEE and application:** CPU attestation verifies the Confidential VM and the measured software and configuration that determine what code runs. This includes the NVIDIA driver that controls GPU execution.
-- **GPU environment:** GPU attestation verifies that the attached GPUs are genuine and operating in confidential-computing mode. It describes the GPU environment, not the application or individual computations.
+The application runs in a confidential VM and uses the NVIDIA driver inside that VM to send work to the GPUs. CPU attestation lets you check the VM's software, including that driver, and the application configuration. GPU attestation describes the hardware and its confidential-computing state at the time of the check.
 
 ```mermaid
 graph LR
-    CPUProof[CPU TEE attestation] --> CPU["CVM, application, and NVIDIA driver"]
-    GPUProof["GPU attestation<br/>once at boot"] --> GPU[Protected GPU environment]
-    CPU -->|submits computation| GPU
+    CPU["Confidential VM<br/>Application and NVIDIA driver"] -->|submits work| GPU["Confidential GPUs"]
+    CPUProof["CPU attestation"] -.->|covers software and configuration| CPU
+    GPUProof["Boot-time GPU attestation"] -.->|covers hardware and protection state| GPU
 ```
 
-The verified CPU environment determines what runs and submits computation to the attested GPU environment. Together, the two forms of evidence let users verify the CPU and GPUs as one system.
+dstack checks every attached GPU during boot. With the default policy, a failed GPU check stops startup even if the other GPUs pass. Together, the CPU and GPU evidence let you verify which software submits the work and the GPU protections in place at launch.
 
-dstack performs GPU attestation once during boot. In a multi-GPU deployment, that check covers every GPU attached to the Confidential VM, and all attached GPUs must pass. dstack then provisions application keys and starts the workload. If either the CPU or GPU verification fails, the workload does not start.
-
-After the workload starts, users can retrieve its attestation evidence and independently verify the hardware identity and application configuration. The [Verification](#verification) section shows the basic user flow. For implementation details, verifier requirements, and the threat model, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
+For the guarantees and their limits, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
 
 ## Private Inference
 
@@ -236,35 +227,9 @@ Full example: [dstack-examples/ai/agents](https://github.com/Dstack-TEE/dstack-e
 
 ## Verification
 
-Boot-time attestation decides whether the workload can start. Remote verification lets a user independently check the running deployment. The user verifies the hardware evidence and compares the reported compose hash with the application configuration they reviewed.
+You can verify a running deployment before sending it sensitive data. Start by reviewing the application code and configuration. Then verify the CPU attestation and compare the measured application configuration with the one you reviewed. For a GPU workload, also check that the boot-time evidence covers the GPU setup you expect.
 
-```mermaid
-graph LR
-    App[Your App] -->|quote| Verifier
-    Verifier -->|valid + compose_hash| You
-    You -->|compare| Compose[docker-compose.yaml]
-    Compose -->|audit| Code[Source Code]
-```
-
-The verification flow:
-
-```python
-import requests
-
-# Get attestation with a nonce to prevent replay
-attestation = requests.get(
-    "https://your-app/attestation",
-    params={"nonce": "random-challenge"}
-).json()
-
-# Compare compose hash against what you reviewed
-expected_hash = "sha256:abc123..."  # From your audited docker-compose
-assert attestation["compose_hash"] == expected_hash
-```
-
-For visual verification, paste the quote into [proof.t16z.com](https://proof.t16z.com), Phala's TEE attestation explorer that parses TDX quotes and displays the verification status, measurements, and TCB info in a readable format.
-
-Attestation proves the environment's identity. It does not prove that the application is well designed. You still need to audit the application for behavior such as logging, data exfiltration, and access control.
+On Intel TDX, the signed CPU quote lets you verify the launch record, including the application configuration hash and dstack's boot-time GPU check. Follow the [Intel TDX attestation guide](./attestation-tdx.md). For other platforms, see the [verification overview](./verification.md#platform-specific-verification).
 
 ## Performance
 
