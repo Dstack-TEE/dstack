@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`secure_time` refuses a clock the host controls.** An app with
   `secure_time` enabled no longer boots on AWS, nor on an AMD SEV-SNP host
-  that cannot launch guests with Secure TSC (QEMU >= 11.1, host kernel >= 6.18,
-  a CPU with the `snp_secure_tsc` flag), nor when the clocksource is not `tsc`.
+  that cannot launch guests with Secure TSC (QEMU >= 11.2, host kernel >= 6.18,
+  a CPU that supports it), nor when the clocksource is not `tsc`.
   Such a guest also needs a KMS and verifier of this release. Apps without
   `secure_time` launch as before.
 
