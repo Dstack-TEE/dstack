@@ -12,7 +12,7 @@ The key difference from self-hosting: users don't have to trust you. They can cr
 
 ## What Makes It Confidential
 
-Four protections keep data confidential. Attestation lets you verify which application handles that data.
+Four protections keep data confidential:
 
 **TLS terminates inside the VM.** Your HTTPS connection ends inside the Confidential VM, not at some load balancer outside. The operator never sees plaintext traffic.
 
@@ -22,7 +22,7 @@ Four protections keep data confidential. Attestation lets you verify which appli
 
 **Disk is encrypted.** Anything written to storage uses keys derived from the TEE. The storage backend only sees ciphertext.
 
-**The application is verifiable.** You can use CPU attestation to check that the deployed application configuration matches the one you reviewed. See [how attestation works](#how-attestation-works).
+Attestation lets you verify which application handles that data. You can use CPU attestation to check that the deployed application configuration matches the one you reviewed. See [how attestation works](#how-attestation-works).
 
 ## How Attestation Works
 
@@ -33,17 +33,18 @@ graph LR
     CPU["Confidential VM<br/>Application and NVIDIA driver"] -->|submits work| GPU["Confidential GPUs"]
     CPUProof["CPU attestation"] -.->|covers software and configuration| CPU
     GPUProof["Boot-time GPU attestation"] -.->|covers hardware and protection state| GPU
+    GPUProof -.->|recorded in launch log| CPUProof
 ```
 
-In a multi-GPU VM, the boot-time check covers every attached GPU. Together, the CPU and GPU evidence let you verify which software submits the work and the GPU protections in place at launch.
+In a multi-GPU VM, the boot-time check covers every attached GPU. Together, the CPU and GPU evidence let you verify which software submits the work and the GPU protections in place at launch. The check does not prove that the same GPUs stay attached for the VM's lifetime.
 
 For the guarantees and their limits, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
 
 ### Verifying the Whole Deployment
 
-A service can show “CPU verified” and “GPU verified” while sending your prompts to an unchecked GPU. For example, the CPU quote could come from a genuine confidential VM and the GPU report from a separate test machine. Even if both reports answer the same fresh challenge (nonce), each still describes its own environment.
+A service can show "CPU verified" and "GPU verified" while sending your prompts to an unchecked GPU. For example, the CPU quote could come from a genuine confidential VM and the GPU report from a separate test machine. Even if both reports answer the same fresh challenge (nonce), each still describes its own environment.
 
-With the default policy, the dstack OS makes GPUs available to the workload only after every attached GPU passes the boot-time check. A failed check stops startup before the workload can receive prompts. On Intel TDX, the signed CPU quote lets you verify the record of that check in the VM's launch log. See the [Intel TDX attestation guide](./attestation-tdx.md).
+With the default policy, the dstack OS makes GPUs available to the workload only after every attached GPU passes the boot-time check. A failed check stops startup before the workload can receive prompts. On Intel TDX, the result is recorded in the VM's launch log, which the signed CPU quote covers. See [Verification](#verification) for how to check it.
 
 Your data also needs a protected path to the application you reviewed. If an untrusted proxy terminates TLS outside the VM, it can read your prompts before forwarding them to the confidential workload. Verify where TLS terminates and review how the application handles your data. See [Verification](#verification) and [Phala Cloud domain attestation](https://docs.phala.com/phala-cloud/networking/domain-attestation).
 
@@ -235,9 +236,14 @@ Full example: [dstack-examples/ai/agents](https://github.com/Dstack-TEE/dstack-e
 
 ## Verification
 
-You can verify a running deployment before sending it sensitive data. Start by reviewing the application code and configuration. Then verify the CPU attestation and compare the measured application configuration with the one you reviewed. For a GPU workload, also check that the boot-time evidence covers the GPU setup you expect.
+You can verify a running deployment before sending it sensitive data. Start by reviewing the application code and configuration. Then verify the CPU attestation and compare the measured application configuration with the one you reviewed.
 
 On Intel TDX, the signed CPU quote lets you verify the launch record, including the application configuration hash and dstack's boot-time GPU check. Follow the [Intel TDX attestation guide](./attestation-tdx.md). For other platforms, see the [verification overview](./verification.md#platform-specific-verification).
+
+For a GPU workload, check two more things, because the default policy also accepts a launch with no GPU:
+
+- The reviewed configuration keeps GPU attestation enabled: `requirements.gpu_policy.attest_gpu` is not `false`. A `rego` rule in the same policy can require the expected GPU count.
+- The launch record contains exactly one `gpu-attestation` event, and its `devices` count is above zero and matches your deployment.
 
 ## Performance
 
