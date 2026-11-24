@@ -26,7 +26,7 @@ Guest OS releases are split at the monorepo boundary:
   under tags such as `guest-os-v0.6.0`.
 
 The 0.5.x images are legacy TDX images, not the current unified SEV-SNP image
-line. Use a 0.6.0-or-later image for SEV-SNP. The image must include
+line. Use a 0.6.6-or-later image for SEV-SNP. The image must include
 `digest.txt`, `sha256sum.txt`, and the SNP measurement material.
 
 ## Host requirements
@@ -251,7 +251,7 @@ AMD signatures.
 - **The guest resets before Linux starts:** verify that the selected QEMU,
   OVMF, and unified dstack OS image all support SNP. Do not debug KMS policy
   until the guest boots reliably.
-- **Image identity files are missing:** use a 0.6.0-or-later unified image.
+- **Image identity files are missing:** use a 0.6.6-or-later unified image.
   `dstackup install` rejects an SNP image without `digest.txt`.
 - **KDS requests fail:** check host time, DNS, outbound HTTPS, and KDS or mirror
   availability. Do not disable certificate or signature verification.

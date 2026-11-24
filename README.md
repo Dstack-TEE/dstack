@@ -220,7 +220,7 @@ Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable h
 
 - **GCP**: Intel TDX (Confidential VMs)
 - **AWS**: Nitro Enclaves (NSM attestation)
-- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP (Milan, Genoa, Turin) with dstack OS 0.6.0 or later
+- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP (Milan, Genoa, Turin) with dstack OS 0.6.6 or later
 - **GPUs**: NVIDIA Confidential Computing (H100, Blackwell)
 
 </details>
