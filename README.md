@@ -29,7 +29,7 @@ AI providers ask users to trust them with sensitive data. But trust doesn't scal
 | Platform | Status | Attestation |
 |----------|--------|-------------|
 | **Bare metal TDX** | Available | TDX |
-| **Bare metal AMD SEV-SNP** | Host support; requires an SNP-capable guest image | SEV-SNP |
+| **Bare metal AMD SEV-SNP** | Available | SEV-SNP |
 | **[Phala Cloud](https://cloud.phala.network)** | Available | TDX |
 | **GCP Confidential VMs** | Available | TDX + TPM |
 | **AWS Nitro Enclaves** | Available | NSM |
@@ -220,7 +220,7 @@ Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable h
 
 - **GCP**: Intel TDX (Confidential VMs)
 - **AWS**: Nitro Enclaves (NSM attestation)
-- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP on supported dstack OS images. Intel TDX is the production path; AMD SEV-SNP is new and experimental.
+- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP (Milan, Genoa, Turin) with dstack OS 0.6.6 or later
 - **GPUs**: NVIDIA Confidential Computing (H100, Blackwell)
 
 </details>

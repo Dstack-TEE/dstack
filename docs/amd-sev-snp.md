@@ -1,8 +1,9 @@
 # AMD SEV-SNP Support
 
 This document describes how dstack uses AMD SEV-SNP on self-hosted bare-metal
-systems. AMD SEV-SNP support is currently **experimental**; Intel TDX remains
-the production bare-metal path.
+systems. SEV-SNP instances in public clouds are not supported yet: dstack
+recomputes the launch measurement itself, which needs control of the launch,
+and AWS signs its reports with a VLEK, which the verifier rejects.
 
 For platform firmware, kernel, QEMU, and OVMF preparation, start with
 [Hardware Enablement](./hardware-enablement.md). This document covers the
@@ -25,7 +26,7 @@ Guest OS releases are split at the monorepo boundary:
   under tags such as `guest-os-v0.6.0`.
 
 The 0.5.x images are legacy TDX images, not the current unified SEV-SNP image
-line. Use a 0.6.0-or-later image for SEV-SNP. The image must include
+line. Use a 0.6.6-or-later image for SEV-SNP. The image must include
 `digest.txt`, `sha256sum.txt`, and the SNP measurement material.
 
 ## Host requirements
@@ -117,14 +118,19 @@ Verification is fail-closed and includes:
 5. the unified OS image identity, `sha256(sha256sum.txt)`, which must match
    `digest.txt` and the SNP measurement document.
 
-For a GPU VM, the optional `MrConfigV3.gpu_policy_hash` field contains
-`SHA-256(JCS(requirements.gpu_policy))`. The signed SNP report binds the exact
-MrConfigV3 document through `HOST_DATA`, so a verifier can validate the report
-and document binding and then compare this field with the expected GPU policy
-digest. If the field is absent, this optional check is not asserted. This binds
-the GPU policy, but not the later `gpu-attestation` runtime event or the
-boot-time GPU evidence returned by `/v1/Attest`: the current SEV-SNP path has
-no quote-bound runtime measurement register.
+GPU workloads get the same boot-time guarantee as on TDX. Before key
+provisioning, the guest attests every attached NVIDIA GPU, applies the app's
+`requirements.gpu_policy`, and stops boot if either fails. The SNP report proves
+this gate ran under that policy: the launch `MEASUREMENT` covers the OS that
+runs it, and `HOST_DATA` binds the MrConfigV3 `compose_hash` that fixes the
+policy. GPU launches also carry the policy digest,
+`SHA-256(JCS(requirements.gpu_policy))`, as `MrConfigV3.gpu_policy_hash`.
+
+SEV-SNP has no quote-bound runtime register, so the per-boot `gpu-attestation`
+event and the boot-time GPU evidence returned by `/v1/Attest` are not bound to
+the report. A verifier that needs a GPU present, or a specific GPU count, must
+find that requirement in the measured policy rather than in the event. See
+[GPU Threat Model and Lifetime](./security/security-model.md#gpu-threat-model-and-lifetime).
 
 The verifier supports the AMD Milan, Genoa, and Turin KDS product families.
 Bergamo and Siena are handled through AMD's canonical Genoa KDS product path.
@@ -133,7 +139,9 @@ The verifier also fetches the product family's CRL from KDS
 (`<amd_kds>/<product>/crl`). It requires the CRL to be signed by the pinned ARK
 and current, and rejects a revoked ASK. This applies whether the evidence
 carries its certificates or the verifier fetches them, so a KDS mirror must
-serve the CRL too.
+serve the CRL too. The verifier does not yet check the validity periods of the
+ASK and VCEK certificates
+([#1140](https://github.com/Dstack-TEE/dstack/issues/1140)).
 
 AMD publishes no TCB status for SNP, so a report is judged against a list of
 minimum TCBs, one per CPU. An entry names the CPU by CPUID Fn0000_0001 EAX, as
@@ -243,7 +251,7 @@ AMD signatures.
 - **The guest resets before Linux starts:** verify that the selected QEMU,
   OVMF, and unified dstack OS image all support SNP. Do not debug KMS policy
   until the guest boots reliably.
-- **Image identity files are missing:** use a 0.6.0-or-later unified image.
+- **Image identity files are missing:** use a 0.6.6-or-later unified image.
   `dstackup install` rejects an SNP image without `digest.txt`.
 - **KDS requests fail:** check host time, DNS, outbound HTTPS, and KDS or mirror
   availability. Do not disable certificate or signature verification.

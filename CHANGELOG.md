@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an ambiguous import. Releases tag `sdk/go/dstack/v*` or
   `sdk/go/ratls/v*`, gated by a new release workflow that also warms
   pkg.go.dev indexing.
+- **AMD SEV-SNP on bare metal is no longer experimental.** The docs list it
+  next to Intel TDX, GPU workloads included: the measured, fail-closed GPU gate
+  gives SNP the same boot-time guarantee, and an SNP verifier checks the GPU
+  requirement in the policy bound by `compose_hash` instead of the
+  `gpu-attestation` event. SEV-SNP in public clouds stays unsupported.
 
 ## [0.6.6] - 2026-11-20
 
