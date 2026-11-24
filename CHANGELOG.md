@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`secure_time` refuses a clock the host controls.** An app with
+  `secure_time` enabled no longer boots on AWS, nor on an AMD SEV-SNP host
+  that does not launch guests with Secure TSC (`snp_secure_tsc = true` in
+  `vmm.toml`), nor when the clocksource is not `tsc`.
+
 ### Added
 
 - **Secure TSC for AMD SEV-SNP guests.** `snp_secure_tsc = true` under `[cvm]`

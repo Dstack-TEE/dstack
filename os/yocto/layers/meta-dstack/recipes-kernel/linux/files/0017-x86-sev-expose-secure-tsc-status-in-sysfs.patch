@@ -1,0 +1,34 @@
+From: Kevin Wang <wy721@qq.com>
+Subject: [PATCH] x86/sev: expose Secure TSC status in sysfs
+
+Userspace has no way to tell whether an SEV-SNP guest runs with Secure
+TSC: CPUID only says the CPU supports it, and the SEV_STATUS MSR needs
+the msr driver.  Add /sys/devices/system/cpu/sev/secure_tsc next to
+vmpl, so dstack can refuse secure_time when the hypervisor still
+controls the guest TSC.
+
+Upstream-Status: Inappropriate [dstack specific]
+Signed-off-by: Kevin Wang <wy721@qq.com>
+---
+--- a/arch/x86/coco/sev/core.c
++++ b/arch/x86/coco/sev/core.c
+@@ -1431,10 +1431,19 @@ static ssize_t vmpl_show(struct kobject
+ 	return sysfs_emit(buf, "%d\n", snp_vmpl);
+ }
+ 
++static ssize_t secure_tsc_show(struct kobject *kobj,
++			       struct kobj_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "%d\n",
++			  cc_platform_has(CC_ATTR_GUEST_SNP_SECURE_TSC));
++}
++
+ static struct kobj_attribute vmpl_attr = __ATTR_RO(vmpl);
++static struct kobj_attribute secure_tsc_attr = __ATTR_RO(secure_tsc);
+ 
+ static struct attribute *vmpl_attrs[] = {
+ 	&vmpl_attr.attr,
++	&secure_tsc_attr.attr,
+ 	NULL
+ };
+ 
