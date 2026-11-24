@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`sdk/go/tappd`), frozen and deprecated. The old `sdk/go` module is
   deprecated and contains no packages from v0.6.1; both new modules require
   that version, so `go get` upgrades an existing v0.6.0 pin instead of failing
-  with an ambiguous import. Releases tag `sdk/go/dstack/v*` or
-  `sdk/go/ratls/v*`, gated by a new release workflow that also warms
+  with an ambiguous import. A consumer importing both `dstack` and `tappd`
+  must `go get` both new modules; the frozen tappd gets a one-time
+  `sdk/go/tappd/v0.6.1` tag for exactly that. Releases tag `sdk/go/dstack/v*`
+  or `sdk/go/ratls/v*`, gated by a new release workflow that also warms
   pkg.go.dev indexing.
 - **AMD SEV-SNP on bare metal is no longer experimental.** The docs list it
   next to Intel TDX, GPU workloads included: the measured, fail-closed GPU gate

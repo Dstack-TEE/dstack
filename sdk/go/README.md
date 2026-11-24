@@ -8,6 +8,23 @@ The dstack SDK provides a Go client for secure communication with the dstack Tru
 go get github.com/Dstack-TEE/dstack/sdk/go/dstack
 ```
 
+Since v0.6.1 the Go SDK is split into three modules under `sdk/go`: `dstack`
+(the client), `ratls` (RA-TLS verification), and `tappd` (the retired legacy
+client, frozen and deprecated). The pre-v0.6.1 root module
+`github.com/Dstack-TEE/dstack/sdk/go` is a package-less deprecated stub; both
+`dstack` and `tappd` require its v0.6.1, so upgrading an existing
+`sdk/go v0.6.0` pin is a plain `go get`:
+
+```bash
+go get github.com/Dstack-TEE/dstack/sdk/go/dstack@latest
+# if you also still import the legacy client:
+go get github.com/Dstack-TEE/dstack/sdk/go/tappd@latest
+```
+
+Importing only `dstack` while pinning `sdk/go v0.6.0` works as-is; importing
+both clients without the second `go get` fails with an ambiguous import,
+because the old root module still supplies tappd.
+
 ## Overview
 
 The dstack SDK enables secure communication with dstack Trusted Execution Environment (TEE) instances. dstack applications are defined using `app-compose.json` (based on the `AppCompose` structure) and deployed as containerized applications using Docker Compose.
