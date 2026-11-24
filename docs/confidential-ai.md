@@ -39,6 +39,12 @@ dstack checks every attached GPU during boot. With the default policy, a failed 
 
 For the guarantees and their limits, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
 
+### Verifying the Whole Deployment
+
+A valid CPU quote and a valid GPU report can describe different systems. On Intel TDX, the VM's signed quote binds the launch record of dstack's boot-time GPU check to that VM.
+
+Your data also needs a protected path to the application you reviewed. If an untrusted proxy terminates TLS outside the VM, it can read your prompts before forwarding them to the confidential workload. Verify where TLS terminates and review how the application handles your data. See [Verification](#verification) and [Phala Cloud domain attestation](https://docs.phala.com/phala-cloud/networking/domain-attestation).
+
 ## Private Inference
 
 Deploy vLLM behind a signing proxy. Users can verify responses came from your TEE, not a compromised server.
