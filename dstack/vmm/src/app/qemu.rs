@@ -1164,8 +1164,10 @@ impl VmConfig {
             .arg("-object")
             .arg(amd_sev_snp_memory_backend_arg(mem));
         command.arg("-object").arg(format!(
-            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}",
-            snp_params.cbitpos, snp_params.reduced_phys_bits
+            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}{}",
+            snp_params.cbitpos,
+            snp_params.reduced_phys_bits,
+            if cfg.snp_secure_tsc { ",secure-tsc=on" } else { "" }
         ));
         command.arg("-machine").arg(
             "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",

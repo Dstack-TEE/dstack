@@ -39,6 +39,9 @@ const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 /// the same bit layout the SEV-SNP ABI's `GUEST_FEATURES` field in
 /// `SNP_LAUNCH_START` carries). Set on every SNP guest.
 const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
+/// `SecureTSC`, bit 9: the PSP fixes the guest TSC scale and offset, so the
+/// hypervisor can no longer intercept or skew the guest's TSC.
+pub const SEV_FEATURE_SECURE_TSC: u64 = 1 << 9;
 
 /// `SEV_FEATURES` bits a dstack launch may carry.
 ///
@@ -55,16 +58,13 @@ const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
 /// SecureTSC (bit 9) or VmsaRegProt (bit 14) likewise removes a guest-side
 /// protection the operator may believe is on.
 ///
-/// dstack has exactly one launch path, and it sets no feature property:
-/// `sev-snp-guest,id=sev0,policy=0x30000,...` in `dstack/vmm/src/app/qemu.rs`,
-/// which leaves KVM to start the guest with `SNPActive` alone, and the VMM
-/// writes the matching `guest_features: 1` into the measurement document
-/// (`dstack/vmm/src/app.rs`). `1` is therefore the only value dstack has ever
-/// produced — the captured real-hardware vector in this module's tests carries
-/// it too — so it is the only value accepted. Widening this is a one-line
-/// change once a launch path actually sets another bit; accepting bits nothing
-/// emits would only ever admit a guest dstack did not configure.
-const ALLOWED_GUEST_FEATURES: u64 = SEV_FEATURE_SNP_ACTIVE;
+/// dstack has exactly one launch path, `sev-snp-guest,id=sev0,policy=0x30000,...`
+/// in `dstack/vmm/src/app/qemu.rs`. It starts the guest with `SNPActive`, plus
+/// `SecureTSC` when the host sets `cvm.snp_secure_tsc`, and the VMM writes the
+/// matching `guest_features` into the measurement document
+/// (`dstack/vmm/src/app.rs`). Those are the only bits accepted; accepting bits
+/// nothing emits would only ever admit a guest dstack did not configure.
+const ALLOWED_GUEST_FEATURES: u64 = SEV_FEATURE_SNP_ACTIVE | SEV_FEATURE_SECURE_TSC;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -150,7 +150,7 @@ pub fn validate_measurement_input(input: &MeasurementInput) -> Result<()> {
     if unexpected_features != 0 {
         bail!(
             "guest_features {:#x} carries unsupported SEV_FEATURES bits {unexpected_features:#x}; \
-             dstack launches amd sev-snp guests with SNPActive only ({ALLOWED_GUEST_FEATURES:#x})",
+             dstack launches amd sev-snp guests with at most {ALLOWED_GUEST_FEATURES:#x}",
             input.guest_features
         );
     }
@@ -1657,7 +1657,7 @@ mod tests {
         let cases: [(&str, u64); 4] = [
             ("RestrictedInjection", SNP_ACTIVE | (1 << 3)),
             ("DebugSwap", SNP_ACTIVE | (1 << 5)),
-            ("SecureTSC", SNP_ACTIVE | (1 << 9)),
+            ("VmsaRegProt", SNP_ACTIVE | (1 << 14)),
             ("reserved bit 63", SNP_ACTIVE | (1 << 63)),
         ];
         for (name, features) in cases {
@@ -1683,10 +1683,12 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        // The one value dstack's launch path produces stays accepted.
-        let mut input = valid_input();
-        input.guest_features = SNP_ACTIVE;
-        validate_measurement_input(&input).expect("SNPActive-only launch is accepted");
+        // The values dstack's launch path produces stay accepted.
+        for features in [SNP_ACTIVE, SNP_ACTIVE | SEV_FEATURE_SECURE_TSC] {
+            let mut input = valid_input();
+            input.guest_features = features;
+            validate_measurement_input(&input).expect("dstack launch features are accepted");
+        }
     }
 
     #[test]

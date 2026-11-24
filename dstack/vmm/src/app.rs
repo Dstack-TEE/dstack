@@ -2447,7 +2447,11 @@ fn make_vm_config(
             measurement: image_measurement.measurement.clone(),
             vcpus: effective_vcpus,
             vcpu_type: Some("EPYC-v4".to_string()),
-            guest_features: 1,
+            guest_features: if cfg.cvm.snp_secure_tsc {
+                1 | dstack_mr::sev::SEV_FEATURE_SECURE_TSC
+            } else {
+                1
+            },
         };
         config["sev_snp_measurement"] = serde_json::Value::String(
             serde_json::to_string(&measurement)

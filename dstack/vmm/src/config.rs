@@ -543,6 +543,12 @@ pub struct CvmConfig {
     /// Default is None (disabled), common value is 4050.
     pub qgs_port: Option<u32>,
 
+    /// Launch AMD SEV-SNP guests with Secure TSC, so the host cannot skew the
+    /// guest clock. Needs QEMU >= 11.1, host kernel >= 6.18 and a CPU with
+    /// the `snp_secure_tsc` flag.
+    #[serde(default)]
+    pub snp_secure_tsc: bool,
+
     /// SMBIOS product information for cloud environment detection
     #[serde(default)]
     pub product: ProductConfig,

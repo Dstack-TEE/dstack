@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Secure TSC for AMD SEV-SNP guests.** `snp_secure_tsc = true` under `[cvm]`
+  in `vmm.toml` launches SNP guests with Secure TSC, so the host cannot skew
+  the guest clock. Off by default: it needs QEMU >= 11.1, host kernel >= 6.18
+  and a CPU with the `snp_secure_tsc` flag. A KMS or verifier older than this
+  release rejects such a guest.
+
 ### Changed
 
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
