@@ -1543,7 +1543,8 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     verify_app_compose_policy(&stage0.shared).context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
-        verify_secure_clock(detect_tee_variant()?)?;
+        let platform = detect_tee_variant().context("secure_time requires a TEE platform")?;
+        verify_secure_clock(platform)?;
         info!("Waiting for the system time to be synchronized");
         cmd! {
             chronyc waitsync 30 0.1 0 5;

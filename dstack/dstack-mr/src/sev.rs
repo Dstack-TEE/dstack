@@ -41,7 +41,16 @@ const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
 /// `SecureTSC`, bit 9: the PSP fixes the guest TSC scale and offset, so the
 /// hypervisor can no longer intercept or skew the guest's TSC.
-pub const SEV_FEATURE_SECURE_TSC: u64 = 1 << 9;
+const SEV_FEATURE_SECURE_TSC: u64 = 1 << 9;
+
+/// `SEV_FEATURES` dstack launches an amd sev-snp guest with.
+pub fn launch_guest_features(secure_tsc: bool) -> u64 {
+    if secure_tsc {
+        SEV_FEATURE_SNP_ACTIVE | SEV_FEATURE_SECURE_TSC
+    } else {
+        SEV_FEATURE_SNP_ACTIVE
+    }
+}
 
 /// `SEV_FEATURES` bits a dstack launch may carry.
 ///
@@ -1684,9 +1693,9 @@ mod tests {
         );
 
         // The values dstack's launch path produces stay accepted.
-        for features in [SNP_ACTIVE, SNP_ACTIVE | SEV_FEATURE_SECURE_TSC] {
+        for secure_tsc in [false, true] {
             let mut input = valid_input();
-            input.guest_features = features;
+            input.guest_features = launch_guest_features(secure_tsc);
             validate_measurement_input(&input).expect("dstack launch features are accepted");
         }
     }

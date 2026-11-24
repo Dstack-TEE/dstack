@@ -2451,11 +2451,7 @@ fn make_vm_config(
             measurement: image_measurement.measurement.clone(),
             vcpus: effective_vcpus,
             vcpu_type: Some("EPYC-v4".to_string()),
-            guest_features: if secure_time {
-                1 | dstack_mr::sev::SEV_FEATURE_SECURE_TSC
-            } else {
-                1
-            },
+            guest_features: dstack_mr::sev::launch_guest_features(secure_time),
         };
         config["sev_snp_measurement"] = serde_json::Value::String(
             serde_json::to_string(&measurement)
@@ -4614,6 +4610,15 @@ mod tests {
         let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
         fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
+        let image = Image::load(&image_dir)?;
+        let secure_time_vm_config =
+            make_vm_config(&config, &manifest, &image, &compose_hash, None, None, true)?;
+        let secure_time_measurement: dstack_mr::sev::SnpMeasurementDocument = serde_json::from_str(
+            secure_time_vm_config["sev_snp_measurement"]
+                .as_str()
+                .context("sev_snp_measurement must be a string")?,
+        )?;
+        assert_eq!(secure_time_measurement.guest_features, 0x201);
         let sys_config_document = make_sys_config(
             &config,
             &manifest,
