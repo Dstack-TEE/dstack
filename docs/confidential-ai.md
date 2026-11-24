@@ -35,15 +35,15 @@ graph LR
     GPUProof["Boot-time GPU attestation"] -.->|covers hardware and protection state| GPU
 ```
 
-dstack checks every attached GPU during boot. With the default policy, a failed GPU check stops startup even if the other GPUs pass. Together, the CPU and GPU evidence let you verify which software submits the work and the GPU protections in place at launch.
+In a multi-GPU VM, the boot-time check covers every attached GPU. Together, the CPU and GPU evidence let you verify which software submits the work and the GPU protections in place at launch.
 
 For the guarantees and their limits, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
 
 ### Verifying the Whole Deployment
 
-A service can show “CPU verified” and “GPU verified” even when it runs inference on a GPU without confidential computing. For example, the CPU quote could come from a genuine confidential VM and the GPU report from a separate test machine. Both reports can be valid because each describes its own environment.
+A service can show “CPU verified” and “GPU verified” while sending your prompts to an unchecked GPU. For example, the CPU quote could come from a genuine confidential VM and the GPU report from a separate test machine. Even if both reports answer the same fresh challenge (nonce), each still describes its own environment.
 
-To verify the deployment, check how the two pieces of evidence are linked. On Intel TDX, dstack records its boot-time GPU check in the VM's launch log. The signed CPU quote lets you verify that the record of the GPU check belongs to that VM. See the [Intel TDX attestation guide](./attestation-tdx.md).
+With the default policy, the dstack OS makes GPUs available to the workload only after every attached GPU passes the boot-time check. A failed check stops startup before the workload can receive prompts. On Intel TDX, the signed CPU quote lets you verify the record of that check in the VM's launch log. See the [Intel TDX attestation guide](./attestation-tdx.md).
 
 Your data also needs a protected path to the application you reviewed. If an untrusted proxy terminates TLS outside the VM, it can read your prompts before forwarding them to the confidential workload. Verify where TLS terminates and review how the application handles your data. See [Verification](#verification) and [Phala Cloud domain attestation](https://docs.phala.com/phala-cloud/networking/domain-attestation).
 
