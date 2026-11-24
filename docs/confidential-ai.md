@@ -41,7 +41,9 @@ For the guarantees and their limits, see [GPU Security for AI Workloads](./secur
 
 ### Verifying the Whole Deployment
 
-A valid CPU quote and a valid GPU report can describe different systems. On Intel TDX, the VM's signed quote binds the launch record of dstack's boot-time GPU check to that VM.
+A service can show “CPU verified” and “GPU verified” even when it runs inference on a GPU without confidential computing. For example, the CPU quote could come from a genuine confidential VM and the GPU report from a separate test machine. Both reports can be valid because each describes its own environment.
+
+To verify the deployment, check how the two pieces of evidence are linked. On Intel TDX, dstack records its boot-time GPU check in the VM's launch log. The signed CPU quote lets you verify that the record of the GPU check belongs to that VM. See the [Intel TDX attestation guide](./attestation-tdx.md).
 
 Your data also needs a protected path to the application you reviewed. If an untrusted proxy terminates TLS outside the VM, it can read your prompts before forwarding them to the confidential workload. Verify where TLS terminates and review how the application handles your data. See [Verification](#verification) and [Phala Cloud domain attestation](https://docs.phala.com/phala-cloud/networking/domain-attestation).
 
