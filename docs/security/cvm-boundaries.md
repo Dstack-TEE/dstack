@@ -143,8 +143,9 @@ Since 0.6.7, an `allowed_envs` entry may be `NAME:spec`. The CVM refuses to boot
 | `float` | any decimal number, compared exactly |
 | `float(0<..=1)` | decimals above 0 and up to 1 |
 | `/mainnet\|testnet/` | values the regex matches in full |
+| `int(1..=65535)?` | the empty string, or integers from 1 to 65535 |
 
-A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A name listed more than once must match every spec given for it.
+A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A trailing `?` makes any spec accept the empty string as well. A name listed more than once must match every spec given for it.
 
 `dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. Variables given as `NAME:spec` arguments must be set and match; `--compose` adds the `allowed_envs` specs of an app compose file, which apply only to the variables that are set. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
 

@@ -22,6 +22,9 @@
 //! unbounded. Writing `<` instead of `=` excludes the end, and `<` after the
 //! start excludes the start.
 //!
+//! A trailing `?` makes any spec accept the empty string as well, as in
+//! `int(1..=65535)?`.
+//!
 //! Numbers are canonical decimals: no `+`, no leading zeros, no negative zero,
 //! no exponent, no whitespace, at most 64 bytes. Integers are bounded by `i128`
 //! and numbers are compared exactly. The regex is everything between the first
@@ -44,6 +47,11 @@
 //! let key: ValueSpec = "/[A-Za-z0-9_-]{1,128}/".parse().unwrap();
 //! assert!(key.matches("abc_123"));
 //! assert!(!key.matches("abc/123"));
+//!
+//! let optional: ValueSpec = "int(1..=65535)?".parse().unwrap();
+//! assert!(optional.matches(""));
+//! assert!(optional.matches("8080"));
+//! assert!(!optional.matches("0"));
 //! ```
 
 use std::ops::Bound::{self, Excluded, Included, Unbounded};
@@ -73,7 +81,10 @@ pub struct ParseError {
 
 /// A parsed spec. Build one with [`str::parse`].
 #[derive(Debug, Clone)]
-pub struct ValueSpec(Kind);
+pub struct ValueSpec {
+    kind: Kind,
+    optional: bool,
+}
 
 #[derive(Debug, Clone)]
 enum Kind {
@@ -91,7 +102,10 @@ type Number<T> = fn(&mut &str) -> ModalResult<T>;
 impl ValueSpec {
     /// Returns whether `value` satisfies the spec.
     pub fn matches(&self, value: &str) -> bool {
-        match &self.0 {
+        if self.optional && value.is_empty() {
+            return true;
+        }
+        match &self.kind {
             Kind::Int(ranges) => contains(ranges, int, value),
             Kind::Float(ranges) => contains(ranges, decimal, value),
             Kind::Regex(regex) => regex.is_match(value),
@@ -111,8 +125,9 @@ impl FromStr for ValueSpec {
             ranges("float", decimal).map(Kind::Float),
             fail.context(Expected(Description("`int`, `float` or `/regex/`"))),
         ));
+        let (s, optional) = s.strip_suffix('?').map_or((s, false), |s| (s, true));
         terminated(spec, eof.context(Expected(Description("end of spec"))))
-            .map(Self)
+            .map(|kind| Self { kind, optional })
             .parse(s)
             .map_err(|e| ParseError {
                 offset: e.offset(),
@@ -538,6 +553,36 @@ mod tests {
             "/a(?=b)/",
             "/(?<!a)b/",
             "/\\p{Nope}/",
+        ]);
+    }
+
+    #[test]
+    fn optional_specs_accept_empty() {
+        check("int?", &["", "0", "-1"], &[" ", "a", "1.5"]);
+        check("int(1..=65535)?", &["", "1", "65535"], &["0", " ", "?"]);
+        check("int(0|5..)?", &["", "0", "5"], &["1"]);
+        check("float?", &["", "0.5"], &[".", "-"]);
+        check("float(0<..=1)?", &["", "1", "0.5"], &["0", "1.5"]);
+        check("/a|b/?", &["", "a", "b"], &["c", "ab"]);
+        check("/a?/", &["", "a"], &["aa", "?"]);
+        check("/a/?/", &["a/", "a"], &["", "a/?"]);
+        check("/a+/", &["a"], &[""]);
+        for spec in ["int", "int(0..)", "float", "float(..)", "/.+/"] {
+            check(spec, &[], &[""]);
+        }
+        check_invalid(&[
+            "?",
+            "int??",
+            "int(1)??",
+            "int?(1)",
+            "int(1?)",
+            "int(1..=2?)",
+            "/a?",
+            "/?",
+            "/a/??",
+            "int ?",
+            "int(1)?x",
+            "float(?)",
         ]);
     }
 
