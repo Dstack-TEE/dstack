@@ -2616,6 +2616,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "value-spec",
  "vfio-ioctls",
  "wait-timeout",
  "which 7.0.3",

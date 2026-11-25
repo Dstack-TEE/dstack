@@ -58,6 +58,7 @@ lspci.workspace = true
 base64.workspace = true
 serde-human-bytes.workspace = true
 size-parser = { workspace = true, features = ["serde"] }
+value-spec.workspace = true
 fatfs.workspace = true
 fscommon.workspace = true
 or-panic.workspace = true
