@@ -9,7 +9,7 @@ inventory used by a build.
 
 The backend builds the same dstack services plus the pinned Yocto component
 set: Linux 6.18, NVIDIA 595.91.07 (open modules, userspace, firmware, Fabric
-Manager and NSCQ), nvattest 2026.06.09 with the OCSP-freshness patch, OpenZFS
+Manager and NSCQ), nvattest 2026.11.23 with the OCSP-freshness patch, OpenZFS
 2.4.0, Sysbox 0.7.2, NVIDIA Container Toolkit, nerdctl, CNI plugins and
 stargz-snapshotter 0.18.2.
 

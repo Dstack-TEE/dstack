@@ -54,9 +54,9 @@
       "usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1",
       "etc/nvidia-container-runtime/config.toml"
     ],
-    "nvattest-2026.06.09": [
+    "nvattest-2026.11.23": [
       "usr/bin/nvattest",
-      "usr/lib/libnvat.so.1",
+      "usr/lib/libnvat.so.2",
       "usr/share/nvattest/policies/allow_trust_outpost_ocsp.rego",
       "usr/lib/systemd/system/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf"
     ],
