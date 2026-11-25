@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Sysbox is updated to 0.7.2.** It fixes read-only bind mounts being made
+  writable from inside a Sysbox container, and host files being reachable
+  through symlinks while Sysbox syncs special volumes. See the
+  [upstream release](https://github.com/nestybox/sysbox/releases/tag/v0.7.2)
+  for the advisories.
+
 ### Changed
 
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**

@@ -76,9 +76,10 @@ do_configure() {
     rm -rf ${UNPACKDIR}/sysbox-fs/bazil
     ln -sfn ${UNPACKDIR}/sysbox-fuse ${UNPACKDIR}/sysbox-fs/bazil
 
-    # Install pre-generated protobuf Go files. The upstream repo only ships
-    # .proto files and expects protoc + protoc-gen-go at build time. We
-    # pre-generate them to avoid the protoc native toolchain dependency.
+    # Install pre-generated protobuf message files. Upstream ships the
+    # *_grpc.pb.go stubs but expects protoc + protoc-gen-go to generate the
+    # message files at build time. We pre-generate them to avoid the protoc
+    # native toolchain dependency.
     install -m 0644 ${UNPACKDIR}/sysboxFsProtobuf.pb.go \
         ${UNPACKDIR}/sysbox-ipc/sysboxFsGrpc/sysboxFsProtobuf/
     install -m 0644 ${UNPACKDIR}/sysboxMgrProtobuf.pb.go \
