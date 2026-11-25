@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: © 2026 Thibaud Van den Berghe <thibaud@getplumber.io>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Plumber check
+
+# Checks the workflows themselves: token scopes, checkouts that keep the
+# token, action references and the lockfile. Not a required status check, so
+# a workflow-level filter is safe here: what it reads cannot change unless
+# something under `.github/` or the Plumber configuration does.
+on:
+  push:
+    branches: [ next ]
+    paths:
+      - '.github/**'
+      - '.plumber.yaml'
+  pull_request:
+    branches: [ next ]
+    paths:
+      - '.github/**'
+      - '.plumber.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  plumber:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Workflow states and one run log, to prove each job's token scope.
+      actions: read
+      # Lists the findings under code scanning.
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run Plumber
+        uses: getplumber/plumber@v0.7.23
+        with:
+          # Pull requests from forks get a read-only token, so the code
+          # scanning upload is skipped there. The report stays a workflow
+          # artifact.
+          upload-sarif: ${{ github.event.pull_request.head.repo.fork != true }}
+          # Fail under 85 points. The default gate is 100, where any finding
+          # fails.
+          min-points: 85
