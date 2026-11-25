@@ -6,12 +6,26 @@ import { Aes256Gcm, CipherSuite, HkdfSha256 } from '@hpke/core';
 import { DhkemX25519HkdfSha256 } from '@hpke/dhkem-x25519';
 import type { vmm as VmmTypes } from '../proto/vmm_rpc';
 
-export type EnvEntry = { key: string; value: string };
+export type EnvEntry = { key: string; value: string; spec?: string };
 type EnvPayload = { sealed_env?: Uint8Array; encrypted_env?: Uint8Array };
 type KeyClient = {
   getSealedEnvPubKey(request: VmmTypes.IAppId): Promise<VmmTypes.ISealedEnvPubKeyResponse>;
   getAppEnvEncryptPubKey(request: VmmTypes.IAppId): Promise<VmmTypes.IPublicKeyResponse>;
 };
+
+/**
+ * allowed_envs for `envs`. Entries with a value spec (`NAME: spec`), whether
+ * already in `existing` or given by `envs`, are part of the app's identity and
+ * are always kept; plain names follow `envs`.
+ */
+export function mergeAllowedEnvs(existing: string[], envs: EnvEntry[]): string[] {
+  const nameOf = (entry: string) => entry.split(':', 1)[0];
+  const given = envs.filter((env) => env.spec?.trim()).map((env) => `${env.key}: ${env.spec!.trim()}`);
+  const replaced = new Set(given.map(nameOf));
+  const specs = [...existing.filter((entry) => entry.includes(':') && !replaced.has(nameOf(entry))), ...given];
+  const covered = new Set(specs.map(nameOf));
+  return [...specs, ...envs.map((env) => env.key).filter((key) => !covered.has(key))];
+}
 
 /** Keep key retrieval on the authenticated, same-origin VMM transport. */
 export async function encryptEnvPayload(
@@ -21,6 +35,7 @@ export async function encryptEnvPayload(
   encryptLegacy: (envs: EnvEntry[], key: Uint8Array) => Promise<Uint8Array>,
   supportsSealedEnv: boolean,
 ): Promise<EnvPayload> {
+  envs = envs.map(({ key, value }) => ({ key, value }));
   const legacyPayload = async () => {
     const legacy = await client.getAppEnvEncryptPubKey({ app_id: appId });
     return { encrypted_env: await encryptLegacy(envs, legacy.public_key) };

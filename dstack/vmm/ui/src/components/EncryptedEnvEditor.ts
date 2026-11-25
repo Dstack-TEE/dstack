@@ -3,7 +3,7 @@
 
 declare const FileReader: any;
 
-type EnvVar = { key: string; value: string };
+type EnvVar = { key: string; value: string; spec?: string };
 
 type ComponentInstance = {
   envVars: EnvVar[];
@@ -13,6 +13,7 @@ type ComponentInstance = {
     textContent: string;
   };
   parseTextContent(): void;
+  replaceFromText(content: string): void;
 };
 
 const EncryptedEnvEditorComponent = {
@@ -58,6 +59,7 @@ const EncryptedEnvEditorComponent = {
         <div v-for="(env, index) in envVars" :key="index" class="encrypted-env-row">
           <input type="text" v-model="env.key" placeholder="Variable name" required>
           <input type="password" v-model="env.value" placeholder="Value" required>
+          <input type="text" v-model="env.spec" placeholder="Value spec (optional), e.g. int(1..=65535)">
           <button type="button" class="action-btn danger" @click="removeEnv(index)">
             Remove
           </button>
@@ -105,9 +107,13 @@ const EncryptedEnvEditorComponent = {
       if (!content.trim()) {
         return;
       }
-      const lines = content.split('\n');
+      this.replaceFromText(content);
+    },
+    /** Replace the variables with `KEY=VALUE` lines, keeping the specs of the names that remain. */
+    replaceFromText(this: ComponentInstance, content: string) {
+      const specs = new Map(this.envVars.map((env) => [env.key, env.spec]));
       this.envVars.splice(0, this.envVars.length);
-      for (const line of lines) {
+      for (const line of content.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) {
           continue;
@@ -121,7 +127,7 @@ const EncryptedEnvEditorComponent = {
         if (!key) {
           continue;
         }
-        this.envVars.push({ key, value });
+        this.envVars.push({ key, value, spec: specs.get(key) });
       }
     },
     loadEnvFromFile(this: ComponentInstance, event: Event) {
@@ -132,25 +138,7 @@ const EncryptedEnvEditorComponent = {
       }
       const reader = new FileReader();
       reader.onload = (e: { target: { result: string } }) => {
-        const content = e.target.result || '';
-        const lines = content.split('\n');
-        this.envVars.splice(0, this.envVars.length);
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) {
-            continue;
-          }
-          const equalIndex = trimmed.indexOf('=');
-          if (equalIndex === -1) {
-            continue;
-          }
-          const key = trimmed.substring(0, equalIndex).trim();
-          const value = trimmed.substring(equalIndex + 1).trim();
-          if (!key) {
-            continue;
-          }
-          this.envVars.push({ key, value });
-        }
+        this.replaceFromText(e.target.result || '');
       };
       reader.readAsText(file);
       if (input) {
