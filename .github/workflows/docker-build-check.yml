@@ -29,6 +29,9 @@ on:
       - '.github/workflows/gateway-release.yml'
       - '.github/workflows/verifier-release.yml'
 
+permissions:
+  contents: read
+
 env:
   DSTACK_REV: ${{ github.event.pull_request.head.sha || github.sha }}
   DSTACK_SRC_URL: ${{ github.event.pull_request.head.repo.clone_url || format('{0}/{1}', github.server_url, github.repository) }}

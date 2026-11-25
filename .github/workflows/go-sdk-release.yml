@@ -24,7 +24,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -93,6 +93,9 @@ jobs:
     # which is false once `test` is skipped on workflow_dispatch.
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.test.result == 'success') }}
     runs-on: ubuntu-latest
+    permissions:
+      # The GitHub Release step creates the release.
+      contents: write
     steps:
       - name: Resolve module and version
         id: meta

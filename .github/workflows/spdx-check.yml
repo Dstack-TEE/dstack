@@ -10,6 +10,9 @@ on:
   pull_request:
     branches: [ next, 'release/**', 'feat/**' ]
 
+permissions:
+  contents: read
+
 jobs:
   reuse-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
