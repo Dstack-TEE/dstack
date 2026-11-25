@@ -177,6 +177,15 @@ image or restoring a compatible header backup. App rotation isolates future app
 keys from an exposed old derived key, but cannot recover from compromise of the
 KMS root or revoke already disclosed secrets.
 
+Certificates issued by `SignCert` carry the root and app epoch they were issued
+under in the `PHALA_RATLS_KEY_EPOCHS` extension (OID `1.3.6.1.4.1.62397.1.10`, a
+MessagePack map with `root_epoch` and `app_epoch`), which `CertExt::get_key_epochs`
+reads. There is no revocation list: certificates issued before a rotation stay
+valid until they expire, and the requester chooses their `not_after`. A verifier
+that reads the current epochs from the policy can reject a peer certificate from
+an older epoch. Certificates without the extension come from a local CA or a KMS
+predating it, so a verifier enforcing epochs must reject them as well.
+
 ## SDK selection
 
 Both selectors are optional; specify zero explicitly to recover an old key.

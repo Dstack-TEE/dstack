@@ -18,6 +18,7 @@ use ring::signature::{
     EcdsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING,
 };
 use scale::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 use x509_parser::der_parser::Oid;
 use x509_parser::prelude::{FromDer as _, X509Certificate};
 use x509_parser::public_key::PublicKey;
@@ -25,11 +26,24 @@ use x509_parser::x509::SubjectPublicKeyInfo;
 
 use crate::oids::{
     PHALA_RATLS_APP_ID, PHALA_RATLS_APP_INFO, PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE,
+    PHALA_RATLS_KEY_EPOCHS,
 };
 use crate::traits::CertExt;
 #[cfg(feature = "quote")]
 use dstack_attest::attestation::QuoteContentType;
 use dstack_attest::attestation::{AppInfo, Attestation, VersionedAttestation};
+
+/// The KMS key epochs a certificate was issued under.
+///
+/// Certificates do not expire when an epoch is rotated, so a verifier that knows the
+/// current epochs rejects older ones with this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyEpochs {
+    /// The KMS root epoch.
+    pub root_epoch: u32,
+    /// The app epoch.
+    pub app_epoch: u32,
+}
 
 /// A CA certificate and private key.
 pub struct CaCert {
@@ -94,6 +108,7 @@ impl CaCert {
         &self,
         csr: &CertSigningRequestV2,
         app_info: Option<&AppInfo>,
+        key_epochs: Option<&KeyEpochs>,
         usage: &str,
     ) -> Result<Certificate> {
         let pki = rcgen::SubjectPublicKeyInfo::from_der(&csr.pubkey)
@@ -118,6 +133,7 @@ impl CaCert {
             .maybe_attestation(attestation)
             .maybe_app_id(app_id)
             .maybe_app_info(ext_app_info)
+            .maybe_key_epochs(key_epochs)
             .special_usage(usage)
             .maybe_not_before(
                 cfg.not_before
@@ -362,6 +378,7 @@ pub struct CertRequest<'a, Key> {
     ca_level: Option<u8>,
     app_id: Option<&'a [u8]>,
     app_info: Option<&'a AppInfo>,
+    key_epochs: Option<&'a KeyEpochs>,
     special_usage: Option<&'a str>,
     attestation: Option<&'a VersionedAttestation>,
     not_before: Option<SystemTime>,
@@ -404,6 +421,11 @@ impl<Key> CertRequest<'_, Key> {
             let app_info_bytes =
                 rmp_serde::to_vec_named(&app_info).context("failed to serialize app info")?;
             add_ext(&mut params, PHALA_RATLS_APP_INFO, app_info_bytes);
+        }
+        if let Some(key_epochs) = self.key_epochs {
+            let key_epochs_bytes =
+                rmp_serde::to_vec_named(key_epochs).context("failed to serialize key epochs")?;
+            add_ext(&mut params, PHALA_RATLS_KEY_EPOCHS, key_epochs_bytes);
         }
         if let Some(usage) = self.special_usage {
             add_ext(&mut params, PHALA_RATLS_CERT_USAGE, usage);
@@ -797,7 +819,7 @@ mod tests {
             .into_versioned(),
         };
 
-        let error = match ca.sign_csr(&csr, None, "app:custom") {
+        let error = match ca.sign_csr(&csr, None, None, "app:custom") {
             Ok(_) => panic!("an unrepresentable not_after must be rejected"),
             Err(error) => error,
         };
@@ -1004,6 +1026,24 @@ mod tests {
             assert_eq!(decoded.key_provider_info, app_info.key_provider_info);
             assert_eq!(decoded.init_script_hashes, app_info.init_script_hashes);
         }
+
+        #[test]
+        fn key_epochs_survive_a_certificate_round_trip() {
+            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+            let key_epochs = KeyEpochs {
+                root_epoch: 3,
+                app_epoch: 7,
+            };
+            let cert = CertRequest::builder()
+                .key(&key)
+                .subject("test.example.com")
+                .key_epochs(&key_epochs)
+                .build()
+                .self_signed()
+                .unwrap();
+
+            assert_eq!(cert.get_key_epochs().unwrap(), Some(key_epochs));
+        }
     }
 
     #[test]
@@ -1043,7 +1083,7 @@ mod tests {
             }
             .into_versioned(),
         };
-        let Err(err) = CaCert::from_parts(ca_key, ca_cert).sign_csr(&csr, None, "app:custom")
+        let Err(err) = CaCert::from_parts(ca_key, ca_cert).sign_csr(&csr, None, None, "app:custom")
         else {
             panic!("app info must not be invented");
         };
