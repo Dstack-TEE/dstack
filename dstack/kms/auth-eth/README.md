@@ -100,8 +100,9 @@ closed. `ETH_RPC_URL` alone is the same path with `1/1`.
   key cannot add an endpoint, and a key must not be able to leave its place in
   the URL: in a dstack CVM, give it an `allowed_envs` spec such as
   `ALCHEMY_KEY: /[A-Za-z0-9_-]{1,128}/` and deliver it through `.user-config`,
-  as `dstack-app/deploy-to-vmm.sh` does. Only the origin of an endpoint is ever
-  logged or served by `GET /`. Redirects are refused.
+  as `dstack-app/deploy-to-vmm.sh` does from the specs in its `rpc.json`. Only
+  the origin of an endpoint is ever logged or served by `GET /`. Redirects are
+  refused.
 - **Cost.** Every request costs m times the RPC calls, and a provider that
   hangs holds each request up for the 10-second RPC timeout.
 

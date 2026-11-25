@@ -5,6 +5,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Write rpc.json with the given endpoint unless the file exists.
+init_rpc_json() {
+  [ -f rpc.json ] || jq -n --arg url "$1" '{quorum: "1/1", endpoints: [$url], keys: {}}' >rpc.json
+}
+
 # Check if .env exists
 if [ -f ".env" ]; then
   # Load variables from .env
@@ -42,8 +47,27 @@ else
 # The URL of the dstack app image download URL
 # IMAGE_DOWNLOAD_URL=https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz
 
-# The URL of the Ethereum RPC service
-ETH_RPC_URL=https://rpc.phala.network
+# rpc.json lists the Ethereum RPC endpoints and how many of them must answer
+# every read alike, as n/m. All of it is measured and public. Write an API key
+# as \${NAME} in an endpoint, give NAME an allowed_envs spec under keys, and set
+# its value here: values reach the CVM through its unmeasured user config and
+# stay out of the measurement. For example:
+#   {
+#     "quorum": "2/3",
+#     "endpoints": [
+#       "https://eth-mainnet.g.alchemy.com/v2/\${ALCHEMY_KEY}",
+#       "https://mainnet.infura.io/v3/\${INFURA_KEY}",
+#       "https://ethereum-rpc.publicnode.com"
+#     ],
+#     "keys": {
+#       "ALCHEMY_KEY": "/[A-Za-z0-9_-]{32}/",
+#       "INFURA_KEY": "/[0-9a-f]{32}/"
+#     }
+#   }
+# A spec must keep its key to one URL path segment, so that the key cannot
+# change an endpoint or add one. Keys need dstack OS 0.6.7 or later.
+# ALCHEMY_KEY=
+# INFURA_KEY=
 
 # The block the auth-api reads policy at: latest, safe or finalized (default).
 # Use finalized on L1; an OP-stack chain read through Helios requires latest.
@@ -54,6 +78,11 @@ ETH_RPC_URL=https://rpc.phala.network
 
 # Read this many blocks behind the block ETH_BLOCK_TAG resolves to (default: 0).
 # ETH_FINALITY_CONFIRMATIONS=0
+
+# Reject decisions if the block read is older than this many seconds (empty: no
+# check). Required when rpc.json lists more than one endpoint; leave room for
+# ETH_BLOCK_TAG, as finalized on Ethereum mainnet is about 13 minutes old.
+# ETH_MAX_BLOCK_AGE=
 
 # The Git repository to deploy
 GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
@@ -70,9 +99,27 @@ KMS_IMAGE=dstacktee/dstack-kms@sha256:11ac59f524a22462ccd2152219b0bec48a28ceb734
 # The admin token for the KMS app
 ADMIN_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
 EOF
+  init_rpc_json https://rpc.phala.network
   echo "Please edit the .env file and set the required variables, then run this script again."
   exit 1
 fi
+
+# An .env that predates rpc.json names its one endpoint in ETH_RPC_URL.
+init_rpc_json "${ETH_RPC_URL:-https://rpc.phala.network}"
+if ! UNDECLARED=$(jq -r '[.endpoints[] | scan("\\$\\{(\\w+)\\}")[]] - (.keys | keys) | join(" ")' rpc.json); then
+  echo "Error: rpc.json is invalid."
+  exit 1
+fi
+if [ -n "$UNDECLARED" ]; then
+  echo "Error: rpc.json gives no spec under keys for: $UNDECLARED"
+  exit 1
+fi
+if [ -z "${ETH_MAX_BLOCK_AGE:-}" ] && jq -e '.endpoints | length > 1' rpc.json >/dev/null; then
+  echo "Error: set ETH_MAX_BLOCK_AGE in .env: the auth-api requires it with several RPC endpoints."
+  exit 1
+fi
+mapfile -t RPC_KEYS < <(jq -r '.keys | keys[]' rpc.json)
+mapfile -t ENV_SPECS < <(jq -r '.keys | to_entries[] | "--env-spec", "\(.key): \(.value)"' rpc.json)
 
 required_env_vars=(
   "VMM_RPC"
@@ -80,9 +127,9 @@ required_env_vars=(
   "AUTH_API_RPC_ADDR"
   "GUEST_AGENT_ADDR"
   "KMS_CONTRACT_ADDR"
-  "ETH_RPC_URL"
   "IMAGE_DOWNLOAD_URL"
   "GIT_REPOSITORY"
+  "${RPC_KEYS[@]}"
 )
 
 for var in "${required_env_vars[@]}"; do
@@ -111,10 +158,18 @@ subvar() {
 ETH_BLOCK_TAG=${ETH_BLOCK_TAG:-finalized}
 ETH_CHAIN_ID=${ETH_CHAIN_ID:-}
 ETH_FINALITY_CONFIRMATIONS=${ETH_FINALITY_CONFIRMATIONS:-0}
-subvar ETH_RPC_URL
+ETH_MAX_BLOCK_AGE=${ETH_MAX_BLOCK_AGE:-}
+# One endpoint per line of the block scalar in compose-dev.yaml.
+# shellcheck disable=SC2034  # consumed via `subvar` into compose-*.yaml
+ETH_RPC_URLS=$(jq -r '.endpoints | join("\\n        ")' rpc.json)
+# shellcheck disable=SC2034
+ETH_RPC_QUORUM=$(jq -r .quorum rpc.json)
+subvar ETH_RPC_URLS
+subvar ETH_RPC_QUORUM
 subvar ETH_BLOCK_TAG
 subvar ETH_CHAIN_ID
 subvar ETH_FINALITY_CONFIRMATIONS
+subvar ETH_MAX_BLOCK_AGE
 subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL
@@ -144,10 +199,19 @@ $CLI compose \
   --public-sysinfo \
   --secure-time \
   --no-instance-id \
+  "${ENV_SPECS[@]}" \
+  ${RPC_KEYS:+--init-script <(echo "dstack-util import-env ${RPC_KEYS[*]}")} \
   --output .app-compose.json
 
 # Remove the temporary file as it is no longer needed
 rm "$COMPOSE_TMP"
+
+# The user config holds the keys under env, apart from the fields dstack
+# defines. The import-env init script copies them into the env file and refuses
+# one that breaks its allowed_envs spec. mktemp keeps the keys readable by this
+# user only.
+USER_CONFIG=$(mktemp)
+jq '{env: .keys | with_entries(.value = env[.key])}' rpc.json >"$USER_CONFIG"
 
 echo "Deploying KMS to dstack-vmm..."
 
@@ -159,6 +223,9 @@ $CLI deploy \
   ${KMS_ADMIN_ADDR:+--port "tcp:$KMS_ADMIN_ADDR:8002"} \
   --port tcp:"$AUTH_API_RPC_ADDR":8001 \
   --port tcp:"$GUEST_AGENT_ADDR":8090 \
+  ${RPC_KEYS:+--user-config "$USER_CONFIG"} \
   --vcpu 8 \
   --memory 8G \
   --disk 50G
+
+rm "$USER_CONFIG"

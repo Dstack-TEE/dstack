@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the VMM web UI set them, and the VMM rejects malformed `int` and
   `float` specs at deployment. See
   [Environment value specs](docs/security/cvm-boundaries.md#environment-value-specs).
+- **The KMS auth-eth server can require several RPC providers to agree.**
+  `ETH_RPC_URLS` with `ETH_RPC_QUORUM=n/m` answers a read only with what n of
+  the m endpoints return alike, and `ETH_MAX_BLOCK_AGE`, required with several
+  endpoints, rejects a stale block.
+  `dstack-app/deploy-to-vmm.sh` reads the endpoints from `rpc.json` and keeps
+  API keys out of the measured compose file. See [Multiple RPC providers](dstack/kms/auth-eth/README.md#multiple-rpc-providers).
 
 ### Security
 
@@ -48,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `allowed_envs`. An `allowed_envs` entry that contains a `:` must now be
   a valid `NAME: spec`; such an entry used to be a name no variable could
   have, and now stops the boot.
+- **The KMS auth-eth server pins contract reads to a block hash.** Each
+  request reads the block it resolved by hash (EIP-1898) rather than by number,
+  so the RPC endpoint must accept a block hash in `eth_call`. HTTP redirects
+  from the endpoint are refused. The server no longer falls back to
+  `http://localhost:8545`: it exits unless `ETH_RPC_URL` or `ETH_RPC_URLS` is
+  set.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import
