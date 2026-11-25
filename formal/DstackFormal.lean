@@ -17,6 +17,7 @@ import DstackFormal.Guest.EventLog
 import DstackFormal.Guest.InstanceId
 import DstackFormal.Guest.MrConfig
 import DstackFormal.Guest.Policy
+import DstackFormal.Guest.ValueSpec
 import DstackFormal.Kms.KeyDerivation
 import DstackFormal.Kms.KeyRelease
 import DstackFormal.Kms.RaTlsEncoding

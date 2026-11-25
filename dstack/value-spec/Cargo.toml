@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "value-spec"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "A compact spec language for validating string values"
+
+[dependencies]
+bigdecimal.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+winnow.workspace = true
