@@ -97,6 +97,22 @@ enum Kind {
     Regex(Regex),
 }
 
+/// Splits a `NAME: spec` entry into the name and the text of its spec. The
+/// whitespace after the colon is optional, and an entry without a colon is a
+/// bare name.
+pub fn split_named(entry: &str) -> (&str, Option<&str>) {
+    match entry.split_once(':') {
+        Some((name, spec)) => (name, Some(spec.trim_start())),
+        None => (entry, None),
+    }
+}
+
+/// Parses a `NAME: spec` entry into the name and its spec.
+pub fn parse_named(entry: &str) -> Result<(&str, Option<ValueSpec>), ParseError> {
+    let (name, spec) = split_named(entry);
+    Ok((name, spec.map(str::parse).transpose()?))
+}
+
 const MAX_NUMBER_LEN: usize = 64;
 const MAX_SPEC_LEN: usize = 4096;
 const MAX_REGEX_SIZE: usize = 10 << 20;
@@ -532,6 +548,18 @@ mod tests {
             &[&format!("0x{}", "aB".repeat(20))],
             &["0x12"],
         );
+    }
+
+    #[test]
+    fn named_entries() {
+        let name = |entry| parse_named(entry).map(|(name, spec)| (name, spec.is_some()));
+        assert_eq!(name("PORT").unwrap(), ("PORT", false));
+        assert_eq!(name("PORT:int").unwrap(), ("PORT", true));
+        assert_eq!(name("PORT:  int(1..=65535)?").unwrap(), ("PORT", true));
+        assert_eq!(name("URL: /https://.*/").unwrap(), ("URL", true));
+        for entry in ["A:", "A: ", "A: int ", "A:int:int", "A: string"] {
+            assert!(name(entry).is_err(), "{entry:?} should fail");
+        }
     }
 
     #[test]
