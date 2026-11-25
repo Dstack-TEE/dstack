@@ -215,6 +215,27 @@ class ComposeTests(unittest.TestCase):
         )
 
 
+class AllowedEnvsTests(unittest.TestCase):
+    """Verify value specs survive rewriting allowed_envs from an env file."""
+
+    def test_plain_names_follow_the_env_file(self) -> None:
+        """Rebuild entries without a spec from the env file."""
+        merge = VMM_CLI.merge_allowed_envs
+        self.assertEqual(merge([], {"A": "1", "B": "2"}), ["A", "B"])
+        self.assertEqual(merge(["A", "C"], ["B", "A"]), ["B", "A"])
+
+    def test_specs_are_kept(self) -> None:
+        """Keep entries with a spec, and stay stable when merged again."""
+        merge = VMM_CLI.merge_allowed_envs
+        existing = ["PORT: int(1..=65535)", "OLD", "NET:/main|test/", "NET: /.{1,8}/"]
+        self.assertEqual(
+            merge(existing, ["TOKEN", "PORT"]),
+            ["PORT: int(1..=65535)", "NET:/main|test/", "NET: /.{1,8}/", "TOKEN"],
+        )
+        merged = merge(existing, ["NET", "PORT", "TOKEN"])
+        self.assertEqual(merge(merged, ["TOKEN", "NET", "PORT"]), merged)
+
+
 class LaunchTicketTests(unittest.TestCase):
     """Pin the hash the contracts allow; the KMS computes the same."""
 

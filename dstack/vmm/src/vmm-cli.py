@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
-from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Tuple, Union
 
 # Optional cryptography imports - only needed for encrypted environment variables
 try:
@@ -1077,7 +1077,7 @@ class VmmCLI:
             "key_provider_id": args.key_provider_id or "",
             "public_logs": args.public_logs,
             "public_sysinfo": args.public_sysinfo,
-            "allowed_envs": [k for k in envs.keys()],
+            "allowed_envs": merge_allowed_envs(args.env_spec, envs),
             "no_instance_id": args.no_instance_id,
             "secure_time": args.secure_time,
         }
@@ -1624,6 +1624,17 @@ def format_table(rows, headers):
     return "\n".join(table)
 
 
+def merge_allowed_envs(existing: List[str], names: Iterable[str]) -> List[str]:
+    """Return allowed_envs for the variables `names`.
+
+    Entries of `existing` that carry a value spec (`NAME: spec`) are part of
+    the app's identity and are always kept; plain names follow `names`.
+    """
+    specs = [entry for entry in existing if ":" in entry]
+    covered = {entry.split(":", 1)[0] for entry in specs}
+    return specs + [name for name in names if name not in covered]
+
+
 def parse_env_file(file_path: str) -> Dict[str, str]:
     """Parse an environment file into a dictionary of key-value pairs.
 
@@ -2061,6 +2072,14 @@ def main():
     )
     compose_parser.add_argument(
         "--env-file", help="File with environment variables to encrypt", default=None
+    )
+    compose_parser.add_argument(
+        "--env-spec",
+        action="append",
+        default=[],
+        metavar="NAME: SPEC",
+        help="Allow an environment variable and constrain its value, "
+        "e.g. 'PORT: int(1..=65535)' (can be used multiple times)",
     )
     compose_parser.add_argument(
         "--no-instance-id", action="store_true", help="Disable instance ID"
