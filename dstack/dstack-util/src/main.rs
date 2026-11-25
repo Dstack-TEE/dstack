@@ -106,6 +106,21 @@ enum Commands {
     GpuInfo,
     /// Exec a command with extra environment variables from a JSON object file
     ExecWithEnv(ExecWithEnvArgs),
+    /// Check environment variables of this process against value specs
+    ValidateEnv(ValidateEnvArgs),
+}
+
+#[derive(Parser)]
+struct ValidateEnvArgs {
+    /// App compose file whose `allowed_envs` specs apply to the variables that are set
+    #[arg(long)]
+    compose: Option<PathBuf>,
+    /// JSON object mapping variable names to values, checked instead of the environment
+    #[arg(long)]
+    env_file: Option<PathBuf>,
+    /// Variables that must be set, as `NAME:spec` or `NAME`
+    #[arg(required_unless_present = "compose")]
+    specs: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -116,6 +131,28 @@ struct ExecWithEnvArgs {
     /// Command to exec, with its arguments
     #[arg(last = true, required = true)]
     command: Vec<String>,
+}
+
+fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
+    let env: Option<std::collections::BTreeMap<String, String>> = args
+        .env_file
+        .map(|path| {
+            utils::deserialize_json_file(&path)
+                .with_context(|| format!("failed to load env from {}", path.display()))
+        })
+        .transpose()?;
+    let compose: Option<utils::AppCompose> = args
+        .compose
+        .map(|path| {
+            utils::deserialize_json_file(&path)
+                .with_context(|| format!("failed to load app compose from {}", path.display()))
+        })
+        .transpose()?;
+    let optional = compose.map(|c| c.allowed_envs).unwrap_or_default();
+    parse_env_file::validate_env(&args.specs, &optional, |name| match &env {
+        Some(env) => env.get(name).cloned(),
+        None => std::env::var(name).ok(),
+    })
 }
 
 #[derive(Parser)]
@@ -1700,6 +1737,7 @@ async fn main() -> Result<()> {
             gpu_info::cmd_gpu_info()?;
         }
         Commands::ExecWithEnv(args) => cmd_exec_with_env(args)?,
+        Commands::ValidateEnv(args) => cmd_validate_env(args)?,
     }
 
     Ok(())
