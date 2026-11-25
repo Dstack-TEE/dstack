@@ -37,7 +37,7 @@ This is the main configuration file for the application in JSON format:
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
 | public_sysinfo | 0.3.3 | boolean | Whether system info is public. Covers the guest dashboard and `/metrics`, including the `dstack_gpu_*` series (since 0.6.0), which expose each GPU's UUID and PCI bus address alongside utilization, memory, temperature and power. |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
-| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names |
+| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names. An entry may be `NAME:spec` to also constrain the value, see [Environment value specs](#environment-value-specs). |
 | no_instance_id | 0.4.2 | boolean | Disable instance ID generation |
 | secure_time | 0.5.0 | boolean | Whether secure time is enabled |
 | pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before `docker compose up`. It runs *after* dockerd, so containers restored by a Docker restart policy can already be running when it executes. Do not build security gates on it — see [security-best-practices.md](./security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first). |
@@ -126,10 +126,27 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM derives the shared secret using the ephemeral public key via X25519 key exchange
    - CVM decrypts the ciphertext using AESGCM with the derived shared secret
    - CVM parses the JSON and only stores variables listed in allowed_envs from app-compose.json
-   - CVM performs basic regex validation on values
+   - CVM validates variable names and checks each value against the specs given in allowed_envs
    - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`
 
 This file is not measured to RTMRs, and the envelope is not bound to an instance or compose hash: the KMS derives `env_crypt_key` from the app ID alone, so the host can withhold the file or replay any earlier ciphertext for the same app. It is highly recommended to add application-specific integrity checks, such as a version or expiry inside the plaintext, at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
+
+#### Environment value specs
+
+Since 0.6.7, an `allowed_envs` entry may be `NAME:spec`. The CVM refuses to boot when the value of `NAME` does not match the spec. A spec is one of:
+
+| Spec | Accepts |
+|------|---------|
+| `int` | any integer within `i128` |
+| `int(1..=65535)` | integers from 1 to 65535 |
+| `int(0\|1024..<65536)` | 0, or integers from 1024 up to but excluding 65536 |
+| `float` | any decimal number, compared exactly |
+| `float(0<..=1)` | decimals above 0 and up to 1 |
+| `/mainnet\|testnet/` | values the regex matches in full |
+
+A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A name listed more than once must match every spec given for it.
+
+Guests older than 0.6.7 treat `NAME:spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.
 
 ### .user-config
 This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/.host-shared/.user-config without any measurement or additional processing, unless `requirements.launch_token_hash` is set in app-compose.json — in that case the guest reads the launch token from JSON path `dstack.launch_token` in this file and fails closed at boot, before key provisioning, unless its SHA-256 matches the pinned hash.

@@ -4,8 +4,9 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use tracing::warn;
+use value_spec::ValueSpec;
 
 /// Escape a value for systemd's `EnvironmentFile=` parser. A newline cannot be
 /// represented there, so it is written as a literal `\n`.
@@ -40,7 +41,28 @@ struct Data {
     env: Vec<Pair>,
 }
 
-pub fn parse_env(env_json: &[u8], allowed: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
+/// The specs each allowed name's value must match.
+pub type AllowedEnvs = BTreeMap<String, Vec<ValueSpec>>;
+
+/// Parses `allowed_envs` entries, each a name optionally followed by `:` and a
+/// value spec.
+pub fn parse_allowed_envs(entries: &[String]) -> Result<AllowedEnvs> {
+    let mut allowed = AllowedEnvs::new();
+    for entry in entries {
+        let (name, spec) = match entry.split_once(':') {
+            Some((name, spec)) => (name, Some(spec)),
+            None => (entry.as_str(), None),
+        };
+        let spec = spec
+            .map(str::parse)
+            .transpose()
+            .with_context(|| format!("invalid value spec for env {name}"))?;
+        allowed.entry(name.to_string()).or_default().extend(spec);
+    }
+    Ok(allowed)
+}
+
+pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<String, String>> {
     const MAX_ITEMS: usize = 1024;
     const MAX_TOTAL_SIZE: usize = 1024 * 1024;
 
@@ -58,10 +80,10 @@ pub fn parse_env(env_json: &[u8], allowed: &BTreeSet<String>) -> Result<BTreeMap
     let mut total_size = 0;
 
     for Pair { key, value } in data.env {
-        if !allowed.contains(&key) {
+        let Some(specs) = allowed.get(&key) else {
             warn!("Skipping unauthorized environment variable: {key}");
             continue;
-        }
+        };
         // Check key length (common Linux limit is 255)
         if key.len() > 255 {
             bail!("Environment variable name too long: {}", key);
@@ -75,6 +97,10 @@ pub fn parse_env(env_json: &[u8], allowed: &BTreeSet<String>) -> Result<BTreeMap
         // validate key
         if !key_regex.is_match(&key) {
             bail!("Invalid env key: {}", key);
+        }
+
+        if !specs.iter().all(|spec| spec.matches(&value)) {
+            bail!("value of env {key} does not match its spec");
         }
 
         total_size += key.len() + value.len();
@@ -113,6 +139,61 @@ mod tests {
         assert_eq!(escape_value("command=`date`"), r#""command=\`date\`""#);
         assert_eq!(escape_value(r"trail\"), r#""trail\\""#);
         assert_eq!(escape_value("cr\r"), "\"cr\r\"");
+    }
+
+    fn parse(allowed: &[&str], env: &[(&str, &str)]) -> Result<BTreeMap<String, String>> {
+        let allowed = allowed.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let env: Vec<_> = env
+            .iter()
+            .map(|(key, value)| serde_json::json!({ "key": key, "value": value }))
+            .collect();
+        let json = serde_json::to_vec(&serde_json::json!({ "env": env }))?;
+        parse_env(&json, &parse_allowed_envs(&allowed)?)
+    }
+
+    #[test]
+    fn values_are_checked_against_specs() {
+        let allowed = [
+            "PORT:int(1..=65535)",
+            "NET:/main|test/",
+            "URL:/https://.*/",
+            "ANY",
+        ];
+        let env = [
+            ("PORT", "8080"),
+            ("NET", "test"),
+            ("URL", "https://a:1/"),
+            ("ANY", "x y"),
+        ];
+        assert_eq!(parse(&allowed, &env).unwrap().len(), 4);
+        assert!(parse(&allowed, &[("OTHER", "1")]).unwrap().is_empty());
+        for bad in [
+            ("PORT", "0"),
+            ("PORT", "80 "),
+            ("NET", "mainnet"),
+            ("URL", "http://a"),
+        ] {
+            let err = parse(&allowed, &[bad]).unwrap_err().to_string();
+            assert!(!err.contains(bad.1), "{err}");
+        }
+    }
+
+    #[test]
+    fn repeated_names_must_match_every_spec() {
+        for allowed in [["N:int(0..=9)", "N"], ["N", "N:int(0..=9)"]] {
+            assert!(parse(&allowed, &[("N", "9")]).is_ok());
+            assert!(parse(&allowed, &[("N", "10")]).is_err());
+        }
+        let allowed = ["N:int(0..=9)", "N:int(5..)"];
+        assert!(parse(&allowed, &[("N", "5")]).is_ok());
+        assert!(parse(&allowed, &[("N", "4")]).is_err());
+    }
+
+    #[test]
+    fn invalid_specs_are_rejected() {
+        for entry in ["A:", "A:int(", "A:string", "A:int:int"] {
+            assert!(parse(&[entry], &[]).is_err(), "{entry}");
+        }
     }
 
     /// Round-trip through systemd's own parser; skipped without a user manager.

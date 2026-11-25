@@ -73,6 +73,7 @@ cc-eventlog.workspace = true
 safe-write.workspace = true
 errify.workspace = true
 base64.workspace = true
+value-spec.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
