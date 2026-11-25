@@ -49,14 +49,8 @@ pub type AllowedEnvs = BTreeMap<String, Vec<ValueSpec>>;
 pub fn parse_allowed_envs(entries: &[String]) -> Result<AllowedEnvs> {
     let mut allowed = AllowedEnvs::new();
     for entry in entries {
-        let (name, spec) = match entry.split_once(':') {
-            Some((name, spec)) => (name, Some(spec.trim_start())),
-            None => (entry.as_str(), None),
-        };
-        let spec = spec
-            .map(str::parse)
-            .transpose()
-            .with_context(|| format!("invalid value spec for env {name}"))?;
+        let (name, spec) = value_spec::parse_named(entry)
+            .with_context(|| format!("invalid allowed_envs entry {entry:?}"))?;
         allowed.entry(name.to_string()).or_default().extend(spec);
     }
     Ok(allowed)
