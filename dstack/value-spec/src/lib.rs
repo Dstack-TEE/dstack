@@ -30,6 +30,10 @@
 //! and numbers are compared exactly. The regex is everything between the first
 //! and the last `/`, in the dialect of the [`regex`] crate.
 //!
+//! Specs and values may come from untrusted input. A spec is at most 4096
+//! bytes and its regex compiles to at most 10 MiB, so parsing a spec is bounded
+//! and matching takes time linear in the value.
+//!
 //! ```
 //! use value_spec::ValueSpec;
 //!
@@ -59,7 +63,7 @@ use std::ops::RangeBounds;
 use std::str::FromStr;
 
 use bigdecimal::{BigDecimal, Zero};
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use thiserror::Error;
 use winnow::ascii::{digit0, digit1};
 use winnow::combinator::{
@@ -94,6 +98,8 @@ enum Kind {
 }
 
 const MAX_NUMBER_LEN: usize = 64;
+const MAX_SPEC_LEN: usize = 4096;
+const MAX_REGEX_SIZE: usize = 10 << 20;
 
 type Range<T> = (Bound<T>, Bound<T>);
 
@@ -117,6 +123,12 @@ impl FromStr for ValueSpec {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() > MAX_SPEC_LEN {
+            return Err(ParseError {
+                offset: MAX_SPEC_LEN,
+                message: format!("spec is longer than {MAX_SPEC_LEN} bytes"),
+            });
+        }
         let spec = alt((
             regex.map(Kind::Regex),
             ranges("int", int)
@@ -220,8 +232,13 @@ fn regex(input: &mut &str) -> ModalResult<Regex> {
 
 fn anchored(pattern: &str) -> Result<Regex, regex::Error> {
     // Reject patterns that are only valid once wrapped, such as `a)|(b`.
-    Regex::new(pattern)?;
-    Regex::new(&format!(r"\A(?:{pattern})\z"))
+    let build = |pattern: &str| {
+        RegexBuilder::new(pattern)
+            .size_limit(MAX_REGEX_SIZE)
+            .build()
+    };
+    build(pattern)?;
+    build(&format!(r"\A(?:{pattern})\z"))
 }
 
 #[cfg(test)]
@@ -514,6 +531,74 @@ mod tests {
             "/0x[0-9a-fA-F]{40}/",
             &[&format!("0x{}", "aB".repeat(20))],
             &["0x12"],
+        );
+    }
+
+    #[test]
+    fn specs_are_size_limited() {
+        let enumeration = |len: usize| format!("/{}/", "a".repeat(len - 2));
+        check(
+            &enumeration(MAX_SPEC_LEN),
+            &[&"a".repeat(MAX_SPEC_LEN - 2)],
+            &["a"],
+        );
+        let items = |n: usize| format!("int({})", vec!["1"; n].join("|"));
+        assert_eq!(items(2046).len(), MAX_SPEC_LEN);
+        check(&items(2046), &["1"], &["2"]);
+        check_invalid(&[
+            &enumeration(MAX_SPEC_LEN + 1),
+            &items(2047),
+            &"?".repeat(1 << 20),
+            "/(?:a{1000}){1000}/",
+            "/\\pL{1000}/",
+            &format!("/{}/", "(".repeat(300) + &")".repeat(300)),
+        ]);
+    }
+
+    #[test]
+    fn regex_cannot_escape_its_anchors() {
+        check_invalid(&[
+            "/a)|(b/",
+            "/a)|(?:b/",
+            "/(?x)a # b/",
+            "/(?x)a|b #/",
+            "/a\\/",
+            "/[a/",
+        ]);
+        check("/(?x)a # b\n/", &["a"], &["ab", "a # b"]);
+        check("/(?x) a | b /", &["a", "b"], &["ab", " a "]);
+        check("/(?m)a/", &["a"], &["a\n", "\na", "b\na\nb"]);
+        check("/(?m)^a$/", &["a"], &["a\n", "\na", "b\na\nb"]);
+        check("/(?s)a.?/", &["a", "a\n"], &["a\n\n", "\na"]);
+        check("/a|b/", &["a", "b"], &["ab", "a\n", "xa", "bx"]);
+        check("/a*/", &["", "aaa"], &["\n", "a\n", "a\0", "\0"]);
+    }
+
+    #[test]
+    fn hostile_values_are_rejected() {
+        let huge = "9".repeat(1 << 20);
+        let values = [
+            "8080\n",
+            "\n8080",
+            " 8080",
+            "8080 ",
+            "8080\0",
+            "+8080",
+            "٨٠٨٠",
+            "８０８０",
+            "0x10",
+            "1e3",
+            "1_000",
+            "8080\r",
+            &huge,
+        ];
+        check("int", &[], &values);
+        check("float", &[], &values);
+        check("int(1..=65535)?", &[""], &values);
+        check(
+            "/[0-9]+/",
+            &[&huge],
+            &["8080\n", "٨٠٨٠", "８０８０", " 8080"],
         );
     }
 
