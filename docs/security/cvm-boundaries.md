@@ -127,7 +127,7 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM decrypts the ciphertext using AESGCM with the derived shared secret
    - CVM parses the JSON and only stores variables listed in allowed_envs from app-compose.json
    - CVM validates variable names and checks each value against the specs given in allowed_envs
-   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`
+   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`, which checks the values against the specs again
 
 This file is not measured to RTMRs, and the envelope is not bound to an instance or compose hash: the KMS derives `env_crypt_key` from the app ID alone, so the host can withhold the file or replay any earlier ciphertext for the same app. It is highly recommended to add application-specific integrity checks, such as a version or expiry inside the plaintext, at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
 
@@ -155,6 +155,8 @@ PORT=$PORT dstack-util validate-env 'PORT:int(1024..=65535)' || exit 1
 
 dstack-util validate-env --compose /dstack/app-compose.json --env-file /dstack/.host-shared/.user-config || exit 1
 ```
+
+`app-compose.service` passes `--compose /dstack/app-compose.json` to `dstack-util exec-with-env`, so an `init_script` that rewrites `.decrypted-env.json` cannot hand the application a value that breaks an `allowed_envs` spec.
 
 Guests older than 0.6.7 treat `NAME:spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.
 
