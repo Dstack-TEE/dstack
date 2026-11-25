@@ -60,6 +60,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0
@@ -108,6 +110,7 @@ jobs:
           # objects behind them, so take the whole history: the clone is a
           # rounding error next to the Rust build in this job.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0

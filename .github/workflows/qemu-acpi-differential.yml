@@ -35,6 +35,8 @@ jobs:
       REFERENCE_IMAGE: kvin/dstack-acpi-tables@sha256:54e692d8c68c6f02dd7c655bf6de6e7f3ad7a43fded6ca00d8e998918108a3b4
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0

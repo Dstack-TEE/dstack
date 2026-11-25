@@ -20,6 +20,8 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
     - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
 
     - name: Reject axioms and unchecked code
       run: "! grep -rnE '^\\s*(axiom|unsafe|@\\[implemented_by|@\\[extern)|native_decide' --include='*.lean' formal"

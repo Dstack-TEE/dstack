@@ -27,6 +27,7 @@ jobs:
       with:
         # The change detection below diffs against the base commit.
         fetch-depth: 0
+        persist-credentials: false
 
     # Which files changed, decided here rather than with a workflow-level
     # `paths:` filter.

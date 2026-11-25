@@ -58,6 +58,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && env.RELEASE_TAG || github.sha }}
+          persist-credentials: false
 
       - name: Checkout contract dependencies
         run: |
