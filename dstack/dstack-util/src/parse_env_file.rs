@@ -62,28 +62,22 @@ pub fn parse_allowed_envs(entries: &[String]) -> Result<AllowedEnvs> {
     Ok(allowed)
 }
 
-fn check_value(name: &str, value: &str, specs: &[ValueSpec]) -> Result<()> {
-    if !specs.iter().all(|spec| spec.matches(value)) {
-        bail!("value of env {name} does not match its spec");
-    }
-    Ok(())
-}
-
-/// Checks variables against `allowed_envs`-style entries. Those named by
-/// `required` must be set; those named by `optional` are checked when set.
-pub fn validate_env(
-    required: &[String],
-    optional: &[String],
-    get: impl Fn(&str) -> Option<String>,
-) -> Result<()> {
-    for (name, specs) in parse_allowed_envs(optional)? {
-        if let Some(value) = get(&name) {
-            check_value(&name, &value, &specs)?;
+/// Checks the variables `allowed` names against their specs. An unset
+/// variable counts as empty, so only a spec that accepts the empty string
+/// leaves its variable optional.
+pub fn check_env(allowed: &AllowedEnvs, get: impl Fn(&str) -> Option<String>) -> Result<()> {
+    for (name, specs) in allowed {
+        let value = get(name);
+        if specs
+            .iter()
+            .all(|spec| spec.matches(value.as_deref().unwrap_or_default()))
+        {
+            continue;
         }
-    }
-    for (name, specs) in parse_allowed_envs(required)? {
-        let value = get(&name).with_context(|| format!("env {name} is not set"))?;
-        check_value(&name, &value, &specs)?;
+        match value {
+            Some(_) => bail!("value of env {name} does not match its spec"),
+            None => bail!("env {name} is not set and its spec does not accept an empty value"),
+        }
     }
     Ok(())
 }
@@ -106,10 +100,10 @@ pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<Stri
     let mut total_size = 0;
 
     for Pair { key, value } in data.env {
-        let Some(specs) = allowed.get(&key) else {
+        if !allowed.contains_key(&key) {
             warn!("Skipping unauthorized environment variable: {key}");
             continue;
-        };
+        }
         // Check key length (common Linux limit is 255)
         if key.len() > 255 {
             bail!("Environment variable name too long: {}", key);
@@ -125,14 +119,13 @@ pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<Stri
             bail!("Invalid env key: {}", key);
         }
 
-        check_value(&key, &value, specs)?;
-
         total_size += key.len() + value.len();
         if total_size > MAX_TOTAL_SIZE {
             bail!("Environment variables total size too large");
         }
         env.insert(key, value);
     }
+    check_env(allowed, |name| env.get(name).cloned())?;
     Ok(env)
 }
 
@@ -190,16 +183,42 @@ mod tests {
             ("ANY", "x y"),
         ];
         assert_eq!(parse(&allowed, &env).unwrap().len(), 4);
-        assert!(parse(&allowed, &[("OTHER", "1")]).unwrap().is_empty());
         for bad in [
             ("PORT", "0"),
             ("PORT", "80 "),
             ("NET", "mainnet"),
             ("URL", "http://a"),
         ] {
-            let err = parse(&allowed, &[bad]).unwrap_err().to_string();
-            assert!(!err.contains(bad.1), "{err}");
+            let env = env.map(|kv| if kv.0 == bad.0 { bad } else { kv });
+            let err = parse(&allowed, &env).unwrap_err().to_string();
+            assert!(err.contains(bad.0) && !err.contains(bad.1), "{err}");
         }
+    }
+
+    #[test]
+    fn unset_variables_count_as_empty() {
+        let allowed = ["PORT: int(1..=65535)?", "NET: /(main|test)?/", "ANY"];
+        assert!(parse(&allowed, &[("OTHER", "1")]).unwrap().is_empty());
+        assert!(parse(&allowed, &[("PORT", ""), ("ANY", "")]).is_ok());
+
+        for (allowed, name) in [
+            ("PORT: int(1..=65535)", "PORT"),
+            ("NET: /main|test/", "NET"),
+        ] {
+            let err = parse(&[allowed], &[]).unwrap_err().to_string();
+            assert!(err.contains(&format!("env {name} is not set")), "{err}");
+            assert!(parse(&[allowed], &[(name, "")]).is_err());
+        }
+    }
+
+    #[test]
+    fn the_last_duplicate_is_the_one_checked() {
+        let allowed = ["N: int(0..=9)"];
+        assert_eq!(
+            parse(&allowed, &[("N", "x"), ("N", "5")]).unwrap()["N"],
+            "5"
+        );
+        assert!(parse(&allowed, &[("N", "5"), ("N", "x")]).is_err());
     }
 
     #[test]
@@ -221,22 +240,17 @@ mod tests {
     }
 
     #[test]
-    fn validate_env_requires_only_required_variables() {
+    fn check_env_looks_up_every_allowed_name() {
         let get = |name: &str| (name == "PORT").then(|| "8080".to_string());
-        let check = |required: &[&str], optional: &[&str]| {
-            let [required, optional] =
-                [required, optional].map(|v| v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-            validate_env(&required, &optional, get)
+        let check = |entries: &[&str]| {
+            let entries = entries.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            check_env(&parse_allowed_envs(&entries)?, get)
         };
-        assert!(check(&["PORT:int(1..=65535)", "PORT"], &[]).is_ok());
-        assert!(check(&["PORT:int(1..=1024)"], &[]).is_err());
-        assert!(check(&["PORT:int", "HOST"], &[]).is_err());
-        assert!(check(&["PORT:string"], &[]).is_err());
-
-        assert!(check(&[], &["PORT:int(1..=65535)", "HOST:/a/"]).is_ok());
-        assert!(check(&[], &["PORT:int(1..=1024)"]).is_err());
-        assert!(check(&[], &["HOST:string"]).is_err());
-        assert!(check(&["PORT:int(8080)"], &["PORT:int(1..=1024)"]).is_err());
+        assert!(check(&["PORT: int(1..=65535)", "PORT", "HOST", "N: int?"]).is_ok());
+        assert!(check(&["PORT: int(1..=1024)"]).is_err());
+        assert!(check(&["PORT: int", "HOST: /.+/"]).is_err());
+        assert!(check(&["PORT: int(8080)", "PORT: int(1..=1024)"]).is_err());
+        assert!(check(&["PORT: string"]).is_err());
     }
 
     /// Round-trip through systemd's own parser; skipped without a user manager.

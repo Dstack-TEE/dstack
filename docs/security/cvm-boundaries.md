@@ -133,7 +133,7 @@ This file is not measured to RTMRs, and the envelope is not bound to an instance
 
 #### Environment value specs
 
-Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional. The CVM refuses to boot when the value of `NAME` does not match the spec. A spec is one of:
+Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional. The CVM refuses to boot when the value of `NAME` does not match the spec. A variable that is not set counts as empty, so `NAME` is required unless its spec accepts the empty string, as one ending in `?` does. A spec is one of:
 
 | Spec | Accepts |
 |------|---------|
@@ -147,7 +147,7 @@ Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..
 
 A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A trailing `?` makes any spec accept the empty string as well. A spec is at most 4096 bytes. In a regex, `\d` and `\w` also match non-ASCII digits and letters; write `[0-9]` and `[A-Za-z0-9_]` for ASCII only. A name listed more than once must match every spec given for it.
 
-`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. Variables given as `NAME: spec` arguments must be set and match; `--compose` adds the `allowed_envs` specs of an app compose file, which apply only to the variables that are set. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
+`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. It checks `NAME: spec` arguments, plus the `allowed_envs` specs of an app compose file given with `--compose`, the same way the boot does. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
 
 ```bash
 PORT=$(jq -r .port /dstack/.host-shared/.user-config)
