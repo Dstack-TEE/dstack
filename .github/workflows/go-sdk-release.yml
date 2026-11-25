@@ -45,12 +45,12 @@ jobs:
       # The simulator is built from the dstack workspace; without the cache
       # this build is most of the job's wall time.
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: dstack
 
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           # The `go` directive in the released sdk/go/dstack/go.mod. sdk/go/ratls
           # and sdk/go/tappd ask for 1.24, so this one toolchain covers all
