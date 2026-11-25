@@ -112,13 +112,13 @@ enum Commands {
 
 #[derive(Parser)]
 struct ValidateEnvArgs {
-    /// App compose file whose `allowed_envs` specs apply to the variables that are set
+    /// App compose file whose `allowed_envs` specs also apply
     #[arg(long)]
     compose: Option<PathBuf>,
     /// JSON object mapping variable names to values, checked instead of the environment
     #[arg(long)]
     env_file: Option<PathBuf>,
-    /// Variables that must be set, as `NAME: spec` or `NAME`
+    /// Specs to check, as `NAME: spec`; an unset variable counts as empty
     #[arg(required_unless_present = "compose")]
     specs: Vec<String>,
 }
@@ -151,15 +151,15 @@ fn load_allowed_envs(path: &Path) -> Result<Vec<String>> {
 
 fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
     let envs = args.env_file.as_deref().map(load_envs).transpose()?;
-    let allowed = args.compose.as_deref().map(load_allowed_envs).transpose()?;
-    parse_env_file::validate_env(
-        &args.specs,
-        &allowed.unwrap_or_default(),
-        |name| match &envs {
-            Some(envs) => envs.get(name).cloned(),
-            None => std::env::var(name).ok(),
-        },
-    )
+    let mut entries = args.specs;
+    if let Some(compose) = &args.compose {
+        entries.extend(load_allowed_envs(compose)?);
+    }
+    let allowed = parse_env_file::parse_allowed_envs(&entries)?;
+    parse_env_file::check_env(&allowed, |name| match &envs {
+        Some(envs) => envs.get(name).cloned(),
+        None => std::env::var(name).ok(),
+    })
 }
 
 #[derive(Parser)]
@@ -780,8 +780,8 @@ fn cmd_exec_with_env(args: ExecWithEnvArgs) -> Result<()> {
 
     let envs = load_envs(&args.env_file)?;
     if let Some(compose) = &args.compose {
-        let allowed = load_allowed_envs(compose)?;
-        parse_env_file::validate_env(&[], &allowed, |name| envs.get(name).cloned())?;
+        let allowed = parse_env_file::parse_allowed_envs(&load_allowed_envs(compose)?)?;
+        parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
     }
     let (program, program_args) = args.command.split_first().context("no command given")?;
     let err = std::process::Command::new(program)
