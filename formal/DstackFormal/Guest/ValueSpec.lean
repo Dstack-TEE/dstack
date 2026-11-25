@@ -27,8 +27,8 @@ Assumptions: `BigDecimal`'s ordering is a parameter `lt` required to be
 transitive.
 Modeling gaps: a text is a sign and a list of digit values, so ASCII decoding
 and non-digit characters are not modeled; `i128::to_string` is modeled as
-`renderInt`; the `float` grammar, the spec syntax (the winnow parser) and
-regexes are not modeled. An accepted `float` range between two bounds may
+`renderInt`; the `float` grammar, the spec syntax (the winnow parser), the
+trailing `?` that also accepts the empty string and regexes are not modeled. An accepted `float` range between two bounds may
 still hold no decimal of at most `MAX_NUMBER_LEN` bytes.
 -/
 
