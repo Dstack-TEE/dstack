@@ -37,7 +37,7 @@ This is the main configuration file for the application in JSON format:
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
 | public_sysinfo | 0.3.3 | boolean | Whether system info is public. Covers the guest dashboard and `/metrics`, including the `dstack_gpu_*` series (since 0.6.0), which expose each GPU's UUID and PCI bus address alongside utilization, memory, temperature and power. |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
-| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names. An entry may be `NAME:spec` to also constrain the value, see [Environment value specs](#environment-value-specs). |
+| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names. An entry may be `NAME: spec` to also constrain the value, see [Environment value specs](#environment-value-specs). |
 | no_instance_id | 0.4.2 | boolean | Disable instance ID generation |
 | secure_time | 0.5.0 | boolean | Whether secure time is enabled |
 | pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before `docker compose up`. It runs *after* dockerd, so containers restored by a Docker restart policy can already be running when it executes. Do not build security gates on it — see [security-best-practices.md](./security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first). |
@@ -133,7 +133,7 @@ This file is not measured to RTMRs, and the envelope is not bound to an instance
 
 #### Environment value specs
 
-Since 0.6.7, an `allowed_envs` entry may be `NAME:spec`. The CVM refuses to boot when the value of `NAME` does not match the spec. A spec is one of:
+Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional. The CVM refuses to boot when the value of `NAME` does not match the spec. A spec is one of:
 
 | Spec | Accepts |
 |------|---------|
@@ -147,18 +147,18 @@ Since 0.6.7, an `allowed_envs` entry may be `NAME:spec`. The CVM refuses to boot
 
 A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A trailing `?` makes any spec accept the empty string as well. A name listed more than once must match every spec given for it.
 
-`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. Variables given as `NAME:spec` arguments must be set and match; `--compose` adds the `allowed_envs` specs of an app compose file, which apply only to the variables that are set. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
+`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. Variables given as `NAME: spec` arguments must be set and match; `--compose` adds the `allowed_envs` specs of an app compose file, which apply only to the variables that are set. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
 
 ```bash
 PORT=$(jq -r .port /dstack/.host-shared/.user-config)
-PORT=$PORT dstack-util validate-env 'PORT:int(1024..=65535)' || exit 1
+PORT=$PORT dstack-util validate-env 'PORT: int(1024..=65535)' || exit 1
 
 dstack-util validate-env --compose /dstack/app-compose.json --env-file /dstack/.host-shared/.user-config || exit 1
 ```
 
 `app-compose.service` passes `--compose /dstack/app-compose.json` to `dstack-util exec-with-env`, so an `init_script` that rewrites `.decrypted-env.json` cannot hand the application a value that breaks an `allowed_envs` spec.
 
-Guests older than 0.6.7 treat `NAME:spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.
+Guests older than 0.6.7 treat `NAME: spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.
 
 ### .user-config
 This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/.host-shared/.user-config without any measurement or additional processing, unless `requirements.launch_token_hash` is set in app-compose.json — in that case the guest reads the launch token from JSON path `dstack.launch_token` in this file and fails closed at boot, before key provisioning, unless its SHA-256 matches the pinned hash.

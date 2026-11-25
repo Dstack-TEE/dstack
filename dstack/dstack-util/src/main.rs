@@ -118,7 +118,7 @@ struct ValidateEnvArgs {
     /// JSON object mapping variable names to values, checked instead of the environment
     #[arg(long)]
     env_file: Option<PathBuf>,
-    /// Variables that must be set, as `NAME:spec` or `NAME`
+    /// Variables that must be set, as `NAME: spec` or `NAME`
     #[arg(required_unless_present = "compose")]
     specs: Vec<String>,
 }
