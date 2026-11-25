@@ -9,9 +9,9 @@ inventory used by a build.
 
 The backend builds the same dstack services plus the pinned Yocto component
 set: Linux 6.18, NVIDIA 595.91.07 (open modules, userspace, firmware, Fabric
-Manager and NSCQ), nvattest 2026.11.23 with the OCSP-freshness patch, OpenZFS
-2.4.0, Sysbox 0.7.2, NVIDIA Container Toolkit, nerdctl, CNI plugins and
-stargz-snapshotter 0.18.2.
+Manager and NSCQ), nvattest 2026.11.23 (newer than Yocto's 2026.06.09) with
+the OCSP-freshness patch, OpenZFS 2.4.0, Sysbox 0.7.2, NVIDIA Container
+Toolkit, nerdctl, CNI plugins and stargz-snapshotter 0.18.2.
 
 The kernel tracks the same series as the deprecated Yocto backend
 (`PREFERRED_VERSION_linux-yocto` in `meta-dstack`), which `tests/acceptance.sh`
