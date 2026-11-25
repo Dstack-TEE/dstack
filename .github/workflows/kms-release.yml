@@ -116,7 +116,7 @@ jobs:
             "https://ghcr.io/v2/dstack-tee/dstack-kms/manifests/$IMAGE_DIGEST"
 
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
           subject-name: "ghcr.io/dstack-tee/dstack-kms"
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
