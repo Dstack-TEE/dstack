@@ -44,13 +44,13 @@ struct Data {
 /// The specs each allowed name's value must match.
 pub type AllowedEnvs = BTreeMap<String, Vec<ValueSpec>>;
 
-/// Parses `allowed_envs` entries, each a name optionally followed by `:` and a
-/// value spec.
+/// Parses `allowed_envs` entries, each a name optionally followed by `:`,
+/// optional whitespace and a value spec.
 pub fn parse_allowed_envs(entries: &[String]) -> Result<AllowedEnvs> {
     let mut allowed = AllowedEnvs::new();
     for entry in entries {
         let (name, spec) = match entry.split_once(':') {
-            Some((name, spec)) => (name, Some(spec)),
+            Some((name, spec)) => (name, Some(spec.trim_start())),
             None => (entry.as_str(), None),
         };
         let spec = spec
@@ -208,14 +208,14 @@ mod tests {
             assert!(parse(&allowed, &[("N", "9")]).is_ok());
             assert!(parse(&allowed, &[("N", "10")]).is_err());
         }
-        let allowed = ["N:int(0..=9)", "N:int(5..)"];
+        let allowed = ["N: int(0..=9)", "N:  int(5..)"];
         assert!(parse(&allowed, &[("N", "5")]).is_ok());
         assert!(parse(&allowed, &[("N", "4")]).is_err());
     }
 
     #[test]
     fn invalid_specs_are_rejected() {
-        for entry in ["A:", "A:int(", "A:string", "A:int:int"] {
+        for entry in ["A:", "A: ", "A:int(", "A:string", "A:int:int", "A: int "] {
             assert!(parse(&[entry], &[]).is_err(), "{entry}");
         }
     }

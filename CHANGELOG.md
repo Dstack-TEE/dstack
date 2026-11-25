@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`allowed_envs` entries can constrain values.** An entry may be `NAME:spec`,
-  such as `PORT:int(1..=65535)` or `NETWORK:/mainnet|testnet/`, and the guest
+- **`allowed_envs` entries can constrain values.** An entry may be `NAME: spec`,
+  such as `PORT: int(1..=65535)` or `NETWORK: /mainnet|testnet/`, and the guest
   refuses to boot when a value does not match. `dstack-util validate-env`
   applies the same specs from an `init_script`. See
   [Environment value specs](docs/security/cvm-boundaries.md#environment-value-specs).
