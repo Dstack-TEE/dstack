@@ -1148,3 +1148,381 @@ describe('RPC quorum', () => {
     }
   });
 });
+
+describe('delegated app authorization', () => {
+  const CURRENT_HASH = '0x' + 'aa'.repeat(32);
+  const LATEST_HASH = '0x' + 'bb'.repeat(32);
+  const GATEWAY = 'chain-gateway';
+  const ZERO_HASH = '0x' + '00'.repeat(32);
+  const launchTicketHash = 'ab'.repeat(32);
+  const userConfigHash = 'cd'.repeat(32);
+  const appId = '0x' + '11'.repeat(20);
+  // Key order and the uninterpreted userConfigHash must survive the forward.
+  // A re-serialized body would drop the unknown field and reorder the rest.
+  const rawBody = [
+    '{',
+    `"userConfigHash":"${userConfigHash}",`,
+    `"launchTicketHash":"${launchTicketHash}",`,
+    '"operation":"app_get_key",',
+    '"teeVariant":"dstack-tdx",',
+    `"requestedRootEpoch":1,`,
+    `"appId":"${appId}",`,
+    `"composeHash":"${'22'.repeat(32)}",`,
+    '"instanceId":"",',
+    `"deviceId":"${'33'.repeat(32)}",`,
+    `"mrAggregated":"${'44'.repeat(32)}",`,
+    `"osImageHash":"${'66'.repeat(32)}"`,
+    '}',
+  ].join('');
+
+  type DelegateCall = {
+    url: string;
+    method: string;
+    body?: string;
+    redirect?: RequestRedirect;
+    cache?: RequestCache;
+  };
+  let calls: DelegateCall[];
+
+  const chainRoots = {
+    gatewayAppId: GATEWAY,
+    currentRootEpoch: 2,
+    currentRootEpochHash: CURRENT_HASH,
+    latestRootEpoch: 3,
+    latestRootEpochHash: LATEST_HASH,
+  };
+
+  function mockChain({ count = 4n, fail = false }: { count?: bigint; fail?: boolean } = {}) {
+    mockReadContract.mockImplementation((params) => {
+      if (fail) return Promise.reject(new Error('rpc down'));
+      switch (params.functionName) {
+        case 'gatewayAppId': return GATEWAY;
+        case 'rootEpochCount': return count;
+        case 'currentRootEpoch': return [2n, CURRENT_HASH];
+        case 'rootEpoch': return ['0x' + '11'.repeat(32), '0x' + '22'.repeat(32), 'evidence', LATEST_HASH];
+        case 'appImplementation': return '0x' + '99'.repeat(20);
+        case 'sevSnpTcbRequirements': return '[]';
+        case 'authorizeKms': return {
+          authorized: true, rejectionReason: '', gatewayAppId: GATEWAY,
+          currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: CURRENT_HASH,
+          latestRootEpoch: 3n, latestRootEpochHash: LATEST_HASH,
+        };
+        case 'isAppAllowed': return [true, 'on-chain'];
+        default: return Promise.reject(new Error(`unexpected contract call ${params.functionName}`));
+      }
+    });
+  }
+
+  function stubDelegate(handler: (call: DelegateCall) => Response | Promise<Response>) {
+    calls = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      const body = typeof init.body === 'string' || init.body == null
+        ? init.body ?? undefined
+        : await new Response(init.body).text();
+      const call: DelegateCall = {
+        url: String(url),
+        method: init.method ?? 'GET',
+        body,
+        redirect: init.redirect,
+        cache: init.cache,
+      };
+      calls.push(call);
+      return handler(call);
+    });
+  }
+
+  function delegateOk(extra: Record<string, unknown> = {}) {
+    return new Response(JSON.stringify({
+      authorized: true,
+      rejectionReason: '',
+      gatewayAppId: 'delegate-gateway',
+      currentRootEpoch: 9,
+      currentRootEpochHash: '0x' + 'ff'.repeat(32),
+      currentAppEpoch: 7,
+      latestRootEpoch: 9,
+      latestRootEpochHash: '0x' + 'ee'.repeat(32),
+      note: 'not-part-of-the-result',
+      ...extra,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+
+  async function load(url?: string) {
+    if (url === undefined) delete process.env.APP_AUTH_URL;
+    else process.env.APP_AUTH_URL = url;
+    vi.resetModules();
+    const mod = await import('./index.ts');
+    return mod.default.fetch as (request: Request) => Promise<Response>;
+  }
+
+  const postApp = (fetchApp: (request: Request) => Promise<Response>, body = rawBody) => fetchApp(new Request('http://localhost/authorizeApp', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+  }));
+
+  beforeEach(() => {
+    calls = [];
+    vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    delete process.env.APP_AUTH_URL;
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('keeps the chain path when APP_AUTH_URL is unset, even if the env appears later', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    process.env.APP_AUTH_URL = 'http://127.0.0.1:9';
+    mockReadContract.mockResolvedValueOnce({
+      authorized: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+      currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: CURRENT_HASH,
+      latestRootEpoch: 2n, latestRootEpochHash: CURRENT_HASH,
+    });
+    const response = await appFetch(new Request('http://localhost/authorizeApp', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        teeVariant: 'dstack-tdx', operation: 'app_get_key', appId,
+        composeHash: '0x' + '22'.repeat(32), instanceId: '', deviceId: '0x' + '33'.repeat(32),
+        mrAggregated: '0x' + '44'.repeat(32), osImageHash: '0x' + '66'.repeat(32),
+      }),
+    }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).rejectionReason).toBe('App not registered');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: 'authorizeApp' }));
+  });
+
+  it('forwards the authorizeApp body byte for byte and overwrites root fields from the pinned chain block', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9/delegate/');
+    const response = await postApp(fetchApp);
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{
+      url: 'http://127.0.0.1:9/delegate/authorizeApp',
+      method: 'POST',
+      body: rawBody,
+      redirect: 'error',
+      cache: 'no-store',
+    }]);
+    expect(await response.json()).toEqual({
+      authorized: true,
+      rejectionReason: '',
+      currentAppEpoch: 7,
+      ...chainRoots,
+    });
+    expect(mockReadContract).not.toHaveBeenCalledWith(expect.objectContaining({
+      functionName: 'authorizeApp',
+    }));
+    expect(mockReadContract).not.toHaveBeenCalledWith(expect.objectContaining({
+      functionName: 'currentAppEpoch',
+    }));
+    for (const params of mockReadContract.mock.calls.map((call) => call[0])) {
+      expect(params.blockHash).toBe(blockHash(98n));
+      expect(params.requireCanonical).toBe(true);
+    }
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: 'rootEpoch', args: [3n], blockHash: blockHash(98n),
+    }));
+
+    const info = await (await fetchApp(new Request('http://localhost/'))).json();
+    expect(info.gatewayAppId).toBe(GATEWAY);
+    expect(info.rootEpoch).toBe(2);
+    expect(info.rootEpochHash).toBe(CURRENT_HASH);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('keeps a delegate denial, including its app epoch, and still overwrites root fields', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk({
+      authorized: false, rejectionReason: 'compose hash is not allowed', currentAppEpoch: 4,
+    }));
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      authorized: false,
+      rejectionReason: 'compose hash is not allowed',
+      currentAppEpoch: 4,
+      ...chainRoots,
+    });
+  });
+
+  it('denies a requested root epoch newer than the current one without calling the delegate', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const newer = rawBody.replace('"requestedRootEpoch":1', '"requestedRootEpoch":3');
+    const denied = await postApp(fetchApp, newer);
+    expect(denied.status).toBe(200);
+    expect(await denied.json()).toEqual({
+      authorized: false,
+      rejectionReason: 'Requested root epoch is not active',
+      currentAppEpoch: 0,
+      ...chainRoots,
+    });
+    expect(calls).toEqual([]);
+
+    const current = rawBody.replace('"requestedRootEpoch":1', '"requestedRootEpoch":2');
+    expect((await postApp(fetchApp, current)).status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toBe(current);
+  });
+
+  it('denies app authorization when no root epoch is registered, without calling the delegate', async () => {
+    mockChain({ count: 0n });
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      authorized: false,
+      rejectionReason: 'Root epoch not registered',
+      gatewayAppId: GATEWAY,
+      currentRootEpoch: 0,
+      currentRootEpochHash: ZERO_HASH,
+      currentAppEpoch: 0,
+      latestRootEpoch: 0,
+      latestRootEpochHash: ZERO_HASH,
+    });
+    expect(calls).toEqual([]);
+    expect(mockReadContract).not.toHaveBeenCalledWith(expect.objectContaining({ functionName: 'currentRootEpoch' }));
+    expect(mockReadContract).not.toHaveBeenCalledWith(expect.objectContaining({ functionName: 'rootEpoch' }));
+  });
+
+  it('denies a KMS operation on /authorizeApp without calling the delegate', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp, rawBody.replace('app_get_key', 'kms_serve'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      authorized: false,
+      rejectionReason: 'Invalid authorization operation',
+      currentAppEpoch: 0,
+      ...chainRoots,
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ['network', () => { throw new TypeError('connect ECONNREFUSED'); }, 'app authorization delegate unavailable'],
+    ['timeout', () => { throw new DOMException('The operation was timed out', 'TimeoutError'); }, 'app authorization delegate timed out'],
+    ['HTTP error', () => new Response('super-secret-policy', { status: 502 }), 'app authorization delegate returned HTTP 502'],
+    ['invalid JSON', () => new Response('not-json', { status: 200 }), 'app authorization delegate returned invalid JSON'],
+    ['invalid shape', () => new Response('{"authorized":true}', { status: 200 }), 'app authorization delegate returned an invalid response'],
+    ['oversized', () => new Response('{}', { status: 200, headers: { 'content-length': String(128 * 1024) } }), 'app authorization delegate response is too large'],
+  ])('fails closed when the delegate returns %s', async (_label, respond, reason) => {
+    mockChain();
+    stubDelegate(respond);
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp);
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data).toEqual({
+      authorized: false,
+      rejectionReason: reason,
+      currentAppEpoch: 0,
+      ...chainRoots,
+    });
+    expect(JSON.stringify(data)).not.toContain('super-secret-policy');
+  });
+
+  it('does not call the delegate when the chain cannot supply root fields', async () => {
+    mockChain({ fail: true });
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp);
+    expect(response.status).toBe(503);
+    expect(calls).toEqual([]);
+  });
+
+  it('rejects an invalid authorizeApp body before calling the delegate', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp, '{"operation":"app_get_key"}');
+    expect(response.status).toBe(400);
+    expect(calls).toEqual([]);
+    expect(mockReadContract).not.toHaveBeenCalled();
+  });
+
+  it('leaves KMS authorization, boot, and TCB requirements on chain', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const kms = await fetchApp(new Request('http://localhost/authorizeKms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: rawBody.replace('app_get_key', 'kms_serve'),
+    }));
+    expect(kms.status).toBe(200);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: 'authorizeKms' }));
+
+    mockReadContract.mockClear();
+    mockChain();
+    const boot = await fetchApp(new Request('http://localhost/bootAuth/app', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appId, composeHash: '0x' + '22'.repeat(32), instanceId: '0x' + '33'.repeat(20),
+        deviceId: '0x' + '44'.repeat(32), mrAggregated: '0x' + '55'.repeat(32),
+        osImageHash: '0x' + '66'.repeat(32),
+        rootEpoch: 2, rootEpochHash: CURRENT_HASH,
+      }),
+    }));
+    expect(boot.status).toBe(200);
+    expect(await boot.json()).toMatchObject({ isAllowed: true, reason: 'on-chain' });
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: 'isAppAllowed' }));
+
+    const tcb = await fetchApp(new Request('http://localhost/sevSnpTcbRequirements'));
+    expect(await tcb.json()).toEqual({ requirements: '[]' });
+    expect(calls).toEqual([]);
+  });
+
+  it('forwards GET /app/:appId and fails closed instead of inventing an epoch', async () => {
+    stubDelegate((call) => {
+      if (call.url.endsWith('/app/' + '0xAb' + 'cd'.repeat(19))) {
+        return new Response(JSON.stringify({ currentAppEpoch: 5, extra: true }), { status: 200 });
+      }
+      return new Response('nope', { status: 500 });
+    });
+    const fetchApp = await load('http://127.0.0.1:9/delegate');
+    const appIdPath = '0xAb' + 'cd'.repeat(19);
+    const ok = await fetchApp(new Request(`http://localhost/app/${appIdPath}`));
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ currentAppEpoch: 5 });
+    expect(calls[0]).toMatchObject({ url: `http://127.0.0.1:9/delegate/app/${appIdPath}`, method: 'GET' });
+    expect(mockReadContract).not.toHaveBeenCalled();
+
+    const failed = await fetchApp(new Request(`http://localhost/app/0x${'12'.repeat(20)}`));
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).not.toHaveProperty('currentAppEpoch');
+
+    const invalid = await fetchApp(new Request('http://localhost/app/not-an-id'));
+    expect(invalid.status).toBe(400);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('refuses to start when APP_AUTH_URL is not an absolute http(s) URL', async () => {
+    process.env.APP_AUTH_URL = 'file:///tmp/auth';
+    vi.resetModules();
+    await expect(import('./index.ts')).rejects.toThrow(/APP_AUTH_URL/);
+  });
+
+  it('treats a blank APP_AUTH_URL as unset and rejects credentials in the URL', async () => {
+    delete process.env.APP_AUTH_URL;
+    vi.resetModules();
+    const { parseAppAuthUrl } = await import('./index.ts');
+    expect(parseAppAuthUrl(undefined)).toBeUndefined();
+    expect(parseAppAuthUrl('   ')).toBeUndefined();
+    expect(parseAppAuthUrl('http://127.0.0.1:9/delegate/')).toBe('http://127.0.0.1:9/delegate');
+    expect(() => parseAppAuthUrl('http://user:pass@127.0.0.1:9')).toThrow(/credentials/);
+  });
+
+  it('returns a delegate failure before the KMS webhook timeout', async () => {
+    delete process.env.APP_AUTH_URL;
+    vi.resetModules();
+    const { APP_AUTH_TIMEOUT_MS } = await import('./index.ts');
+    expect(APP_AUTH_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(APP_AUTH_TIMEOUT_MS).toBeLessThan(60_000);
+  });
+});

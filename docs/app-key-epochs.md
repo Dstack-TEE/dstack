@@ -38,10 +38,12 @@ without this capability remain at zero; failures of an advertised getter propaga
 The Ethereum auth backends query the policy through the KMS contract. The simple
 backend reads `apps[appId].currentAppEpoch` (default zero); operators must preserve
 its monotonicity. Public encryption-key lookup uses `GET /app/:appId` to read this
-value. auth-eth reads it at the `latest` block, so a new app gets its key at
-once and an advanced epoch never hands out the retired key; key release
-still reads the policy block, so an environment sealed to a just-advanced epoch
-boots only once the advance reaches that block. Legacy boot authorization and
+value. With `APP_AUTH_URL` unset, auth-eth reads it at the `latest` block, so a
+new app gets its key at once and an advanced epoch never hands out the retired
+key. When `APP_AUTH_URL` is set, that service answers `GET /app/:appId` and owns
+the epoch's freshness. Key release still reads the policy block, so an
+environment sealed to a just-advanced epoch boots only once the advance reaches
+that block. Legacy boot authorization and
 legacy environment public-key issuance are rejected once the app epoch is nonzero,
 preventing old clients from silently continuing with epoch-zero keys.
 

@@ -174,7 +174,7 @@ client can choose the `remote` that the logs and the key release audit record.
    - Chain interface for permission checks
    - Two-step validation:
      1. KMS control contract check
-     2. App control contract check
+     2. App control contract check, or an external app-authorization service when `APP_AUTH_URL` is set ([delegated app authorization](auth-eth/README.md#delegated-app-authorization))
 
 3. **Authorization Contracts** ([`auth-eth`](auth-eth/))
    - `DstackKms.sol`

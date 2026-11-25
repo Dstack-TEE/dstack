@@ -57,6 +57,17 @@ const BootResponseSchema = z.object({
 // keys of epochs 0..=rootEpoch; both absent when none is registered.
 type RootEpochInfo = { rootEpoch?: number; rootEpochHash?: Hex };
 
+const ZERO_ROOT_HASH = `0x${'00'.repeat(32)}` as Hex;
+
+type AuthorizationRoots = {
+  gatewayAppId: string;
+  currentRootEpoch: number;
+  currentRootEpochHash: Hex;
+  latestRootEpoch: number;
+  latestRootEpochHash: Hex;
+  registered: boolean;
+};
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 
@@ -555,6 +566,56 @@ export class EthereumBackend {
     });
     return result as string;
   }
+
+  // Root fields of an AuthorizationResult, from the same pinned block GET / uses.
+  // Empty registry: zero epochs and hashes, and no call to currentRootEpoch, which reverts then.
+  async getAuthorizationRoots(): Promise<AuthorizationRoots> {
+    const block = await this.resolveBlock();
+    const gatewayAppId = await this.getGatewayAppId(block);
+    const count = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'rootEpochCount',
+      ...block.at,
+    });
+    if (count === 0n) {
+      return {
+        gatewayAppId,
+        currentRootEpoch: 0,
+        currentRootEpochHash: ZERO_ROOT_HASH,
+        latestRootEpoch: 0,
+        latestRootEpochHash: ZERO_ROOT_HASH,
+        registered: false,
+      };
+    }
+    const [epoch, chainHash] = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'currentRootEpoch',
+      ...block.at,
+    });
+    const latest = count - 1n;
+    const latestRoot = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'rootEpoch',
+      args: [latest],
+      ...block.at,
+    });
+    const currentRootEpoch = Number(epoch);
+    const latestRootEpoch = Number(latest);
+    if (!Number.isSafeInteger(currentRootEpoch) || !Number.isSafeInteger(latestRootEpoch)) {
+      throw new Error('root epoch exceeds the supported range');
+    }
+    return {
+      gatewayAppId,
+      currentRootEpoch,
+      currentRootEpochHash: chainHash,
+      latestRootEpoch,
+      latestRootEpochHash: latestRoot[3],
+      registered: true,
+    };
+  }
 }
 
 // initialize app
@@ -592,7 +653,159 @@ const ethereum = new EthereumBackend(
 );
 const ethRpcUrl = rpc.origins.join(',');
 
+// Stay under the KMS webhook timeout (60s) so a delegate failure still returns
+// the chain root fields before the KMS gives up on the call.
+export const APP_AUTH_TIMEOUT_MS = 20_000;
+const MAX_DELEGATE_RESPONSE_BYTES = 64 * 1024;
+const APP_OPERATIONS = new Set(['app_get_key', 'app_get_cert']);
+
+export function parseAppAuthUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error('APP_AUTH_URL must be an absolute http(s) URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('APP_AUTH_URL must be an absolute http(s) URL');
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error('APP_AUTH_URL must not include credentials');
+  }
+  if (url.search !== '' || url.hash !== '') {
+    throw new Error('APP_AUTH_URL must not include a query or fragment');
+  }
+  return url.toString().replace(/\/$/, '');
+}
+
+const appAuthBase = parseAppAuthUrl(process.env.APP_AUTH_URL);
 const backendUnavailable = 'authorization backend unavailable';
+
+type DelegateCall = { ok: true; body: string } | { ok: false; reason: string };
+
+function delegateTimedOut(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
+async function callDelegate(url: string, init: { method: string; body?: string }): Promise<DelegateCall> {
+  try {
+    const response = await fetch(url, {
+      method: init.method,
+      body: init.body,
+      headers: init.body === undefined ? undefined : { 'content-type': 'application/json' },
+      redirect: 'error',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(APP_AUTH_TIMEOUT_MS),
+    });
+    const length = response.headers.get('content-length');
+    if (length !== null && /^(?:0|[1-9][0-9]*)$/.test(length) && Number(length) > MAX_DELEGATE_RESPONSE_BYTES) {
+      await response.body?.cancel();
+      return failedDelegate('app authorization delegate response is too large');
+    }
+    const body = await response.text();
+    if (body.length > MAX_DELEGATE_RESPONSE_BYTES) {
+      return failedDelegate('app authorization delegate response is too large');
+    }
+    if (!response.ok) {
+      return failedDelegate(`app authorization delegate returned HTTP ${response.status}`);
+    }
+    return { ok: true, body };
+  } catch (err) {
+    if (delegateTimedOut(err)) return failedDelegate('app authorization delegate timed out');
+    return failedDelegate('app authorization delegate unavailable');
+  }
+}
+
+function failedDelegate(reason: string): DelegateCall {
+  console.error(`app authorization delegate failed: ${reason}`);
+  return { ok: false, reason };
+}
+
+function isAppEpoch(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff;
+}
+
+function rootFields(roots: AuthorizationRoots) {
+  return {
+    gatewayAppId: roots.gatewayAppId,
+    currentRootEpoch: roots.currentRootEpoch,
+    currentRootEpochHash: roots.currentRootEpochHash,
+    latestRootEpoch: roots.latestRootEpoch,
+    latestRootEpochHash: roots.latestRootEpochHash,
+  };
+}
+
+function appDenial(roots: AuthorizationRoots, rejectionReason: string) {
+  return { authorized: false, rejectionReason, currentAppEpoch: 0, ...rootFields(roots) };
+}
+
+function parseDelegatedAuthorization(body: string): {
+  authorized: boolean;
+  rejectionReason: string;
+  currentAppEpoch: number;
+} | 'invalid-json' | 'invalid-shape' {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return 'invalid-json';
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid-shape';
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.authorized !== 'boolean' || typeof record.rejectionReason !== 'string' || !isAppEpoch(record.currentAppEpoch)) {
+    return 'invalid-shape';
+  }
+  return {
+    authorized: record.authorized,
+    rejectionReason: record.rejectionReason,
+    currentAppEpoch: record.currentAppEpoch,
+  };
+}
+
+async function delegatedAppAuthorization(request: AuthorizationRequest, rawBody: string): Promise<{ status: 200 | 503; body: unknown }> {
+  let roots: AuthorizationRoots;
+  try {
+    roots = await ethereum.getAuthorizationRoots();
+  } catch {
+    console.error('authorization backend failed');
+    return { status: 503, body: { status: 'error', message: backendUnavailable } };
+  }
+  if (!APP_OPERATIONS.has(request.operation)) {
+    return { status: 200, body: appDenial(roots, 'Invalid authorization operation') };
+  }
+  if (!roots.registered) {
+    return { status: 200, body: appDenial(roots, 'Root epoch not registered') };
+  }
+  if (request.requestedRootEpoch !== undefined && request.requestedRootEpoch > roots.currentRootEpoch) {
+    return { status: 200, body: appDenial(roots, 'Requested root epoch is not active') };
+  }
+  if (!appAuthBase) {
+    console.error('app authorization delegate is not configured');
+    return { status: 503, body: { status: 'error', message: backendUnavailable } };
+  }
+  const delegated = await callDelegate(`${appAuthBase}/authorizeApp`, { method: 'POST', body: rawBody });
+  if (!delegated.ok) return { status: 200, body: appDenial(roots, delegated.reason) };
+  const parsed = parseDelegatedAuthorization(delegated.body);
+  if (parsed === 'invalid-json') {
+    return { status: 200, body: appDenial(roots, 'app authorization delegate returned invalid JSON') };
+  }
+  if (parsed === 'invalid-shape') {
+    return { status: 200, body: appDenial(roots, 'app authorization delegate returned an invalid response') };
+  }
+  return {
+    status: 200,
+    body: {
+      authorized: parsed.authorized,
+      rejectionReason: parsed.rejectionReason,
+      currentAppEpoch: parsed.currentAppEpoch,
+      ...rootFields(roots),
+    },
+  };
+}
+
 const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
 const invalidAuthorization = {
   authorized: false,
@@ -666,6 +879,21 @@ app.get('/', async (c) => {
 app.get('/app/:appId', async (c) => {
   const appId = c.req.param('appId');
   if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  if (appAuthBase) {
+    const delegated = await callDelegate(`${appAuthBase}/app/${appId}`, { method: 'GET' });
+    if (!delegated.ok) return c.json({ error: delegated.reason }, 503);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(delegated.body);
+    } catch {
+      return c.json({ error: 'app authorization delegate returned invalid JSON' }, 503);
+    }
+    const epoch = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).currentAppEpoch
+      : undefined;
+    if (!isAppEpoch(epoch)) return c.json({ error: 'app authorization delegate returned an invalid response' }, 503);
+    return c.json({ currentAppEpoch: epoch });
+  }
   try {
     return c.json({ currentAppEpoch: await ethereum.getAppEpoch(appId) });
   } catch {
@@ -703,6 +931,12 @@ for (const method of ['authorizeKms', 'authorizeApp'] as const) {
       if (!result.success) return c.json(invalidAuthorization, 400);
     }),
     async (c) => {
+      if (method === 'authorizeApp' && appAuthBase) {
+        // The validator already consumed the body as JSON; text() is that same
+        // cached string, so fields this server does not interpret are unchanged.
+        const result = await delegatedAppAuthorization(c.req.valid('json'), await c.req.text());
+        return c.json(result.body, result.status);
+      }
       try {
         return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));
       } catch (err) {
@@ -713,7 +947,9 @@ for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   );
 }
 
-// app boot authentication
+// Legacy app boot. Left on chain when APP_AUTH_URL is set: KMS builds since
+// 0.6.4 do not call it, and the response has no root-epoch fields to reconcile
+// with a delegate. Do not point a pre-0.6.4 KMS at a delegated deployment.
 app.post('/bootAuth/app',
   zValidator('json', BootInfoSchema, (result, c) => {
     if (!result.success) return c.json(invalidRequest, 400);

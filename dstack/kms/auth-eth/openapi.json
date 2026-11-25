@@ -133,6 +133,7 @@
     "/authorizeApp": {
       "post": {
         "summary": "Authorize a App identity and return the current root epoch",
+        "description": "When APP_AUTH_URL is unset, the decision is read from DstackKms. When it is set, the raw request body is forwarded to that service at the same path, including fields not in this schema. authorized, rejectionReason, and currentAppEpoch come from the delegate. gatewayAppId and the current and latest root epoch fields are overwritten from DstackKms at this request's pinned block. A requestedRootEpoch newer than the current root epoch is denied without calling the delegate. A delegate failure is HTTP 200 with authorized false and the chain root fields; it is not a 503.",
         "operationId": "authorizeApp",
         "requestBody": {
           "required": true,
@@ -164,6 +165,7 @@
     "/app/{appId}": {
       "get": {
         "summary": "Read the current application key epoch",
+        "description": "When APP_AUTH_URL is unset, the epoch is read from DstackKms at latest. When it is set, the request is forwarded to that service at the same path. A delegate failure is 503 and does not fall back to the chain or to epoch 0.",
         "parameters": [
           {
             "name": "appId",
