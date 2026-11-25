@@ -9,7 +9,7 @@ const { runInNewContext } = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const { CipherSuite, Aes256Gcm, HkdfSha256 } = require('@hpke/core');
 const { DhkemX25519HkdfSha256 } = require('@hpke/dhkem-x25519');
-const { encryptEnvPayload } = require('../build/ts/lib/envEncryption.js');
+const { encryptEnvPayload, mergeAllowedEnvs } = require('../build/ts/lib/envEncryption.js');
 const { RpcError } = require('../build/ts/lib/vmmRpcClient.js');
 const { vmm } = require('../build/ts/proto/vmm_rpc.js');
 const { prpc } = require('../build/ts/proto/prpc.js');
@@ -57,6 +57,31 @@ test('seals JSON bytes with HPKE, binds epoch, and rejects tampering', async () 
     modified.ciphertext = ct.toString('base64');
     await assert.rejects(open(pair, new TextEncoder().encode(JSON.stringify(modified))));
   }
+});
+
+test('value specs go to allowed_envs and never into the encrypted payload', async () => {
+  const withSpecs = [{ key: 'PORT', value: '8080', spec: ' int(1..=65535) ' }, { key: 'TOKEN', value: 't', spec: '' }];
+  assert.deepEqual(mergeAllowedEnvs([], withSpecs), ['PORT: int(1..=65535)', 'TOKEN']);
+  assert.deepEqual(mergeAllowedEnvs([], envs), ['GREETING']);
+  const existing = ['OLD', 'NET:/main|test/', 'PORT: int', 'PORT: int(1..)'];
+  assert.deepEqual(mergeAllowedEnvs(existing, withSpecs), ['NET:/main|test/', 'PORT: int(1..=65535)', 'TOKEN']);
+  assert.deepEqual(
+    mergeAllowedEnvs(existing, [{ key: 'TOKEN', value: 't' }, { key: 'PORT', value: '1' }]),
+    ['NET:/main|test/', 'PORT: int', 'PORT: int(1..)', 'TOKEN'],
+  );
+
+  const { pair, response } = await recipient();
+  const payload = await encryptEnvPayload({
+    getSealedEnvPubKey: async () => response,
+    getAppEnvEncryptPubKey: noLegacy,
+  }, withSpecs, appId, noLegacy, true);
+  assert.deepEqual(await open(pair, payload.sealed_env), { env: withSpecs.map(({ key, value }) => ({ key, value })) });
+  let legacyEnvs;
+  await encryptEnvPayload({
+    getSealedEnvPubKey: noLegacy,
+    getAppEnvEncryptPubKey: async () => ({ public_key: new Uint8Array(32) }),
+  }, withSpecs, appId, async (given) => { legacyEnvs = given; return new Uint8Array(); }, false);
+  assert.deepEqual(legacyEnvs, withSpecs.map(({ key, value }) => ({ key, value })));
 });
 
 test('old or unknown images use legacy encryption even with a capable KMS', async () => {
