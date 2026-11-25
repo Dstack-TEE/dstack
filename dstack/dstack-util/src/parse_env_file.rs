@@ -62,6 +62,32 @@ pub fn parse_allowed_envs(entries: &[String]) -> Result<AllowedEnvs> {
     Ok(allowed)
 }
 
+fn check_value(name: &str, value: &str, specs: &[ValueSpec]) -> Result<()> {
+    if !specs.iter().all(|spec| spec.matches(value)) {
+        bail!("value of env {name} does not match its spec");
+    }
+    Ok(())
+}
+
+/// Checks variables against `allowed_envs`-style entries. Those named by
+/// `required` must be set; those named by `optional` are checked when set.
+pub fn validate_env(
+    required: &[String],
+    optional: &[String],
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
+    for (name, specs) in parse_allowed_envs(optional)? {
+        if let Some(value) = get(&name) {
+            check_value(&name, &value, &specs)?;
+        }
+    }
+    for (name, specs) in parse_allowed_envs(required)? {
+        let value = get(&name).with_context(|| format!("env {name} is not set"))?;
+        check_value(&name, &value, &specs)?;
+    }
+    Ok(())
+}
+
 pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<String, String>> {
     const MAX_ITEMS: usize = 1024;
     const MAX_TOTAL_SIZE: usize = 1024 * 1024;
@@ -99,9 +125,7 @@ pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<Stri
             bail!("Invalid env key: {}", key);
         }
 
-        if !specs.iter().all(|spec| spec.matches(&value)) {
-            bail!("value of env {key} does not match its spec");
-        }
+        check_value(&key, &value, specs)?;
 
         total_size += key.len() + value.len();
         if total_size > MAX_TOTAL_SIZE {
@@ -194,6 +218,25 @@ mod tests {
         for entry in ["A:", "A:int(", "A:string", "A:int:int"] {
             assert!(parse(&[entry], &[]).is_err(), "{entry}");
         }
+    }
+
+    #[test]
+    fn validate_env_requires_only_required_variables() {
+        let get = |name: &str| (name == "PORT").then(|| "8080".to_string());
+        let check = |required: &[&str], optional: &[&str]| {
+            let [required, optional] =
+                [required, optional].map(|v| v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            validate_env(&required, &optional, get)
+        };
+        assert!(check(&["PORT:int(1..=65535)", "PORT"], &[]).is_ok());
+        assert!(check(&["PORT:int(1..=1024)"], &[]).is_err());
+        assert!(check(&["PORT:int", "HOST"], &[]).is_err());
+        assert!(check(&["PORT:string"], &[]).is_err());
+
+        assert!(check(&[], &["PORT:int(1..=65535)", "HOST:/a/"]).is_ok());
+        assert!(check(&[], &["PORT:int(1..=1024)"]).is_err());
+        assert!(check(&[], &["HOST:string"]).is_err());
+        assert!(check(&["PORT:int(8080)"], &["PORT:int(1..=1024)"]).is_err());
     }
 
     /// Round-trip through systemd's own parser; skipped without a user manager.
