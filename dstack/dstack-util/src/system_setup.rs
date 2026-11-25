@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::Display,
     io::Write as _,
     net::{Ipv4Addr, Ipv6Addr},
@@ -3435,13 +3435,8 @@ impl Stage1<'_> {
     }
 
     async fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
-        let allowed_envs: BTreeSet<String> = self
-            .shared
-            .app_compose
-            .allowed_envs
-            .iter()
-            .cloned()
-            .collect();
+        let allowed_envs =
+            crate::parse_env_file::parse_allowed_envs(&self.shared.app_compose.allowed_envs)?;
         let (decrypted_env, sealed) =
             if self.shared.sealed_env.is_none() && self.shared.encrypted_env.is_empty() {
                 info!("No encrypted env, using default");

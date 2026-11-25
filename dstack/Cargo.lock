@@ -2497,6 +2497,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "value-spec",
  "x25519-dalek 2.0.1",
  "x509-parser 0.16.0",
  "yaml-rust2",
