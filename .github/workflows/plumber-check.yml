@@ -32,6 +32,8 @@ jobs:
       actions: read
       # Lists the findings under code scanning.
       security-events: write
+      # Needed by score-push, no secret or token to store.
+      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,3 +49,7 @@ jobs:
           # Fail under 85 points. The default gate is 100, where any finding
           # fails.
           min-points: 85
+          # Publish the score and the repository name on score.getplumber.io,
+          # where the README badge reads them. Only pushes to next publish, a
+          # pull request never does.
+          score-push: ${{ github.event_name == 'push' }}
