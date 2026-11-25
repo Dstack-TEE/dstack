@@ -128,31 +128,38 @@ struct ExecWithEnvArgs {
     /// JSON object mapping variable names to values
     #[arg(long)]
     env_file: PathBuf,
+    /// App compose file whose `allowed_envs` specs the values must match
+    #[arg(long)]
+    compose: Option<PathBuf>,
     /// Command to exec, with its arguments
     #[arg(last = true, required = true)]
     command: Vec<String>,
 }
 
+type Envs = std::collections::BTreeMap<String, String>;
+
+fn load_envs(path: &Path) -> Result<Envs> {
+    utils::deserialize_json_file(path)
+        .with_context(|| format!("failed to load env from {}", path.display()))
+}
+
+fn load_allowed_envs(path: &Path) -> Result<Vec<String>> {
+    let compose: utils::AppCompose = utils::deserialize_json_file(path)
+        .with_context(|| format!("failed to load app compose from {}", path.display()))?;
+    Ok(compose.allowed_envs)
+}
+
 fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
-    let env: Option<std::collections::BTreeMap<String, String>> = args
-        .env_file
-        .map(|path| {
-            utils::deserialize_json_file(&path)
-                .with_context(|| format!("failed to load env from {}", path.display()))
-        })
-        .transpose()?;
-    let compose: Option<utils::AppCompose> = args
-        .compose
-        .map(|path| {
-            utils::deserialize_json_file(&path)
-                .with_context(|| format!("failed to load app compose from {}", path.display()))
-        })
-        .transpose()?;
-    let optional = compose.map(|c| c.allowed_envs).unwrap_or_default();
-    parse_env_file::validate_env(&args.specs, &optional, |name| match &env {
-        Some(env) => env.get(name).cloned(),
-        None => std::env::var(name).ok(),
-    })
+    let envs = args.env_file.as_deref().map(load_envs).transpose()?;
+    let allowed = args.compose.as_deref().map(load_allowed_envs).transpose()?;
+    parse_env_file::validate_env(
+        &args.specs,
+        &allowed.unwrap_or_default(),
+        |name| match &envs {
+            Some(envs) => envs.get(name).cloned(),
+            None => std::env::var(name).ok(),
+        },
+    )
 }
 
 #[derive(Parser)]
@@ -771,9 +778,11 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
 fn cmd_exec_with_env(args: ExecWithEnvArgs) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    let envs: std::collections::BTreeMap<String, String> =
-        utils::deserialize_json_file(&args.env_file)
-            .with_context(|| format!("failed to load env from {}", args.env_file.display()))?;
+    let envs = load_envs(&args.env_file)?;
+    if let Some(compose) = &args.compose {
+        let allowed = load_allowed_envs(compose)?;
+        parse_env_file::validate_env(&[], &allowed, |name| envs.get(name).cloned())?;
+    }
     let (program, program_args) = args.command.split_first().context("no command given")?;
     let err = std::process::Command::new(program)
         .args(program_args)
