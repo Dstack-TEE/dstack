@@ -49,12 +49,61 @@ The Bun server sets `idleTimeout` to 255s (Bun's maximum). Bun's default of 10s 
 
 ### Environment variables
 
-- `ETH_RPC_URL` - ethereum RPC endpoint (default: http://localhost:8545)
+- `ETH_RPC_URL` - ethereum RPC endpoint (required unless `ETH_RPC_URLS` is set)
+- `ETH_RPC_URLS` - several RPC endpoints separated by whitespace, in place of `ETH_RPC_URL`. see [multiple RPC providers](#multiple-rpc-providers)
+- `ETH_RPC_QUORUM` - `n/m`: every read must be answered alike by n of the m endpoints in `ETH_RPC_URLS`, and m must be their count (required with `ETH_RPC_URLS`)
 - `KMS_CONTRACT_ADDR` - KMS contract address (default: 0x0000000000000000000000000000000000000000)
 - `PORT` - server port (default: 3000)
 - `ETH_CHAIN_ID` - reject every decision if the RPC reports a different chain ID (default: unset, no check)
 - `ETH_BLOCK_TAG` - block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). each request resolves the tag to one block and reads all state there, except `GET /app/:appId`, which serves only the env public key RPCs and reads the app epoch at `latest`. the server resolves the tag once at startup and refuses to start if the RPC cannot serve it. a later tag delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). use `finalized` on L1. set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head. see [reorgs and the block tag](#reorgs-and-the-block-tag) before using `latest` or `safe`
 - `ETH_FINALITY_CONFIRMATIONS` - read this many blocks further behind the block `ETH_BLOCK_TAG` resolves to (default: 0)
+- `ETH_MAX_BLOCK_AGE` - reject every decision if the block read is older than this many seconds by the server clock (default: unset, no check; required with more than one RPC endpoint). it bounds how far providers that withhold new blocks can hold policy back; leave room for `ETH_BLOCK_TAG`, as `finalized` on Ethereum mainnet is already about 13 minutes old
+
+### Multiple RPC providers
+
+With one endpoint, whoever runs it decides what the KMS reads. `ETH_RPC_URLS`
+and `ETH_RPC_QUORUM=n/m` make n providers have to agree instead:
+
+```yaml
+environment:
+  ETH_RPC_URLS: |
+    https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}
+    https://mainnet.infura.io/v3/${INFURA_KEY}
+    https://ethereum-rpc.publicnode.com
+  ETH_RPC_QUORUM: 2/3
+  ETH_MAX_BLOCK_AGE: 1800
+```
+
+Each request resolves `ETH_BLOCK_TAG` to the highest block n providers have
+reached, less `ETH_FINALITY_CONFIRMATIONS`, and takes that block's hash from n
+providers that agree on it. Every contract read is then pinned to the hash and
+answered only with a result n providers return alike. A provider that fails,
+times out or reverts casts no vote, and without n votes the request fails
+closed. `ETH_RPC_URL` alone is the same path with `1/1`.
+
+- **Choosing n/m.** Forging a read takes n colluding providers and stopping
+  the server takes m-n+1, so `2/3` or `3/5` tolerates one or two outages while
+  `n/n` stops on the first. With `latest`, set `ETH_FINALITY_CONFIRMATIONS` to
+  1 or 2 so that providers a block apart still agree.
+- **Stale blocks.** The same m-n+1 providers, by lagging or by reporting an
+  old block, make the server read an earlier state of the chain, in which a
+  revoked policy is still in force. Only `ETH_MAX_BLOCK_AGE` bounds this, so
+  the server refuses to start with several endpoints and no such limit. The
+  bounds are proved in `formal/DstackFormal/Kms/RpcQuorum.lean`.
+- **Choosing providers.** Use endpoints whose origin serves one chain and
+  nothing a customer controls. A provider that selects a chain or a
+  user-defined fork by path or by key lets whoever supplies the key decide what
+  that endpoint answers. Origins must be distinct, but two that resell the same
+  upstream are still one provider.
+- **API keys.** The endpoint list and the quorum belong in the measured
+  compose file; the keys do not. `m` is stated apart from the list so that a
+  key cannot add an endpoint, and a key must not be able to leave its place in
+  the URL: in a dstack CVM, give it an `allowed_envs` spec such as
+  `ALCHEMY_KEY: /[A-Za-z0-9_-]{1,128}/` and deliver it through `.user-config`,
+  as `dstack-app/deploy-to-vmm.sh` does. Only the origin of an endpoint is ever
+  logged or served by `GET /`. Redirects are refused.
+- **Cost.** Every request costs m times the RPC calls, and a provider that
+  hangs holds each request up for the 10-second RPC timeout.
 
 ### Reorgs and the block tag
 
@@ -146,9 +195,12 @@ health check and system information
 
 `authApiInfo` is a JSON-encoded object the KMS forwards verbatim through its
 unauthenticated `GetMeta` RPC, so it carries public data only:
-`kmsContractAddr`, `chainId`, `appImplementation`, `ethRpcUrl`, `blockTag`
-(`ETH_BLOCK_TAG`), `finalityConfirmations` (`ETH_FINALITY_CONFIRMATIONS`) and
-`policyBlockNumber` (the block the policy was read at).
+`kmsContractAddr`, `chainId`, `appImplementation`, `ethRpcUrl` (the origins of
+the endpoints, joined by commas), `ethRpcUrls` (the same origins as an array),
+`rpcQuorum` (`ETH_RPC_QUORUM`), `blockTag`
+(`ETH_BLOCK_TAG`), `finalityConfirmations` (`ETH_FINALITY_CONFIRMATIONS`),
+`maxBlockAge` (`ETH_MAX_BLOCK_AGE`, when set) and `policyBlockNumber` (the
+block the policy was read at).
 
 #### POST /bootAuth/app
 application boot authentication
