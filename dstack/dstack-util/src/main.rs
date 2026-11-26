@@ -692,6 +692,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         cert_pair,
         get_keys_verifier()?,
         root_ca_pem.clone(),
+        &[],
     )
     .await
     .context("Failed to get app keys from the attested KMS")?;

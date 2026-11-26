@@ -2460,6 +2460,9 @@ impl HostShared {
             cert_pair,
             attestation_verifier(&self.sys_config)?,
             trusted_ca.clone(),
+            // Without a trusted CA, the handshake is pinned to this key before the
+            // launch ticket is sent.
+            &self.app_compose.key_provider_id,
         )
         .await
         .context("Failed to get app keys from the attested KMS")?;

@@ -269,6 +269,7 @@ impl AppState {
             cert_pair,
             verifier,
             Some(self.keys.ca_cert.clone()),
+            &[],
         )
         .await
         .with_context(|| {

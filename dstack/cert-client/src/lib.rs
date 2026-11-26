@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider, SysConfig};
-use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
+use ra_rpc::client::{CertInfo, PinnedIssuer, RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
     cert::{generate_self_signed_ra_cert, CaCert, CertPair, CertSigningRequestV2},
@@ -55,13 +55,20 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
 /// Callers retain the startup KMS CA for the CVM lifetime, including later key
 /// requests. Without a supplied CA, bind the response CA to this connection and
 /// establish its identity through the provider pin or launch-measurement policy.
+/// A non-empty `key_provider_id` is a root CA public key in SPKI DER form.
 pub async fn request_app_keys(
     url: String,
     request: GetAppKeyRequest,
     client_cert: CertPair,
     attestation_verifier: Arc<AttestationVerifier>,
     trusted_ca: Option<String>,
+    key_provider_id: &[u8],
 ) -> Result<AppKeyResponse> {
+    let pinned_issuer =
+        (trusted_ca.is_none() && !key_provider_id.is_empty()).then(|| PinnedIssuer {
+            pubkey: key_provider_id.to_vec(),
+            usage: KMS_RPC_CERT_USAGE.into(),
+        });
     let server_cert = Arc::new(Mutex::new(None));
     let captured = server_cert.clone();
     let client = RaClientConfig::builder()
@@ -69,6 +76,7 @@ pub async fn request_app_keys(
         .tls_client_cert(client_cert.cert_pem)
         .tls_client_key(client_cert.key_pem)
         .tls_skip_ca_verification(trusted_ca.is_none())
+        .maybe_tls_pinned_issuer(pinned_issuer)
         .tls_built_in_root_certs(false)
         .maybe_tls_ca_cert(trusted_ca.clone())
         .attestation_verifier(attestation_verifier)
@@ -659,6 +667,7 @@ mod tests {
         };
         let request = || GetAppKeyRequest {
             api_version: 1,
+            launch_ticket: "secret-ticket".into(),
             ..Default::default()
         };
         let result = request_app_keys(
@@ -667,6 +676,7 @@ mod tests {
             client_cert(),
             verifier.clone(),
             None,
+            &[],
         )
         .await
         .unwrap();
@@ -674,8 +684,37 @@ mod tests {
         assert_eq!(result.root_epoch, 1);
         let received = requests.lock().unwrap().last().unwrap().clone();
         assert_eq!((received.root_epoch, received.app_epoch), (None, None));
+        assert_eq!(received.launch_ticket, "secret-ticket");
 
-        let other_ca = kms_root().pem_cert;
+        let matching_pin = root.key.public_key_der();
+        let requests_before = requests.lock().unwrap().len();
+        assert!(request_app_keys(
+            url.clone(),
+            request(),
+            client_cert(),
+            verifier.clone(),
+            None,
+            &matching_pin,
+        )
+        .await
+        .is_ok());
+        assert_eq!(requests.lock().unwrap().len(), requests_before + 1);
+
+        let other_root = kms_root();
+        let requests_before = requests.lock().unwrap().len();
+        assert!(request_app_keys(
+            url.clone(),
+            request(),
+            client_cert(),
+            verifier.clone(),
+            None,
+            &other_root.key.public_key_der(),
+        )
+        .await
+        .is_err());
+        assert_eq!(requests.lock().unwrap().len(), requests_before);
+
+        let other_ca = other_root.pem_cert;
         for requested_root_epoch in [None, Some(0), Some(1)] {
             let request = || GetAppKeyRequest {
                 api_version: 1,
@@ -693,7 +732,8 @@ mod tests {
                 request(),
                 client_cert(),
                 verifier.clone(),
-                None
+                None,
+                &[],
             )
             .await
             .is_ok());
@@ -703,7 +743,8 @@ mod tests {
                 request(),
                 client_cert(),
                 verifier.clone(),
-                Some(other_ca.clone())
+                Some(other_ca.clone()),
+                &[],
             )
             .await
             .is_err());
@@ -720,6 +761,7 @@ mod tests {
                 client_cert(),
                 verifier.clone(),
                 Some(root.pem_cert.clone()),
+                &[],
             )
             .await
             .unwrap();
@@ -730,12 +772,13 @@ mod tests {
                 request(),
                 client_cert(),
                 verifier.clone(),
-                None
+                None,
+                &[],
             )
             .await
             .is_err());
         }
-        assert_eq!(requests.lock().unwrap().len(), 10);
+        assert_eq!(requests.lock().unwrap().len(), 11);
 
         let cert = client_cert();
         let client = CertRequestClient::Kms {
@@ -795,13 +838,13 @@ mod tests {
         *response_body.lock().unwrap() = serde_json::to_string(&response).unwrap();
         let production = Arc::new(AttestationVerifier::new_prod(None).unwrap());
         assert!(
-            request_app_keys(url, request(), client_cert(), production, None)
+            request_app_keys(url, request(), client_cert(), production, None, &[])
                 .await
                 .is_err()
         );
         shutdown.notify();
         task.await.unwrap().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 38);
+        assert_eq!(requests.lock().unwrap().len(), 39);
     }
 
     #[test]
