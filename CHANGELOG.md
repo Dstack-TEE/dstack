@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `update --env-file` no longer rewrites `allowed_envs` or `launch_token_hash`
   and refuses variables the compose does not allow or an `APP_LAUNCH_TOKEN` it
   does not pin; render them with `compose --env-file`, which now also writes
-  `launch_token_hash`. `update-env` and
+  `launch_token_hash`, changing the compose hash when the env file sets
+  `APP_LAUNCH_TOKEN`. `update-env` and
   `update-app-compose` are removed in favor of `update --env-file` and
   `update --compose`.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**

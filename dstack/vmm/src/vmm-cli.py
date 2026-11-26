@@ -1088,10 +1088,6 @@ class VmmCLI:
             app_compose["storage_discard"] = False
         if args.key_provider:
             app_compose["key_provider"] = args.key_provider
-        if "APP_LAUNCH_TOKEN" in envs:
-            app_compose["launch_token_hash"] = hashlib.sha256(
-                envs["APP_LAUNCH_TOKEN"].encode("utf-8")
-            ).hexdigest()
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = (
                 open(args.prelaunch_script, "rb").read().decode("utf-8")
@@ -1115,6 +1111,11 @@ class VmmCLI:
             app_compose["event_log_version"] = args.event_log_version
         elif args.event_log_version == 1:
             app_compose.pop("event_log_version", None)
+
+        if "APP_LAUNCH_TOKEN" in envs:
+            app_compose["launch_token_hash"] = hashlib.sha256(
+                envs["APP_LAUNCH_TOKEN"].encode("utf-8")
+            ).hexdigest()
 
         compose_file = json.dumps(app_compose, indent=4, ensure_ascii=False).encode(
             "utf-8"
