@@ -281,12 +281,13 @@ unset. -/
 def valueOf (name : List Char) (env : List (List Char × List Char)) : List Char :=
   (env.reverse.lookup name).getD []
 
-/-- `parse_env`: the loop, then `check_env` over the allowed `names`. -/
-def parseEnv (allowed : List Char → Bool) (names : List (List Char))
+/-- `parse_env`: the loop, then the spec check of every variable that is set.
+A variable that is absent is left to `check_env`, which runs before the app. -/
+def parseEnv (allowed : List Char → Bool)
     (matchesSpecs : List Char → List Char → Bool) (pairs : List (List Char × List Char)) :
     Option (List (List Char × List Char)) :=
   (parseEnvGo allowed 0 pairs).bind fun env =>
-    if names.all (fun name => matchesSpecs name (valueOf name env)) then some env else none
+    if env.all (fun kv => matchesSpecs kv.1 (valueOf kv.1 env)) then some env else none
 
 theorem parseEnvGo_spec (allowed : List Char → Bool) :
     ∀ (total : Nat) (pairs out : List (List Char × List Char)), parseEnvGo allowed total pairs = some out →
@@ -323,40 +324,40 @@ theorem parseEnvGo_spec (allowed : List Char → Bool) :
       exact ⟨hs.cons _, hp⟩
 
 /-- Every accepted entry is allowed, has a valid key and respects the limits,
-and every allowed name's value matches its specs. -/
-theorem parseEnv_spec (allowed : List Char → Bool) (names : List (List Char))
+and the value of every variable that is set matches its specs. -/
+theorem parseEnv_spec (allowed : List Char → Bool)
     (matchesSpecs : List Char → List Char → Bool) (pairs out : List (List Char × List Char))
-    (h : parseEnv allowed names matchesSpecs pairs = some out) :
+    (h : parseEnv allowed matchesSpecs pairs = some out) :
     out.Sublist pairs ∧
       (∀ kv ∈ out, allowed kv.1 = true ∧ validKey kv.1 = true ∧
         kv.1.length ≤ 255 ∧ kv.2.length ≤ 128 * 1024) ∧
-      ∀ name ∈ names, matchesSpecs name (valueOf name out) = true := by
+      ∀ kv ∈ out, matchesSpecs kv.1 (valueOf kv.1 out) = true := by
   unfold parseEnv at h
   cases hg : parseEnvGo allowed 0 pairs with
   | none => simp [hg] at h
   | some env =>
     simp only [hg, Option.bind_some] at h
-    by_cases hc : names.all (fun name => matchesSpecs name (valueOf name env)) = true
+    by_cases hc : env.all (fun kv => matchesSpecs kv.1 (valueOf kv.1 env)) = true
     · simp only [hc, ite_true, Option.some.injEq] at h
       subst h
       obtain ⟨hs, hp⟩ := parseEnvGo_spec allowed 0 pairs env hg
-      exact ⟨hs, hp, fun name hn => List.all_eq_true.mp hc name hn⟩
+      exact ⟨hs, hp, fun kv hkv => List.all_eq_true.mp hc kv hkv⟩
     · simp [hc] at h
 
 /-- Unauthorized keys are skipped, not rejected. -/
-example : parseEnv (fun k => k == "A".toList) [] (fun _ _ => true)
+example : parseEnv (fun k => k == "A".toList) (fun _ _ => true)
     [("B".toList, []), ("A".toList, "1".toList)] = some [("A".toList, "1".toList)] := by decide
 
 /-- A value failing its specs is an error, not a skip. -/
-example : parseEnv (fun _ => true) ["B".toList] (fun _ v => v == "1".toList)
+example : parseEnv (fun _ => true) (fun k v => k != "B".toList || v == "1".toList)
     [("A".toList, "1".toList), ("B".toList, "2".toList)] = none := by decide
 
-/-- An unset variable is checked as the empty value. -/
-example : parseEnv (fun _ => true) ["B".toList] (fun _ v => !v.isEmpty)
-    [("A".toList, "1".toList)] = none := by decide
+/-- An absent variable is not checked here. -/
+example : (parseEnv (fun _ => true) (fun k v => k != "B".toList || !v.isEmpty)
+    [("A".toList, "1".toList)]).isSome = true := by decide
 
 /-- The last duplicate is the one checked. -/
-example : (parseEnv (fun _ => true) ["A".toList] (fun _ v => v == "2".toList)
+example : (parseEnv (fun _ => true) (fun _ v => v == "2".toList)
     [("A".toList, "1".toList), ("A".toList, "2".toList)]).isSome = true := by decide
 
 end DstackFormal.Guest.EnvFile

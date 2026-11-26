@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `update --compose`.
   `update --kms-encrypt-url` encrypts `--env-file` without replacing the VM's
   KMS URLs, which `--kms-url` does.
+- **`app-compose.service` rejects environment variables outside
+  `allowed_envs`.** It used to pass on whatever `.decrypted-env.json` held, so
+  an `init_script` that adds variables to that file must now have them listed
+  in `allowed_envs`.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import

@@ -3440,7 +3440,6 @@ impl Stage1<'_> {
         let (decrypted_env, sealed) =
             if self.shared.sealed_env.is_none() && self.shared.encrypted_env.is_empty() {
                 info!("No encrypted env, using default");
-                crate::parse_env_file::check_env(&allowed_envs, |_| None)?;
                 (Default::default(), Vec::new())
             } else {
                 info!("Processing encrypted env");

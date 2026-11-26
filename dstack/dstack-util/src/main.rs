@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dstack_attest::emit_runtime_event;
 use dstack_types::{KeyProvider, KeyProviderKind};
@@ -182,13 +182,20 @@ fn load_allowed_envs(path: &Path) -> Result<Vec<String>> {
 }
 
 fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
+    let mut not_utf8 = Vec::new();
     let envs = match &args.env_file {
         Some(path) => load_envs(path)?,
         None => std::env::vars_os()
-            .map(|(name, value)| {
-                let name = name.to_string_lossy().into_owned();
-                (name, value.to_string_lossy().into_owned())
-            })
+            .filter_map(
+                |(name, value)| match (name.into_string(), value.into_string()) {
+                    (Ok(name), Ok(value)) => Some((name, value)),
+                    (name, _) => {
+                        not_utf8
+                            .push(name.unwrap_or_else(|name| name.to_string_lossy().into_owned()));
+                        None
+                    }
+                },
+            )
             .collect(),
     };
     let mut entries = args.specs;
@@ -196,6 +203,10 @@ fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
         entries.extend(load_allowed_envs(compose)?);
     }
     let allowed = parse_env_file::parse_allowed_envs(&entries)?;
+    let checked = |name: &&String| !args.allow_unlisted || allowed.contains_key(*name);
+    if let Some(name) = not_utf8.iter().find(checked) {
+        bail!("env {name} is not valid UTF-8");
+    }
     if !args.allow_unlisted {
         parse_env_file::check_names(&allowed, envs.keys())?;
     }
@@ -234,7 +245,13 @@ fn cmd_import_env(args: ImportEnvArgs) -> Result<()> {
     allowed.retain(|name, _| names.contains(name));
 
     let mut envs = load_envs(&env_file)?;
-    envs.extend(names.iter().filter_map(|name| source.remove_entry(name)));
+    for (name, value) in names.iter().filter_map(|name| source.remove_entry(name)) {
+        if envs.get(&name).is_some_and(|existing| *existing != value) {
+            bail!("env {name} is already set to a different value");
+        }
+        envs.insert(name, value);
+    }
+    parse_env_file::check_limits(&envs)?;
     parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
     let json = serde_json::to_vec(&envs).context("failed to serialize env")?;
     safe_write_with_mode(&env_file, json, 0o600)
