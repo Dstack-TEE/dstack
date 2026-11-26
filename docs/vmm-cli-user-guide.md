@@ -628,7 +628,7 @@ Use the all-in-one `update` command to update multiple VM aspects in a single op
   - `--ppcie` (attach all available GPUs)
   - `--no-gpus` (detach all GPUs)
   - _No GPU flag: GPU configuration remains unchanged_
-- **KMS**: `--kms-url` (for environment encryption)
+- **KMS**: `--kms-url` replaces the VM's KMS URLs and also encrypts `--env-file`; `--kms-encrypt-url` only encrypts `--env-file` and leaves the KMS URLs as they are
 
 **Notes:**
 - Resource changes (vCPU, memory, disk, image) require the VM to be stopped

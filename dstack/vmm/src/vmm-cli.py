@@ -1255,6 +1255,7 @@ class VmmCLI:
         attach_all: bool = False,
         no_gpus: bool = False,
         kms_urls: Optional[List[str]] = None,
+        kms_encrypt_url: Optional[str] = None,
         no_tee: Optional[bool] = None,
         net: Optional[str] = None,
         net_vhost: Optional[bool] = None,
@@ -1264,10 +1265,11 @@ class VmmCLI:
         launch_ticket: Optional[str] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
-        # Validate: --env-file requires --kms-url
-        if env_file and not kms_urls:
+        encrypt_url = kms_encrypt_url or (kms_urls[0] if kms_urls else None)
+        if env_file and not encrypt_url:
             raise Exception(
-                "--env-file requires --kms-url to encrypt environment variables"
+                "--env-file requires --kms-encrypt-url or --kms-url to encrypt "
+                "environment variables"
             )
 
         updates = []
@@ -1339,7 +1341,7 @@ class VmmCLI:
                     self.encrypt_env_payload(
                         envs,
                         vm_info_response["info"]["app_id"],
-                        kms_urls[0],
+                        encrypt_url,
                         self.image_supports_sealed_env(
                             image
                             if image is not None
@@ -2397,7 +2399,17 @@ def main():
     update_parser.set_defaults(no_tee=None)
 
     # KMS URL for environment encryption
-    update_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
+    update_parser.add_argument(
+        "--kms-url",
+        action="append",
+        type=str,
+        help="Replace the VM's KMS URLs with these (can be used multiple times)",
+    )
+    update_parser.add_argument(
+        "--kms-encrypt-url",
+        type=str,
+        help="KMS URL used only to encrypt --env-file, leaving the VM's KMS URLs as they are",
+    )
     annotations_group = update_parser.add_mutually_exclusive_group()
     annotations_group.add_argument(
         "--annotation",
@@ -2510,6 +2522,7 @@ def main():
             attach_all=args.ppcie,
             no_gpus=args.no_gpus if hasattr(args, "no_gpus") else False,
             kms_urls=args.kms_url,
+            kms_encrypt_url=args.kms_encrypt_url,
             no_tee=args.no_tee,
             net=args.net,
             net_vhost=args.net_vhost,

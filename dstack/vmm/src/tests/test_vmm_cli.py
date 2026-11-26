@@ -106,6 +106,29 @@ class UpdateVmTests(unittest.TestCase):
                 kms_urls=["https://kms"],
             )
 
+    def test_env_only_update_keeps_compose_and_kms_urls(self) -> None:
+        """Send neither a compose nor KMS URLs when only the env changes."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        info = {
+            "app_id": "app",
+            "configuration": {"compose_file": '{"allowed_envs": ["A"]}'},
+        }
+        cli.rpc_call = Mock(return_value={"found": True, "info": info})
+        cli.encrypt_env_payload = Mock(return_value={"encrypted_env": "00"})
+        cli.image_supports_sealed_env = Mock(return_value=False)
+
+        with (
+            patch.object(VMM_CLI, "parse_env_file", return_value={"A": "1"}),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli.update_vm("vm", env_file="env", kms_encrypt_url="https://kms")
+
+        self.assertEqual(cli.encrypt_env_payload.call_args.args[2], "https://kms")
+        self.assertEqual(
+            cli.rpc_call.call_args.args,
+            ("UpgradeApp", {"id": "vm", "encrypted_env": "00"}),
+        )
+
     def test_launch_token_must_match_compose(self) -> None:
         """Refuse an APP_LAUNCH_TOKEN the compose does not pin."""
         cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
@@ -138,11 +161,12 @@ class UpdateVmTests(unittest.TestCase):
 class ComposeTests(unittest.TestCase):
     """Verify the app compose written by `compose`."""
 
-    def compose(self, *scripts: str) -> dict:
-        """Run `compose` with these init scripts and return the result."""
+    def compose(self, *scripts: str, env: str = "") -> dict:
+        """Run `compose` with these init scripts and env file, return the result."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "docker-compose.yaml").write_text("services: {}")
+            (tmp / ".env").write_text(env)
             paths = []
             for i, script in enumerate(scripts):
                 paths.append(tmp / f"init{i}.sh")
@@ -150,8 +174,8 @@ class ComposeTests(unittest.TestCase):
             args = argparse.Namespace(
                 name="app",
                 docker_compose=tmp / "docker-compose.yaml",
-                env_file=None,
-                kms=False,
+                env_file=tmp / ".env",
+                kms=bool(env),
                 gateway=False,
                 local_key_provider=False,
                 key_provider_id=None,
@@ -179,6 +203,15 @@ class ComposeTests(unittest.TestCase):
         two = self.compose("echo a", "echo b")
         self.assertEqual(
             (two["manifest_version"], two["init_script"]), ("3", ["echo a", "echo b"])
+        )
+
+    def test_launch_token_hash_is_written_last(self) -> None:
+        """Pin APP_LAUNCH_TOKEN after every other field, where jq would add it."""
+        compose = self.compose("echo a", env="APP_LAUNCH_TOKEN=token\nA=1\n")
+        self.assertEqual(compose["allowed_envs"], ["APP_LAUNCH_TOKEN", "A"])
+        self.assertEqual(
+            list(compose.items())[-1],
+            ("launch_token_hash", hashlib.sha256(b"token").hexdigest()),
         )
 
 
