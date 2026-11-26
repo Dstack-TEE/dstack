@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`allowed_envs` entries can constrain values.** An entry may be `NAME: spec`,
   such as `PORT: int(1..=65535)` or `NETWORK: /mainnet|testnet/`, and the guest
   refuses to boot when a value does not match. `dstack-util validate-env`
-  applies the same specs from an `init_script`. `vmm-cli compose --env-spec`
+  applies the same specs from an `init_script`, and `dstack-util import-env`
+  takes variables from `.user-config` under them. `vmm-cli compose --env-spec`
   and the VMM web UI set them, and the VMM rejects malformed `int` and
   `float` specs at deployment. See
   [Environment value specs](docs/security/cvm-boundaries.md#environment-value-specs).

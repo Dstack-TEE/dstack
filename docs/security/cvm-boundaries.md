@@ -156,6 +156,12 @@ PORT=$PORT dstack-util validate-env --allow-unlisted 'PORT: int(1024..=65535)' |
 dstack-util validate-env --compose /dstack/app-compose.json --allow-unlisted --env-file /dstack/.host-shared/.user-config || exit 1
 ```
 
+`dstack-util import-env` is the shorthand for the common case: it copies variables from the `env` object of `.user-config` into `.decrypted-env.json`, so the app receives them like encrypted environment variables. Name the variables, or pass `--all` for every variable under `env`. Each one must be in `allowed_envs` and match its specs there; a named variable that `env` lacks counts as empty.
+
+```bash
+dstack-util import-env RPC_API_KEY
+```
+
 `app-compose.service` passes `--compose /dstack/app-compose.json` to `dstack-util exec-with-env`, so an `init_script` that rewrites `.decrypted-env.json` cannot hand the application a variable that is not in `allowed_envs` or a value that breaks a spec there.
 
 Guests older than 0.6.7 treat `NAME: spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.

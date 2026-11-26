@@ -108,6 +108,8 @@ enum Commands {
     ExecWithEnv(ExecWithEnvArgs),
     /// Check environment variables of this process against value specs
     ValidateEnv(ValidateEnvArgs),
+    /// Copy environment variables from `env` in the user config into the env file
+    ImportEnv(ImportEnvArgs),
 }
 
 #[derive(Parser)]
@@ -139,7 +141,33 @@ struct ExecWithEnvArgs {
     command: Vec<String>,
 }
 
+#[derive(Parser)]
+struct ImportEnvArgs {
+    /// Import every variable under `env` in the user config
+    #[arg(long, conflicts_with = "names")]
+    all: bool,
+    /// User config holding the variables under `env` [default: .user-config in the host-shared dir]
+    #[arg(long)]
+    user_config: Option<PathBuf>,
+    /// JSON object of variables to merge into [default: .decrypted-env.json in the host-shared dir]
+    #[arg(long)]
+    env_file: Option<PathBuf>,
+    /// App compose file whose `allowed_envs` permits and constrains the variables
+    /// [default: app-compose.json in the host-shared dir]
+    #[arg(long)]
+    compose: Option<PathBuf>,
+    /// Variables to import
+    #[arg(required_unless_present = "all")]
+    names: Vec<String>,
+}
+
 type Envs = std::collections::BTreeMap<String, String>;
+
+#[derive(serde::Deserialize, Default)]
+struct UserConfig {
+    #[serde(default)]
+    env: Envs,
+}
 
 fn load_envs(path: &Path) -> Result<Envs> {
     utils::deserialize_json_file(path)
@@ -171,6 +199,44 @@ fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
         parse_env_file::check_names(&allowed, envs.keys())?;
     }
     parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())
+}
+
+fn cmd_import_env(args: ImportEnvArgs) -> Result<()> {
+    use dstack_types::shared_filenames::{
+        host_shared_dir, APP_COMPOSE, DECRYPTED_ENV_JSON, USER_CONFIG,
+    };
+
+    let shared = host_shared_dir();
+    let user_config = args.user_config.unwrap_or_else(|| shared.join(USER_CONFIG));
+    let env_file = args
+        .env_file
+        .unwrap_or_else(|| shared.join(DECRYPTED_ENV_JSON));
+    let compose = args.compose.unwrap_or_else(|| shared.join(APP_COMPOSE));
+
+    // The VMM writes no user config file for an empty user config.
+    let mut source = match fs::read_to_string(&user_config) {
+        Ok(config) => {
+            serde_json::from_str::<UserConfig>(&config)
+                .with_context(|| format!("failed to parse {}", user_config.display()))?
+                .env
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Envs::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let names = match args.all {
+        true => source.keys().cloned().collect(),
+        false => args.names,
+    };
+    let mut allowed = parse_env_file::parse_allowed_envs(&load_allowed_envs(&compose)?)?;
+    parse_env_file::check_names(&allowed, &names)?;
+    allowed.retain(|name, _| names.contains(name));
+
+    let mut envs = load_envs(&env_file)?;
+    envs.extend(names.iter().filter_map(|name| source.remove_entry(name)));
+    parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
+    let json = serde_json::to_vec(&envs).context("failed to serialize env")?;
+    safe_write_with_mode(&env_file, json, 0o600)
+        .with_context(|| format!("failed to write {}", env_file.display()))
 }
 
 #[derive(Parser)]
@@ -1759,6 +1825,7 @@ async fn main() -> Result<()> {
         }
         Commands::ExecWithEnv(args) => cmd_exec_with_env(args)?,
         Commands::ValidateEnv(args) => cmd_validate_env(args)?,
+        Commands::ImportEnv(args) => cmd_import_env(args)?,
     }
 
     Ok(())
