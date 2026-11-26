@@ -124,7 +124,7 @@ struct ValidateEnvArgs {
     #[arg(long)]
     allow_unlisted: bool,
     /// Variables to allow, as `NAME` or `NAME: spec`; an unset variable counts as empty
-    #[arg(required_unless_present = "compose")]
+    #[arg(required_unless_present = "compose", value_parser = env_spec)]
     specs: Vec<String>,
 }
 
@@ -179,6 +179,14 @@ fn load_allowed_envs(path: &Path) -> Result<Vec<String>> {
     let compose: utils::AppCompose = utils::deserialize_json_file(path)
         .with_context(|| format!("failed to load app compose from {}", path.display()))?;
     Ok(compose.allowed_envs)
+}
+
+/// A bare name on the command line must be a variable name too, so that a mistyped
+/// `:` is not taken as a name that no variable has.
+fn env_spec(entry: &str) -> Result<String, value_spec::ParseError> {
+    let (name, _) = value_spec::split_named(entry)?;
+    value_spec::check_name(name)?;
+    Ok(entry.into())
 }
 
 fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {

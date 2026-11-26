@@ -72,7 +72,7 @@ use winnow::combinator::{
 use winnow::error::StrContext::{Expected, Label};
 use winnow::error::StrContextValue::Description;
 use winnow::error::{ContextError, ErrMode};
-use winnow::token::{one_of, rest};
+use winnow::token::{none_of, one_of, rest};
 use winnow::{ModalResult, Parser};
 
 /// The error returned when a spec or a `NAME: spec` entry fails to parse.
@@ -100,12 +100,17 @@ enum Kind {
 
 /// Splits a `NAME: spec` entry into the name and the text of its spec. The
 /// whitespace after the colon is optional, and an entry without a colon is a
-/// bare name. A name that carries a spec must be `[A-Za-z_][A-Za-z0-9_]*` and at
-/// most 255 bytes.
+/// bare name. A name that carries a spec must pass [`check_name`].
 pub fn split_named(entry: &str) -> Result<(&str, Option<&str>), ParseError> {
     let Some((name, spec)) = entry.split_once(':') else {
         return Ok((entry, None));
     };
+    check_name(name)?;
+    Ok((name, Some(spec.trim_start())))
+}
+
+/// Checks that a name is `[A-Za-z_][A-Za-z0-9_]*` and at most 255 bytes.
+pub fn check_name(name: &str) -> Result<(), ParseError> {
     let is_valid = |(i, c): (usize, char)| {
         c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
     };
@@ -113,7 +118,7 @@ pub fn split_named(entry: &str) -> Result<(&str, Option<&str>), ParseError> {
         Some((offset, _)) => Err(ParseError::name(offset)),
         None if name.is_empty() => Err(ParseError::name(0)),
         None if name.len() > MAX_NAME_LEN => Err(ParseError::name(MAX_NAME_LEN)),
-        None => Ok((name, Some(spec.trim_start()))),
+        None => Ok(()),
     }
 }
 
@@ -135,7 +140,7 @@ impl ParseError {
         Self {
             what: "name",
             offset,
-            message: "expected `[A-Za-z_][A-Za-z0-9_]*` of at most 255 bytes before the `:`".into(),
+            message: "expected `[A-Za-z_][A-Za-z0-9_]*` of at most 255 bytes".into(),
         }
     }
 }
@@ -234,6 +239,8 @@ fn range<'a, T: Clone + PartialOrd>(
     let end = alt((
         preceded('=', cut_err(number)).map(Included),
         preceded('<', cut_err(number)).map(Excluded),
+        preceded(peek(none_of(['|', ')'])), cut_err(fail))
+            .context(Expected(Description("`=` or `<` after `..`"))),
         empty.value(Unbounded),
     ));
     (terminated(start, ".."), end)
@@ -844,6 +851,10 @@ mod tests {
         assert_eq!(error("/(/").offset, 1);
         assert_eq!(error("int(1<..<2)").offset, 11);
         assert!(error("int(1<..<2)").message.contains("contain an integer"));
+        assert_eq!(error("int(1..65535)").offset, 7);
+        assert!(error("int(1..65535)")
+            .message
+            .contains("`=` or `<` after `..`"));
         let message = error("string").to_string();
         assert!(
             message.starts_with("invalid value spec at offset 0: "),
