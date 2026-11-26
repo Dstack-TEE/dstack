@@ -75,10 +75,11 @@ use winnow::error::{ContextError, ErrMode};
 use winnow::token::{one_of, rest};
 use winnow::{ModalResult, Parser};
 
-/// The error returned when a spec fails to parse.
+/// The error returned when a spec or a `NAME: spec` entry fails to parse.
 #[derive(Debug, Error)]
-#[error("invalid value spec at offset {offset}: {message}")]
+#[error("invalid {what} at offset {offset}: {message}")]
 pub struct ParseError {
+    what: &'static str,
     offset: usize,
     message: String,
 }
@@ -99,17 +100,24 @@ enum Kind {
 
 /// Splits a `NAME: spec` entry into the name and the text of its spec. The
 /// whitespace after the colon is optional, and an entry without a colon is a
-/// bare name.
-pub fn split_named(entry: &str) -> (&str, Option<&str>) {
-    match entry.split_once(':') {
-        Some((name, spec)) => (name, Some(spec.trim_start())),
-        None => (entry, None),
+/// bare name. A name that carries a spec must be `[A-Za-z_][A-Za-z0-9_]*`.
+pub fn split_named(entry: &str) -> Result<(&str, Option<&str>), ParseError> {
+    let Some((name, spec)) = entry.split_once(':') else {
+        return Ok((entry, None));
+    };
+    let is_valid = |(i, c): (usize, char)| {
+        c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
+    };
+    match name.char_indices().find(|&at| !is_valid(at)) {
+        Some((offset, _)) => Err(ParseError::name(offset)),
+        None if name.is_empty() => Err(ParseError::name(0)),
+        None => Ok((name, Some(spec.trim_start()))),
     }
 }
 
 /// Parses a `NAME: spec` entry into the name and its spec.
 pub fn parse_named(entry: &str) -> Result<(&str, Option<ValueSpec>), ParseError> {
-    let (name, spec) = split_named(entry);
+    let (name, spec) = split_named(entry)?;
     Ok((name, spec.map(str::parse).transpose()?))
 }
 
@@ -118,6 +126,16 @@ const MAX_SPEC_LEN: usize = 4096;
 const MAX_REGEX_SIZE: usize = 10 << 20;
 
 type Range<T> = (Bound<T>, Bound<T>);
+
+impl ParseError {
+    fn name(offset: usize) -> Self {
+        Self {
+            what: "name",
+            offset,
+            message: "expected `[A-Za-z_][A-Za-z0-9_]*` before the `:`".into(),
+        }
+    }
+}
 
 type Number<T> = fn(&mut &str) -> ModalResult<T>;
 
@@ -141,15 +159,14 @@ impl FromStr for ValueSpec {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() > MAX_SPEC_LEN {
             return Err(ParseError {
+                what: "value spec",
                 offset: MAX_SPEC_LEN,
                 message: format!("spec is longer than {MAX_SPEC_LEN} bytes"),
             });
         }
         let spec = alt((
             regex.map(Kind::Regex),
-            ranges("int", int)
-                .verify(|ranges: &Vec<_>| ranges.iter().all(has_int))
-                .map(Kind::Int),
+            preceded(peek("int"), cut_err(ints)).map(Kind::Int),
             ranges("float", decimal).map(Kind::Float),
             fail.context(Expected(Description("`int`, `float` or `/regex/`"))),
         ));
@@ -158,6 +175,7 @@ impl FromStr for ValueSpec {
             .map(|kind| Self { kind, optional })
             .parse(s)
             .map_err(|e| ParseError {
+                what: "value spec",
                 offset: e.offset(),
                 message: e.inner().to_string(),
             })
@@ -222,6 +240,16 @@ fn range<'a, T: Clone + PartialOrd>(
             _ => true,
         })
         .context(Expected(Description("number or non-empty range")))
+}
+
+fn ints(input: &mut &str) -> ModalResult<Vec<Range<i128>>> {
+    let ranges = ranges("int", int).parse_next(input)?;
+    match ranges.iter().all(has_int) {
+        true => Ok(ranges),
+        false => fail
+            .context(Expected(Description("ranges that contain an integer")))
+            .parse_next(input),
+    }
 }
 
 /// Whether any integer lies in the range, which `1<..<2` has none of.
@@ -557,8 +585,20 @@ mod tests {
         assert_eq!(name("PORT:int").unwrap(), ("PORT", true));
         assert_eq!(name("PORT:  int(1..=65535)?").unwrap(), ("PORT", true));
         assert_eq!(name("URL: /https://.*/").unwrap(), ("URL", true));
+        assert_eq!(name("not a name").unwrap(), ("not a name", false));
         for entry in ["A:", "A: ", "A: int ", "A:int:int", "A: string"] {
             assert!(name(entry).is_err(), "{entry:?} should fail");
+        }
+        for (entry, offset) in [
+            ("A : int", 1),
+            (" A: int", 0),
+            (": int", 0),
+            ("1A: int", 0),
+            ("A-B: int", 1),
+        ] {
+            let error = name(entry).unwrap_err();
+            assert_eq!(error.offset, offset, "{entry:?}");
+            assert!(error.to_string().starts_with("invalid name at offset"));
         }
     }
 
@@ -796,6 +836,8 @@ mod tests {
         assert_eq!(error("int(1..=x)").offset, 8);
         assert_eq!(error("int(1|a)").offset, 6);
         assert_eq!(error("/(/").offset, 1);
+        assert_eq!(error("int(1<..<2)").offset, 11);
+        assert!(error("int(1<..<2)").message.contains("contain an integer"));
         let message = error("string").to_string();
         assert!(
             message.starts_with("invalid value spec at offset 0: "),
