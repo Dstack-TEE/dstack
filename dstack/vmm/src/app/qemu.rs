@@ -39,6 +39,104 @@ use std::{
 };
 use supervisor_client::supervisor::ProcessConfig;
 
+// QEMU 9.2 hw/pci-host/q35.c: Q35_PCI_HOST_HOLE64_SIZE_DEFAULT.
+const Q35_DEFAULT_PCI_HOLE64_SIZE: u64 = 1 << 35;
+
+fn pci64_bar_bytes(resource: &str) -> Result<u64> {
+    const IORESOURCE_MEM: u64 = 0x200;
+    const IORESOURCE_MEM_64: u64 = 0x100000;
+    let mut total = 0u64;
+    let mut rows = resource.lines();
+    for _ in 0..6 {
+        let row = rows.next().context("missing PCI BAR resource row")?;
+        let fields = row.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 3 {
+            bail!("invalid PCI BAR resource row: {row}");
+        }
+        let parse = |s: &str| u64::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16);
+        let start = parse(fields[0]).context("invalid PCI BAR start")?;
+        let end = parse(fields[1]).context("invalid PCI BAR end")?;
+        let flags = parse(fields[2]).context("invalid PCI BAR flags")?;
+        if start == 0 && end == 0 {
+            continue;
+        }
+        if flags & (IORESOURCE_MEM | IORESOURCE_MEM_64) != (IORESOURCE_MEM | IORESOURCE_MEM_64) {
+            continue;
+        }
+        let size = end
+            .checked_sub(start)
+            .and_then(|size| size.checked_add(1))
+            .context("invalid PCI BAR range")?;
+        total = total.checked_add(size).context("PCI BAR size overflow")?;
+    }
+    Ok(total)
+}
+
+fn check_pci64_capacity(required: u64, configured: u64) -> Result<()> {
+    let effective = if configured == 0 {
+        Q35_DEFAULT_PCI_HOLE64_SIZE
+    } else {
+        configured
+    };
+    // This necessary-size check does not model firmware alignment gaps or layout.
+    if required > effective {
+        bail!("passthrough 64-bit MMIO BARs require {required} bytes, but effective PCI64 size is {effective} bytes (qemu_pci_hole64_size={configured}); increase qemu_pci_hole64_size");
+    }
+    Ok(())
+}
+
+pub(crate) fn check_passthrough_pci64(gpus: &GpuConfig, configured: u64) -> Result<()> {
+    let mut required = 0u64;
+    for device in gpus.gpus.iter().chain(&gpus.bridges) {
+        let path = Path::new("/sys/bus/pci/devices")
+            .join(&device.slot)
+            .join("resource");
+        let bytes = (|| -> Result<u64> { pci64_bar_bytes(&fs::read_to_string(&path)?) })()
+            .with_context(|| {
+                format!(
+                    "failed to read PCI BAR resources for {} at {}",
+                    device.slot,
+                    path.display()
+                )
+            })?;
+        required = required
+            .checked_add(bytes)
+            .context("passthrough PCI BAR size overflow")?;
+    }
+    check_pci64_capacity(required, configured)
+}
+
+#[cfg(test)]
+mod pci64_tests {
+    use super::{check_passthrough_pci64, check_pci64_capacity, pci64_bar_bytes, GpuConfig};
+
+    #[test]
+    fn checks_gpu_bar_capacity() {
+        // usw5 B300 (10de:3182), captured 2026-10-30; extra row tests exclusion.
+        let resource = "0x0000238000000000 0x0000238003ffffff 0x000000000014220c\n\
+                        0 0 0\n\
+                        0x0000228000000000 0x000022ffffffffff 0x000000000014220c\n\
+                        0 0 0\n\
+                        0x0000238044000000 0x0000238045ffffff 0x000000000014220c\n\
+                        0 0 0\n\
+                        0 ffffffffffffffff 00100200\n";
+        let bytes = pci64_bar_bytes(resource).unwrap();
+        assert_eq!(bytes, (512u64 << 30) + (96 << 20));
+        assert_eq!(bytes * 8, (4u64 << 40) + (768 << 20));
+        assert!(check_pci64_capacity(bytes * 8, 4u64 << 40).is_err());
+        assert!(check_pci64_capacity(bytes * 8, 8u64 << 40).is_ok());
+        let b200 = resource.replace("0x000022ffffffffff", "0x000022bfffffffff");
+        let b200_bytes = pci64_bar_bytes(&b200).unwrap();
+        assert_eq!(b200_bytes, (256u64 << 30) + (96 << 20));
+        assert!(check_pci64_capacity(b200_bytes * 8, 4u64 << 40).is_ok());
+        assert!(check_pci64_capacity(32u64 << 30, 0).is_ok());
+        assert!(check_pci64_capacity((32u64 << 30) + 1, 0).is_err());
+        assert!(check_passthrough_pci64(&GpuConfig::default(), 0).is_ok());
+        assert!(pci64_bar_bytes("0 0 0\n").is_err());
+        assert!(pci64_bar_bytes(&resource.replace("0x000022ffffffffff", "bad!")).is_err());
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AmdSevSnpLaunchParams {
     cbitpos: u32,
