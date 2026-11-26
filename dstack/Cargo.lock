@@ -868,6 +868,7 @@ dependencies = [
  "hex",
  "http-client",
  "mock-attestation",
+ "p256 0.13.2",
  "prpc",
  "ra-rpc",
  "ra-tls",

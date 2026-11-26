@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider, SysConfig};
+use p256::pkcs8::{DecodePublicKey, EncodePublicKey};
 use ra_rpc::client::{CertInfo, PinnedIssuer, RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
@@ -53,7 +54,7 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
 /// Fetch keys directly over the attested connection, without a metadata/CA preflight.
 /// A supplied CA identifies the KMS issuer regardless of the epoch selector;
 /// chain and hostname verification still apply. On first contact, a non-empty
-/// `key_provider_id` pins the KMS issuer (root public key in SPKI DER form).
+/// `key_provider_id` pins the KMS issuer (uncompressed P-256 SPKI DER).
 pub async fn request_app_keys(
     url: String,
     request: GetAppKeyRequest,
@@ -64,10 +65,7 @@ pub async fn request_app_keys(
 ) -> Result<AppKeyResponse> {
     let pinned_issuer = match trusted_ca.as_deref() {
         Some(ca) => Some(kms_issuer_from_ca(ca)?),
-        None if !key_provider_id.is_empty() => Some(PinnedIssuer {
-            pubkey: key_provider_id.to_vec(),
-            usage: KMS_RPC_CERT_USAGE.into(),
-        }),
+        None if !key_provider_id.is_empty() => Some(kms_issuer_from_provider_id(key_provider_id)?),
         None => None,
     };
     let server_cert = Arc::new(Mutex::new(None));
@@ -128,6 +126,21 @@ fn validate_kms_root(server_cert: &[u8], root_ca: &str) -> Result<()> {
     }
     leaf.verify_signature(Some(root.public_key()))
         .context("KMS root CA did not sign the attested RPC certificate")
+}
+
+fn kms_issuer_from_provider_id(id: &[u8]) -> Result<PinnedIssuer> {
+    let key = p256::PublicKey::from_public_key_der(id).context("invalid KMS key provider ID")?;
+    let canonical = key
+        .to_public_key_der()
+        .context("failed to encode KMS public key")?;
+    // The post-response identity check compares the full encoding, not just the key.
+    if canonical.as_bytes() != id {
+        bail!("KMS key provider ID is not canonical P-256 SPKI DER");
+    }
+    Ok(PinnedIssuer {
+        pubkey: id.to_vec(),
+        usage: KMS_RPC_CERT_USAGE.into(),
+    })
 }
 
 fn kms_issuer_from_ca(ca: &str) -> Result<PinnedIssuer> {
@@ -729,20 +742,26 @@ mod tests {
         .is_err());
         assert_eq!(requests.lock().unwrap().len(), requests_before);
 
-        let mut malformed_pin = matching_pin.clone();
-        malformed_pin.push(0);
+        let mut outer_suffix = matching_pin.clone();
+        outer_suffix.extend_from_slice(&[0x05, 0x00]);
+        let mut inner_suffix = outer_suffix.clone();
+        // Include the extra DER NULL inside the outer SEQUENCE's short-form length.
+        assert_eq!(inner_suffix[1], 89);
+        inner_suffix[1] += 2;
         let requests_before = requests.lock().unwrap().len();
-        assert!(request_app_keys(
-            url.clone(),
-            request(),
-            client_cert(),
-            verifier.clone(),
-            None,
-            &malformed_pin,
-        )
-        .await
-        .is_err());
-        assert_eq!(requests.lock().unwrap().len(), requests_before);
+        for malformed_pin in [outer_suffix, inner_suffix] {
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None,
+                &malformed_pin,
+            )
+            .await
+            .is_err());
+            assert_eq!(requests.lock().unwrap().len(), requests_before);
+        }
 
         let requests_before = requests.lock().unwrap().len();
         let historical = GetAppKeyRequest {
