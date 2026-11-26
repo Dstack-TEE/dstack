@@ -18,10 +18,10 @@ Signed-off-by: Kevin Wang <wy721@qq.com>
  2 files changed, 20 insertions(+), 9 deletions(-)
 
 diff --git a/mgr.go b/mgr.go
-index 87e6a85..b99ab8d 100644
+index fe7ccbb..172e679 100644
 --- a/mgr.go
 +++ b/mgr.go
-@@ -95,6 +95,7 @@ type mgrConfig struct {
+@@ -96,6 +96,7 @@ type mgrConfig struct {
  	shiftfsOnOverlayfsOk    bool
  	idMapMountOk            bool
  	overlayfsOnIDMapMountOk bool
@@ -29,7 +29,7 @@ index 87e6a85..b99ab8d 100644
  	noRootfsCloning         bool
  	ignoreSysfsChown        bool
  	allowTrustedXattr       bool
-@@ -242,9 +243,10 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
+@@ -259,9 +260,10 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
  
  	idMapMountOk := false
  	ovfsOnIDMapMountOk := false
@@ -41,7 +41,7 @@ index 87e6a85..b99ab8d 100644
  		if err != nil {
  			return nil, fmt.Errorf("ID-mapping check failed: %v", err)
  		}
-@@ -252,6 +254,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
+@@ -269,6 +271,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
  
  	if ctx.GlobalBool("disable-ovfs-on-idmapped-mount") {
  		ovfsOnIDMapMountOk = false
@@ -49,7 +49,7 @@ index 87e6a85..b99ab8d 100644
  	}
  
  	shiftfsModPresent := false
-@@ -310,6 +313,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
+@@ -327,6 +330,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
  		shiftfsOnOverlayfsOk:    shiftfsOnOvfsOk,
  		idMapMountOk:            idMapMountOk,
  		overlayfsOnIDMapMountOk: ovfsOnIDMapMountOk,
@@ -57,7 +57,7 @@ index 87e6a85..b99ab8d 100644
  		noRootfsCloning:         ctx.GlobalBool("disable-rootfs-cloning"),
  		ignoreSysfsChown:        ctx.GlobalBool("ignore-sysfs-chown"),
  		allowTrustedXattr:       ctx.GlobalBool("allow-trusted-xattr"),
-@@ -346,6 +350,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
+@@ -363,6 +367,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
  		logrus.Info("Use of overlayfs on ID-mapped mounts disabled.")
  	} else {
  		logrus.Infof("Overlayfs on ID-mapped mounts supported by kernel: %s", ifThenElse(mgrCfg.overlayfsOnIDMapMountOk, "yes", "no"))
@@ -65,7 +65,7 @@ index 87e6a85..b99ab8d 100644
  	}
  
  	if mgrCfg.noRootfsCloning {
-@@ -615,6 +620,7 @@ func (mgr *SysboxMgr) register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.Contai
+@@ -634,6 +639,7 @@ func (mgr *SysboxMgr) register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.Contai
  		ShiftfsOnOverlayfsOk:    mgr.mgrCfg.shiftfsOnOverlayfsOk,
  		IDMapMountOk:            mgr.mgrCfg.idMapMountOk,
  		OverlayfsOnIDMapMountOk: mgr.mgrCfg.overlayfsOnIDMapMountOk,
@@ -73,7 +73,7 @@ index 87e6a85..b99ab8d 100644
  		NoRootfsCloning:         mgr.mgrCfg.noRootfsCloning,
  		IgnoreSysfsChown:        mgr.mgrCfg.ignoreSysfsChown,
  		AllowTrustedXattr:       mgr.mgrCfg.allowTrustedXattr,
-@@ -980,7 +986,7 @@ func (mgr *SysboxMgr) reqMounts(id string, rootfsUidShiftType idShiftUtils.IDShi
+@@ -1040,7 +1046,7 @@ func (mgr *SysboxMgr) reqMounts(id string, rootfsUidShiftType idShiftUtils.IDShi
  
  	switch rootfsUidShiftType {
  
@@ -83,10 +83,10 @@ index 87e6a85..b99ab8d 100644
  		volUid = 0
  		volGid = 0
 diff --git a/utils.go b/utils.go
-index 92389f5..61a1445 100644
+index 4fd2476..bd4b343 100644
 --- a/utils.go
 +++ b/utils.go
-@@ -912,7 +912,7 @@ func getInode(file string) (uint64, error) {
+@@ -1055,7 +1055,7 @@ func getInode(file string) (uint64, error) {
  	return st.Ino, nil
  }
  
@@ -95,7 +95,7 @@ index 92389f5..61a1445 100644
  
  	// The sysbox lib dir may have restrictive permissions; loosen those up
  	// temporarily while we perform the ID-map check since it runs inside a
-@@ -921,12 +921,12 @@ func checkIDMapMountSupport(ctx *cli.Context) (bool, bool, error) {
+@@ -1064,12 +1064,12 @@ func checkIDMapMountSupport(ctx *cli.Context) (bool, bool, error) {
  	// write-other permissions.
  	fi, err := os.Stat(sysboxLibDir)
  	if err != nil {
@@ -110,7 +110,7 @@ index 92389f5..61a1445 100644
  	}
  
  	defer func() {
-@@ -935,19 +935,24 @@ func checkIDMapMountSupport(ctx *cli.Context) (bool, bool, error) {
+@@ -1078,19 +1078,24 @@ func checkIDMapMountSupport(ctx *cli.Context) (bool, bool, error) {
  
  	IDMapMountOk, err := idMap.IDMapMountSupported(sysboxLibDir)
  	if err != nil {
