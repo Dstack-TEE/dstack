@@ -82,6 +82,17 @@ pub fn check_env(allowed: &AllowedEnvs, get: impl Fn(&str) -> Option<String>) ->
     Ok(())
 }
 
+/// Rejects variables that `allowed` does not name.
+pub fn check_names<'a>(
+    allowed: &AllowedEnvs,
+    names: impl IntoIterator<Item = &'a String>,
+) -> Result<()> {
+    match names.into_iter().find(|name| !allowed.contains_key(*name)) {
+        Some(name) => bail!("env {name} is not allowed"),
+        None => Ok(()),
+    }
+}
+
 pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<String, String>> {
     const MAX_ITEMS: usize = 1024;
     const MAX_TOTAL_SIZE: usize = 1024 * 1024;
@@ -251,6 +262,18 @@ mod tests {
         assert!(check(&["PORT: int", "HOST: /.+/"]).is_err());
         assert!(check(&["PORT: int(8080)", "PORT: int(1..=1024)"]).is_err());
         assert!(check(&["PORT: string"]).is_err());
+    }
+
+    #[test]
+    fn unlisted_names_are_rejected() {
+        let allowed = parse_allowed_envs(&["PORT: int".to_string(), "HOST".to_string()]).unwrap();
+        let check = |names: &[&str]| {
+            let names = names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            check_names(&allowed, &names)
+        };
+        assert!(check(&[]).is_ok());
+        assert!(check(&["HOST", "PORT"]).is_ok());
+        assert!(check(&["HOST", "LD_PRELOAD"]).is_err());
     }
 
     /// Round-trip through systemd's own parser; skipped without a user manager.
