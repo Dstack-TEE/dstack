@@ -1092,6 +1092,10 @@ class VmmCLI:
             app_compose["pre_launch_script"] = (
                 open(args.prelaunch_script, "rb").read().decode("utf-8")
             )
+        if args.init_script:
+            scripts = [read_utf8(path) for path in args.init_script]
+            # A lone script stays a string, which guests before 0.6.0 require.
+            app_compose["init_script"] = scripts[0] if len(scripts) == 1 else scripts
         if args.swap is not None:
             swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
             if swap_bytes > 0:
@@ -1295,6 +1299,7 @@ class VmmCLI:
         image: Optional[str] = None,
         docker_compose_content: Optional[str] = None,
         prelaunch_script: Optional[str] = None,
+        init_scripts: Optional[List[str]] = None,
         swap_size: Optional[int] = None,
         env_file: Optional[str] = None,
         user_config: Optional[str] = None,
@@ -1345,10 +1350,11 @@ class VmmCLI:
         if env_file:
             upgrade_params.update(resize_params)
 
-        # handle compose file updates (docker-compose, prelaunch script, swap)
+        # handle compose file updates (docker-compose, scripts, swap)
         needs_compose_update = (
             docker_compose_content
             or prelaunch_script is not None
+            or init_scripts
             or swap_size is not None
         )
         vm_info_response = None
@@ -1384,6 +1390,18 @@ class VmmCLI:
                 elif "pre_launch_script" in app_compose:
                     del app_compose["pre_launch_script"]
                     updates.append("prelaunch script (removed)")
+
+            if init_scripts:
+                scripts = [script for script in init_scripts if script.strip()]
+                if scripts:
+                    # A lone script stays a string, which guests before 0.6.0 require.
+                    app_compose["init_script"] = (
+                        scripts[0] if len(scripts) == 1 else scripts
+                    )
+                    updates.append("init script")
+                elif "init_script" in app_compose:
+                    del app_compose["init_script"]
+                    updates.append("init script (removed)")
 
             if swap_size is not None:
                 swap_bytes = max(0, int(round(swap_size)) * 1024 * 1024)
@@ -2119,6 +2137,14 @@ def main():
     compose_parser.add_argument(
         "--prelaunch-script", default=None, help="Path to prelaunch script"
     )
+    compose_parser.add_argument(
+        "--init-script",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Path to a Bash script to run before dockerd starts "
+        "(can be used multiple times)",
+    )
     compose_parser.add_argument("--kms", action="store_true", help="Enable KMS")
     compose_parser.add_argument(
         "--gateway", action="store_true", help="Enable dstack-gateway"
@@ -2417,6 +2443,14 @@ def main():
         "--prelaunch-script", help="Path to pre-launch script file"
     )
     update_parser.add_argument(
+        "--init-script",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Path to a Bash script to run before dockerd starts "
+        "(can be used multiple times; an empty file removes the scripts)",
+    )
+    update_parser.add_argument(
         "--env-file", help="File with environment variables to encrypt"
     )
     update_parser.add_argument("--user-config", help="Path to user config file")
@@ -2629,6 +2663,7 @@ def main():
             image=args.image,
             docker_compose_content=compose_content,
             prelaunch_script=prelaunch_content,
+            init_scripts=[read_utf8(path) for path in args.init_script],
             swap_size=args.swap if hasattr(args, "swap") else None,
             env_file=args.env_file,
             user_config=user_config_content,

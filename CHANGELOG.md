@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `vmm-cli compose --init-script` and `vmm-cli update --init-script` set `init_script` in the app compose file.
+
 ### Changed
 
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
