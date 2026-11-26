@@ -910,6 +910,8 @@ describe('GET /app/:appId', () => {
     const legacy = await appFetch(new Request(url));
     expect(legacy.status).toBe(200);
     expect(await legacy.json()).toEqual({ currentAppEpoch: 0 });
+    const { blockTag, blockNumber } = mockReadContract.mock.lastCall![0];
+    expect([blockTag, blockNumber]).toEqual(['latest', undefined]);
   });
 });
 

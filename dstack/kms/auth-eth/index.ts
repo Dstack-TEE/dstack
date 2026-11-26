@@ -395,7 +395,7 @@ export class EthereumBackend {
   async getAppEpoch(appId: string): Promise<number> {
     const epoch = Number(await this.client.readContract({
       address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'currentAppEpoch',
-      args: [this.decodeHex(appId, 20)], blockNumber: await this.resolveBlock(),
+      args: [this.decodeHex(appId, 20)], blockTag: 'latest',
     }));
     if (!Number.isSafeInteger(epoch)) throw new Error('app epoch exceeds the supported range');
     return epoch;
