@@ -24,7 +24,7 @@ component_cache_key() {
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0014-ovl-handle-idmapped-mounts-in-getattr.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0015-ovl-handle-idmapped-mounts-in-set-acl.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0016-ovl-allow-idmapping-overlay-mounts.patch" \
-      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0017-x86-sev-expose-secure-tsc-status-in-sysfs.patch"
+      "$COMPONENT_PATH/patches/0001-x86-sev-expose-secure-tsc-status-in-sysfs.patch"
     key_tools gcc ld make pahole
     key_packages binutils dwarves bc bison flex libssl-dev libelf-dev
 }

@@ -68,7 +68,7 @@ for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0014-ovl-handle-idmapped-mounts-in-getattr.patch" \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0015-ovl-handle-idmapped-mounts-in-set-acl.patch" \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0016-ovl-allow-idmapping-overlay-mounts.patch" \
-  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0017-x86-sev-expose-secure-tsc-status-in-sysfs.patch"; do
+  "$MKOSI_DIR/components/kernel/patches/0001-x86-sev-expose-secure-tsc-status-in-sysfs.patch"; do
     patch -d "$src" -p1 --fuzz=0 < "$patch"
 done
 
