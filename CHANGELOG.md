@@ -17,8 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `app-compose.json` written by `vmm-cli compose` unchanged instead of a Docker
   Compose file patched into the stored one, and `--prelaunch-script` and
   `--swap` are gone from `update`: run `compose` again to change them.
-  `update --env-file` no longer rewrites `allowed_envs`; render them with
-  `compose --env-file`.
+  `update --env-file` no longer rewrites `allowed_envs` and refuses variables
+  the compose does not allow; render them with `compose --env-file`, which now
+  also writes `launch_token_hash` for `APP_LAUNCH_TOKEN`. `update-env` and
+  `update-app-compose` are removed in favor of `update --env-file` and
+  `update --compose`.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import

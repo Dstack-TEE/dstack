@@ -561,18 +561,6 @@ CLI accepts, whatever root epoch the response claims.
 
 ### Updating Running VMs
 
-#### Update Environment Variables
-
-```bash
-./vmm-cli.py update-env <vm-id> --env-file ./new-secrets.env
-```
-
-#### Update Application Compose
-
-```bash
-./vmm-cli.py update-app-compose <vm-id> ./new-app-compose.json
-```
-
 #### Update User Configuration
 
 ```bash
@@ -630,7 +618,7 @@ Use the all-in-one `update` command to update multiple VM aspects in a single op
 
 **Available Options:**
 - **Resource changes** (requires VM to be stopped): `--vcpu`, `--memory`, `--disk`, `--image`
-- **Application updates**: `--compose` (an app-compose.json made by `compose`, sent unchanged), `--env-file`, `--user-config`. To change the Docker Compose file, scripts or swap, run `compose` again and pass its output
+- **Application updates**: `--compose` (an app-compose.json made by `compose`, sent unchanged), `--env-file`, `--user-config`. To change the Docker Compose file, scripts or swap, run `compose` again and pass its output. `--env-file` refuses variables missing from the compose's `allowed_envs`; pass a compose made with the same `--env-file`
 - **Networking** (mutually exclusive):
   - `--port <mapping>` (can be used multiple times)
   - `--no-ports` (remove all port mappings)

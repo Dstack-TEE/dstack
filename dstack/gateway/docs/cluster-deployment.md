@@ -523,7 +523,7 @@ BOOTNODE_URL=https://gateway-2.example.com:19702
 EOF
 
 # Update and restart
-vmm-cli.py --url <vmm-url> update-env --env-file updated.env <vm-id>
+vmm-cli.py --url <vmm-url> update <vm-id> --env-file updated.env --kms-url <kms-url>
 vmm-cli.py --url <vmm-url> stop <vm-id>
 vmm-cli.py --url <vmm-url> start <vm-id>
 ```

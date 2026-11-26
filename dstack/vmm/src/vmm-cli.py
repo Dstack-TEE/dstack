@@ -1088,6 +1088,10 @@ class VmmCLI:
             app_compose["storage_discard"] = False
         if args.key_provider:
             app_compose["key_provider"] = args.key_provider
+        if "APP_LAUNCH_TOKEN" in envs:
+            app_compose["launch_token_hash"] = hashlib.sha256(
+                envs["APP_LAUNCH_TOKEN"].encode("utf-8")
+            ).hexdigest()
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = (
                 open(args.prelaunch_script, "rb").read().decode("utf-8")
@@ -1221,71 +1225,10 @@ class VmmCLI:
         print(f"Created VM with ID: {response.get('id')}")
         return response.get("id")
 
-    def update_vm_env(
-        self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None
-    ) -> None:
-        """Update environment variables for a VM."""
-        # Validate: requires --kms-url
-        if not kms_urls:
-            raise Exception("--kms-url is required to encrypt environment variables")
-
-        envs = envs or {}
-        # First get the VM info to retrieve the app_id
-        vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
-
-        if not vm_info_response.get("found", False) or "info" not in vm_info_response:
-            raise Exception(f"VM with ID {vm_id} not found")
-
-        app_id = vm_info_response["info"]["app_id"]
-        print(f"Retrieved app ID: {app_id}")
-        vm_configuration = vm_info_response["info"].get("configuration") or {}
-        compose_file = vm_configuration.get("compose_file")
-
-        payload = {"id": vm_id}
-        payload.update(
-            self.encrypt_env_payload(
-                envs,
-                app_id,
-                kms_urls[0],
-                self.image_supports_sealed_env(vm_configuration.get("image")),
-            )
-        )
-
-        if compose_file:
-            try:
-                app_compose = json.loads(compose_file)
-            except json.JSONDecodeError:
-                app_compose = {}
-            compose_changed = False
-            allowed_envs = list(envs.keys())
-            if app_compose.get("allowed_envs") != allowed_envs:
-                app_compose["allowed_envs"] = allowed_envs
-                compose_changed = True
-            launch_token_value = envs.get("APP_LAUNCH_TOKEN")
-            if launch_token_value is not None:
-                launch_token_hash = hashlib.sha256(
-                    launch_token_value.encode("utf-8")
-                ).hexdigest()
-                if app_compose.get("launch_token_hash") != launch_token_hash:
-                    app_compose["launch_token_hash"] = launch_token_hash
-                    compose_changed = True
-            if compose_changed:
-                payload["compose_file"] = json.dumps(
-                    app_compose, indent=4, ensure_ascii=False
-                )
-
-        self.rpc_call("UpgradeApp", payload)
-        print(f"Environment variables updated for VM {vm_id}")
-
     def update_vm_user_config(self, vm_id: str, user_config: str) -> None:
         """Update user config for a VM."""
         self.rpc_call("UpgradeApp", {"id": vm_id, "user_config": user_config})
         print(f"User config updated for VM {vm_id}")
-
-    def update_vm_app_compose(self, vm_id: str, app_compose: str) -> None:
-        """Update app compose for a VM."""
-        self.rpc_call("UpgradeApp", {"id": vm_id, "compose_file": app_compose})
-        print(f"App compose updated for VM {vm_id}")
 
     def update_vm_ports(self, vm_id: str, ports: List[str]) -> None:
         """Update port mapping for a VM."""
@@ -1367,6 +1310,15 @@ class VmmCLI:
                 ):
                     raise Exception(f"VM with ID {vm_id} not found")
                 vm_configuration = vm_info_response["info"].get("configuration") or {}
+                compose = json.loads(
+                    app_compose or vm_configuration.get("compose_file") or "{}"
+                )
+                unknown = set(envs) - set(compose.get("allowed_envs") or [])
+                if unknown:
+                    raise Exception(
+                        f"{', '.join(sorted(unknown))} not in allowed_envs; "
+                        "pass --compose made by `compose --env-file`"
+                    )
                 upgrade_params.update(
                     self.encrypt_env_payload(
                         envs,
@@ -2279,18 +2231,6 @@ def main():
         "--json", action="store_true", help="Output in JSON format for automation"
     )
 
-    # Update environment variables command
-    update_env_parser = subparsers.add_parser(
-        "update-env", help="Update environment variables for a VM"
-    )
-    update_env_parser.add_argument("vm_id", help="VM ID to update")
-    update_env_parser.add_argument(
-        "--env-file", required=True, help="File with environment variables to encrypt"
-    )
-    update_env_parser.add_argument(
-        "--kms-url", action="append", type=str, help="KMS URL"
-    )
-
     # Whitelist command
     kms_parser = subparsers.add_parser("kms", help="Manage trusted KMS whitelist")
     kms_subparsers = kms_parser.add_subparsers(dest="kms_action", help="KMS actions")
@@ -2309,15 +2249,6 @@ def main():
         "remove", help="Remove public key from trusted signers"
     )
     remove_kms_parser.add_argument("pubkey", help="Public key to remove")
-
-    # Update app compose
-    update_app_compose_parser = subparsers.add_parser(
-        "update-app-compose", help="Update app compose for a VM"
-    )
-    update_app_compose_parser.add_argument("vm_id", help="VM ID to update")
-    update_app_compose_parser.add_argument(
-        "compose", help="Path to app-compose.json file"
-    )
 
     # Update user config
     update_user_config_parser = subparsers.add_parser(
@@ -2540,14 +2471,8 @@ def main():
         cli.list_images(args.json)
     elif args.command == "lsgpu":
         cli.list_gpus(args.json)
-    elif args.command == "update-env":
-        cli.update_vm_env(
-            args.vm_id, parse_env_file(args.env_file), kms_urls=args.kms_url
-        )
     elif args.command == "update-user-config":
         cli.update_vm_user_config(args.vm_id, open(args.user_config, "r").read())
-    elif args.command == "update-app-compose":
-        cli.update_vm_app_compose(args.vm_id, open(args.compose, "r").read())
     elif args.command == "update-ports":
         cli.update_vm_ports(args.vm_id, args.port)
     elif args.command == "update":

@@ -778,8 +778,8 @@ upgrade_gateway_node() {
   local node=$1 id
   id=$(cat "$WORK_DIR/gateway${node}.vm_id")
   stop_vm "$id" "Gateway node $node"
-  "${VMM_CLI[@]}" update-app-compose "$id" "$WORK_DIR/gateway-latest.app-compose.json" >/dev/null
-  "${VMM_CLI[@]}" update "$id" --kms-url "$KMS_LATEST_URL" >/dev/null
+  "${VMM_CLI[@]}" update "$id" --compose "$WORK_DIR/gateway-latest.app-compose.json" \
+    --kms-url "$KMS_LATEST_URL" >/dev/null
   start_vm "$id" "gateway${node}-latest"
   wait_gateway "$node"
   wait_gateway_cert "$node"

@@ -78,12 +78,12 @@ class UpdateVmTests(unittest.TestCase):
         )
 
     def test_compose_is_sent_as_is_with_env(self) -> None:
-        """Send the rendered compose unchanged alongside new env vars."""
+        """Send the rendered compose unchanged, refusing envs it does not allow."""
         cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
         cli.rpc_call = Mock(return_value={"found": True, "info": {"app_id": "app"}})
         cli.encrypt_env_payload = Mock(return_value={"encrypted_env": "00"})
         cli.image_supports_sealed_env = Mock(return_value=False)
-        compose = '{"allowed_envs": []}'
+        compose = '{"allowed_envs": ["A"]}'
 
         with (
             patch.object(VMM_CLI, "parse_env_file", return_value={"A": "1"}),
@@ -92,11 +92,12 @@ class UpdateVmTests(unittest.TestCase):
             cli.update_vm(
                 "vm", app_compose=compose, env_file="env", kms_urls=["https://kms"]
             )
-
-        method, payload = cli.rpc_call.call_args.args
-        self.assertEqual(method, "UpgradeApp")
-        self.assertEqual(payload["compose_file"], compose)
-        self.assertEqual(payload["encrypted_env"], "00")
+            method, payload = cli.rpc_call.call_args.args
+            self.assertEqual(method, "UpgradeApp")
+            self.assertEqual(payload["compose_file"], compose)
+            self.assertEqual(payload["encrypted_env"], "00")
+            with self.assertRaisesRegex(Exception, "A not in allowed_envs"):
+                cli.update_vm("vm", env_file="env", kms_urls=["https://kms"])
 
 
 class ComposeTests(unittest.TestCase):
@@ -426,7 +427,9 @@ class SealedEnvTests(unittest.TestCase):
                         "app_id": self.app_id,
                         "configuration": {
                             "image": "new",
-                            "compose_file": '{"kms_enabled":true}',
+                            "compose_file": json.dumps(
+                                {"allowed_envs": list(self.envs)}
+                            ),
                         },
                     },
                 }
@@ -453,9 +456,9 @@ class SealedEnvTests(unittest.TestCase):
         self.assertNotIn("sealed_env", payload)
         self.cli.client.request.assert_not_called()
 
-    def test_create_update_and_update_env_send_only_the_negotiated_field(self):
+    def test_create_and_update_send_only_the_negotiated_field(self):
         """Use the selected ciphertext field consistently across CLI commands."""
-        compose = json.dumps({"kms_enabled": True})
+        compose = json.dumps({"kms_enabled": True, "allowed_envs": list(self.envs)})
         args = argparse.Namespace(
             compose="compose.json",
             env_file="env",
@@ -514,7 +517,6 @@ class SealedEnvTests(unittest.TestCase):
                     lambda: self.cli.update_vm(
                         "vm", env_file="env", kms_urls=args.kms_url
                     ),
-                    lambda: self.cli.update_vm_env("vm", self.envs, args.kms_url),
                 ]:
                     with self.subTest(capability=capability, action=action):
                         self.cli.rpc_call.reset_mock()
