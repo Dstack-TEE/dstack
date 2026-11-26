@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -98,6 +99,40 @@ class UpdateVmTests(unittest.TestCase):
             self.assertEqual(payload["encrypted_env"], "00")
             with self.assertRaisesRegex(Exception, "A not in allowed_envs"):
                 cli.update_vm("vm", env_file="env", kms_urls=["https://kms"])
+            cli.update_vm(
+                "vm",
+                app_compose='{"allowed_envs": ["A: int"]}',
+                env_file="env",
+                kms_urls=["https://kms"],
+            )
+
+    def test_launch_token_must_match_compose(self) -> None:
+        """Refuse an APP_LAUNCH_TOKEN the compose does not pin."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        cli.rpc_call = Mock(return_value={"found": True, "info": {"app_id": "app"}})
+        cli.encrypt_env_payload = Mock(return_value={})
+        cli.image_supports_sealed_env = Mock(return_value=False)
+        token_hash = hashlib.sha256(b"token").hexdigest()
+
+        def update(token: str) -> None:
+            compose = {
+                "allowed_envs": ["APP_LAUNCH_TOKEN"],
+                "launch_token_hash": token_hash,
+            }
+            with patch.object(
+                VMM_CLI, "parse_env_file", return_value={"APP_LAUNCH_TOKEN": token}
+            ):
+                cli.update_vm(
+                    "vm",
+                    app_compose=json.dumps(compose),
+                    env_file="env",
+                    kms_urls=["https://kms"],
+                )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            update("token")
+            with self.assertRaisesRegex(Exception, "launch_token_hash"):
+                update("other")
 
 
 class ComposeTests(unittest.TestCase):

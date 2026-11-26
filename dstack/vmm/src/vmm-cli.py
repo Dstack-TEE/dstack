@@ -1313,10 +1313,25 @@ class VmmCLI:
                 compose = json.loads(
                     app_compose or vm_configuration.get("compose_file") or "{}"
                 )
-                unknown = set(envs) - set(compose.get("allowed_envs") or [])
+                # An entry may be `NAME: spec`.
+                allowed = {
+                    entry.split(":", 1)[0].strip()
+                    for entry in compose.get("allowed_envs") or []
+                }
+                unknown = set(envs) - allowed
                 if unknown:
                     raise Exception(
                         f"{', '.join(sorted(unknown))} not in allowed_envs; "
+                        "pass --compose made by `compose --env-file`"
+                    )
+                token = envs.get("APP_LAUNCH_TOKEN")
+                if (
+                    token is not None
+                    and compose.get("launch_token_hash")
+                    != hashlib.sha256(token.encode("utf-8")).hexdigest()
+                ):
+                    raise Exception(
+                        "APP_LAUNCH_TOKEN does not match launch_token_hash; "
                         "pass --compose made by `compose --env-file`"
                     )
                 upgrade_params.update(
