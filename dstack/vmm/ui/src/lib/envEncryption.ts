@@ -13,11 +13,31 @@ type KeyClient = {
   getAppEnvEncryptPubKey(request: VmmTypes.IAppId): Promise<VmmTypes.IPublicKeyResponse>;
 };
 
-/** allowed_envs for `envs`: `NAME: spec` for each variable with a value spec, the plain name otherwise. */
+/** allowed_envs for `envs`, in their order: `NAME: spec` for a variable with a value spec, the plain name otherwise. */
 export function allowedEnvsOf(envs: EnvEntry[]): string[] {
-  const specs = envs.filter((env) => env.spec?.trim()).map((env) => `${env.key}: ${env.spec!.trim()}`);
   const covered = new Set(envs.filter((env) => env.spec?.trim()).map((env) => env.key));
-  return [...specs, ...envs.map((env) => env.key).filter((key) => !covered.has(key))];
+  const entries = envs.flatMap((env) => {
+    if (env.spec?.trim()) return [`${env.key}: ${env.spec.trim()}`];
+    return covered.has(env.key) ? [] : [env.key];
+  });
+  return [...new Set(entries)];
+}
+
+/** `envs` replaced by `KEY=VALUE` lines. Variables with a value spec stay, without a value if no line names them. */
+export function replaceEnvs(envs: EnvEntry[], content: string): EnvEntry[] {
+  const lines = content.split('\n').map((line) => line.trim())
+    .filter((line) => !line.startsWith('#') && line.indexOf('=') > 0)
+    .map((line) => ({ key: line.slice(0, line.indexOf('=')).trim(), value: line.slice(line.indexOf('=') + 1).trim() }))
+    .filter((line) => line.key);
+  const withSpec = envs.filter((env) => env.spec?.trim());
+  const named = new Set(lines.map((line) => line.key));
+  return [
+    ...lines.flatMap((line) => {
+      const rows = withSpec.filter((env) => env.key === line.key);
+      return rows.length ? rows.map((env) => ({ ...env, value: line.value })) : [line];
+    }),
+    ...withSpec.filter((env) => !named.has(env.key)).map((env) => ({ ...env, value: '' })),
+  ];
 }
 
 /** The `NAME: spec` entries of `allowedEnvs` as variables without a value, to edit or remove. */

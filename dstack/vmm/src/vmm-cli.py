@@ -1077,7 +1077,9 @@ class VmmCLI:
             "key_provider_id": args.key_provider_id or "",
             "public_logs": args.public_logs,
             "public_sysinfo": args.public_sysinfo,
-            "allowed_envs": merge_allowed_envs(args.env_spec, envs),
+            "allowed_envs": merge_allowed_envs(
+                args.env_spec, [*(s for s in args.env_spec if ":" not in s), *envs]
+            ),
             "no_instance_id": args.no_instance_id,
             "secure_time": args.secure_time,
         }
@@ -1637,19 +1639,34 @@ def add_drop_env_spec_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def env_spec(entry: str) -> str:
+    """Check an `--env-spec` argument: `NAME` or `NAME: SPEC`."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(:\s*\S.*)?", entry):
+        raise argparse.ArgumentTypeError(
+            f"expected NAME or 'NAME: SPEC', with NAME a valid variable name: {entry!r}"
+        )
+    return entry
+
+
 def merge_allowed_envs(
     existing: List[str], names: Iterable[str], drop: Iterable[str] = ()
 ) -> List[str]:
-    """Return allowed_envs for the variables `names`.
+    """Return allowed_envs for the variables `names`, in the order of `existing`.
 
     Entries of `existing` that carry a value spec (`NAME: spec`) are part of
     the app's identity and are kept unless `drop` names them; plain names
-    follow `names`.
+    follow `names`, and new ones go last.
     """
-    drop = set(drop)
-    specs = [e for e in existing if ":" in e and e.split(":", 1)[0] not in drop]
-    covered = {entry.split(":", 1)[0] for entry in specs}
-    return specs + [name for name in names if name not in covered]
+    names, drop = list(names), set(drop)
+
+    def keep(entry: str) -> bool:
+        if ":" in entry:
+            return entry.split(":", 1)[0] not in drop
+        return entry in names
+
+    kept = [entry for entry in existing if keep(entry)]
+    covered = {entry.split(":", 1)[0] for entry in kept}
+    return kept + [name for name in names if name not in covered]
 
 
 def parse_env_file(file_path: str) -> Dict[str, str]:
@@ -2094,8 +2111,9 @@ def main():
         "--env-spec",
         action="append",
         default=[],
-        metavar="NAME: SPEC",
-        help="Allow an environment variable and constrain its value, "
+        type=env_spec,
+        metavar="NAME[: SPEC]",
+        help="Allow an environment variable and optionally constrain its value, "
         "e.g. 'PORT: int(1..=65535)' (can be used multiple times)",
     )
     compose_parser.add_argument(

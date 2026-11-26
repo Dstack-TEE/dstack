@@ -9,7 +9,7 @@ const { runInNewContext } = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const { CipherSuite, Aes256Gcm, HkdfSha256 } = require('@hpke/core');
 const { DhkemX25519HkdfSha256 } = require('@hpke/dhkem-x25519');
-const { allowedEnvsOf, encryptEnvPayload, specEntries } = require('../build/ts/lib/envEncryption.js');
+const { allowedEnvsOf, encryptEnvPayload, replaceEnvs, specEntries } = require('../build/ts/lib/envEncryption.js');
 const { RpcError } = require('../build/ts/lib/vmmRpcClient.js');
 const { vmm } = require('../build/ts/proto/vmm_rpc.js');
 const { prpc } = require('../build/ts/proto/prpc.js');
@@ -68,6 +68,12 @@ test('value specs go to allowed_envs and never into the encrypted payload', asyn
   assert.deepEqual(kept, [{ key: 'NET', value: '', spec: '/main|test:x/' }, { key: 'PORT', value: '', spec: 'int(1..)' }]);
   assert.deepEqual(allowedEnvsOf(kept), ['NET: /main|test:x/', 'PORT: int(1..)']);
   assert.deepEqual(allowedEnvsOf(kept.slice(1)), ['PORT: int(1..)']);
+  assert.deepEqual(allowedEnvsOf([{ key: 'A', value: '' }, ...kept, { key: 'PORT', value: '' }]), ['A', 'NET: /main|test:x/', 'PORT: int(1..)']);
+  assert.deepEqual(replaceEnvs([...kept, { key: 'OLD', value: 'o' }], '# c\nTOKEN=t=1\n PORT = 80 \nbad\n=x'), [
+    { key: 'TOKEN', value: 't=1' },
+    { key: 'PORT', value: '80', spec: 'int(1..)' },
+    { key: 'NET', value: '', spec: '/main|test:x/' },
+  ]);
 
   const { pair, response } = await recipient();
   const payload = await encryptEnvPayload({

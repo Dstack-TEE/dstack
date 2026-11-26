@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 // SPDX-License-Identifier: Apache-2.0
 
+const { replaceEnvs } = require('../lib/envEncryption');
+
 declare const FileReader: any;
 
 type EnvVar = { key: string; value: string; spec?: string };
@@ -109,26 +111,8 @@ const EncryptedEnvEditorComponent = {
       }
       this.replaceFromText(content);
     },
-    /** Replace the variables with `KEY=VALUE` lines, keeping the specs of the names that remain. */
     replaceFromText(this: ComponentInstance, content: string) {
-      const specs = new Map(this.envVars.map((env) => [env.key, env.spec]));
-      this.envVars.splice(0, this.envVars.length);
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) {
-          continue;
-        }
-        const equalIndex = trimmed.indexOf('=');
-        if (equalIndex === -1) {
-          continue;
-        }
-        const key = trimmed.substring(0, equalIndex).trim();
-        const value = trimmed.substring(equalIndex + 1).trim();
-        if (!key) {
-          continue;
-        }
-        this.envVars.push({ key, value, spec: specs.get(key) });
-      }
+      this.envVars.splice(0, this.envVars.length, ...replaceEnvs(this.envVars, content));
     },
     loadEnvFromFile(this: ComponentInstance, event: Event) {
       const input = event.target as HTMLInputElement | null;

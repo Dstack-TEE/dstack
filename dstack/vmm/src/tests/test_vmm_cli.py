@@ -222,7 +222,7 @@ class AllowedEnvsTests(unittest.TestCase):
         """Rebuild entries without a spec from the env file."""
         merge = VMM_CLI.merge_allowed_envs
         self.assertEqual(merge([], {"A": "1", "B": "2"}), ["A", "B"])
-        self.assertEqual(merge(["A", "C"], ["B", "A"]), ["B", "A"])
+        self.assertEqual(merge(["A", "C"], ["B", "A"]), ["A", "B"])
 
     def test_specs_are_kept(self) -> None:
         """Keep entries with a spec, and stay stable when merged again."""
@@ -232,6 +232,8 @@ class AllowedEnvsTests(unittest.TestCase):
             merge(existing, ["TOKEN", "PORT"]),
             ["PORT: int(1..=65535)", "NET:/main|test/", "NET: /.{1,8}/", "TOKEN"],
         )
+        unchanged = ["TOKEN", "PORT: int(1..)", "OTHER"]
+        self.assertEqual(merge(unchanged, ["OTHER", "TOKEN"]), unchanged)
         self.assertEqual(
             merge(existing, ["TOKEN", "PORT"], ["NET", "TOKEN"]),
             ["PORT: int(1..=65535)", "TOKEN"],
@@ -239,6 +241,14 @@ class AllowedEnvsTests(unittest.TestCase):
         self.assertEqual(merge(existing, [], ["PORT", "NET"]), [])
         merged = merge(existing, ["NET", "PORT", "TOKEN"])
         self.assertEqual(merge(merged, ["TOKEN", "NET", "PORT"]), merged)
+
+    def test_env_spec_arguments_are_checked(self) -> None:
+        """Accept a bare name or a name with a spec, and nothing else."""
+        for entry in ["TOKEN", "_A1", "PORT: int(1..=65535)", "NET:/a|b/"]:
+            self.assertEqual(VMM_CLI.env_spec(entry), entry)
+        for entry in ["", "PORT int", "PORT : int", "1A", "A-B", "PORT:", "PORT: "]:
+            with self.assertRaises(argparse.ArgumentTypeError):
+                VMM_CLI.env_spec(entry)
 
 
 class LaunchTicketTests(unittest.TestCase):
