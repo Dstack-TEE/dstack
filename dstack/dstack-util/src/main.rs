@@ -149,7 +149,8 @@ struct ImportEnvArgs {
     /// User config holding the variables under `env` [default: .user-config in the host-shared dir]
     #[arg(long)]
     user_config: Option<PathBuf>,
-    /// JSON object of variables to merge into [default: .decrypted-env.json in the host-shared dir]
+    /// JSON object of variables to merge into [default: .decrypted-env.json in the host-shared
+    /// dir, with .decrypted-env beside it rewritten to match]
     #[arg(long)]
     env_file: Option<PathBuf>,
     /// App compose file whose `allowed_envs` permits and constrains the variables
@@ -203,11 +204,12 @@ fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
 
 fn cmd_import_env(args: ImportEnvArgs) -> Result<()> {
     use dstack_types::shared_filenames::{
-        host_shared_dir, APP_COMPOSE, DECRYPTED_ENV_JSON, USER_CONFIG,
+        host_shared_dir, APP_COMPOSE, DECRYPTED_ENV, DECRYPTED_ENV_JSON, USER_CONFIG,
     };
 
     let shared = host_shared_dir();
     let user_config = args.user_config.unwrap_or_else(|| shared.join(USER_CONFIG));
+    let shell_env_file = args.env_file.is_none().then(|| shared.join(DECRYPTED_ENV));
     let env_file = args
         .env_file
         .unwrap_or_else(|| shared.join(DECRYPTED_ENV_JSON));
@@ -236,7 +238,12 @@ fn cmd_import_env(args: ImportEnvArgs) -> Result<()> {
     parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
     let json = serde_json::to_vec(&envs).context("failed to serialize env")?;
     safe_write_with_mode(&env_file, json, 0o600)
-        .with_context(|| format!("failed to write {}", env_file.display()))
+        .with_context(|| format!("failed to write {}", env_file.display()))?;
+    if let Some(path) = shell_env_file {
+        safe_write_with_mode(&path, parse_env_file::convert_env_to_str(&envs), 0o600)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[derive(Parser)]

@@ -133,7 +133,7 @@ This file is not measured to RTMRs, and the envelope is not bound to an instance
 
 #### Environment value specs
 
-Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional. The CVM refuses to boot when the value of `NAME` does not match the spec. A variable that is not set counts as empty, so `NAME` is required unless its spec accepts the empty string, as one ending in `?` does. A spec is one of:
+Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional, and `NAME` must be `[A-Za-z_][A-Za-z0-9_]*` with nothing between it and the colon. The CVM refuses to boot when the value of `NAME` does not match the spec. A variable that is not set counts as empty, so `NAME` is required unless its spec accepts the empty string, as one ending in `?` does. A spec is one of:
 
 | Spec | Accepts |
 |------|---------|
@@ -153,10 +153,10 @@ A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and 
 PORT=$(jq -r .port /dstack/.host-shared/.user-config)
 PORT=$PORT dstack-util validate-env --allow-unlisted 'PORT: int(1024..=65535)' || exit 1
 
-dstack-util validate-env --compose /dstack/app-compose.json --allow-unlisted --env-file /dstack/.host-shared/.user-config || exit 1
+dstack-util validate-env --compose /dstack/app-compose.json --env-file env.json || exit 1
 ```
 
-`dstack-util import-env` is the shorthand for the common case: it copies variables from the `env` object of `.user-config` into `.decrypted-env.json`, so the app receives them like encrypted environment variables. Name the variables, or pass `--all` for every variable under `env`. Each one must be in `allowed_envs` and match its specs there; a named variable that `env` lacks counts as empty.
+`dstack-util import-env` is the shorthand for the common case: it copies variables from the `env` object of `.user-config` into `.decrypted-env.json` and `.decrypted-env`, so the app receives them like encrypted environment variables. Name the variables, or pass `--all` for every variable under `env`. Each one must be in `allowed_envs` and match its specs there; a named variable that `env` lacks counts as empty.
 
 ```bash
 dstack-util import-env RPC_API_KEY
