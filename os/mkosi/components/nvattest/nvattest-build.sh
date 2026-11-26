@@ -38,9 +38,9 @@ rm -rf "$canonical"
 mkdir -m 0700 "$canonical"
 cp -a "$checkout" "$src"
 patch -d "$src" -p1 --fuzz=0 < \
-  "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/0001-validate-ocsp-response-freshness.patch"
-patch -d "$src" -p1 --fuzz=0 < \
   "$SELF/components/nvattest/patches/0001-pin-fetchcontent-inputs.patch"
+patch -d "$src" -p1 --fuzz=0 < \
+  "$SELF/components/nvattest/patches/0002-validate-ocsp-response-freshness.patch"
 
 rm -rf "$build"
 export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$canonical=/usr/src/nvattest -fmacro-prefix-map=$canonical=/usr/src/nvattest"
