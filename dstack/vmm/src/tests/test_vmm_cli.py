@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -74,6 +75,70 @@ class UpdateVmTests(unittest.TestCase):
 
         self.assertEqual(
             [params["launch_ticket"] for _, params in calls], ["t" * 32, ""]
+        )
+
+    def test_compose_is_sent_as_is_with_env(self) -> None:
+        """Send the rendered compose unchanged alongside new env vars."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        cli.rpc_call = Mock(return_value={"found": True, "info": {"app_id": "app"}})
+        cli.encrypt_env_payload = Mock(return_value={"encrypted_env": "00"})
+        cli.image_supports_sealed_env = Mock(return_value=False)
+        compose = '{"allowed_envs": []}'
+
+        with (
+            patch.object(VMM_CLI, "parse_env_file", return_value={"A": "1"}),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli.update_vm(
+                "vm", app_compose=compose, env_file="env", kms_urls=["https://kms"]
+            )
+
+        method, payload = cli.rpc_call.call_args.args
+        self.assertEqual(method, "UpgradeApp")
+        self.assertEqual(payload["compose_file"], compose)
+        self.assertEqual(payload["encrypted_env"], "00")
+
+
+class ComposeTests(unittest.TestCase):
+    def compose(self, *scripts: str) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "docker-compose.yaml").write_text("services: {}")
+            paths = []
+            for i, script in enumerate(scripts):
+                paths.append(tmp / f"init{i}.sh")
+                paths[-1].write_text(script)
+            args = argparse.Namespace(
+                name="app",
+                docker_compose=tmp / "docker-compose.yaml",
+                env_file=None,
+                kms=False,
+                gateway=False,
+                local_key_provider=False,
+                key_provider_id=None,
+                key_provider=None,
+                public_logs=False,
+                public_sysinfo=False,
+                no_instance_id=False,
+                secure_time=False,
+                no_storage_discard=False,
+                prelaunch_script=None,
+                init_script=paths,
+                swap=None,
+                event_log_version=None,
+                output=tmp / "app-compose.json",
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                VMM_CLI.VmmCLI("http://127.0.0.1:8080").create_app_compose(args)
+            return json.loads(args.output.read_text())
+
+    def test_init_script_shape_follows_manifest_version(self) -> None:
+        self.assertNotIn("init_script", self.compose())
+        one = self.compose("echo a")
+        self.assertEqual((one["manifest_version"], one["init_script"]), (2, "echo a"))
+        two = self.compose("echo a", "echo b")
+        self.assertEqual(
+            (two["manifest_version"], two["init_script"]), ("3", ["echo a", "echo b"])
         )
 
 

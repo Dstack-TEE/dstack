@@ -231,7 +231,7 @@ First, create an application composition file that describes your application:
 - `--name`: Friendly name for your application
 - `--docker-compose`: Path to your Docker Compose file
 - `--prelaunch-script`: Optional script to run before starting containers. It runs after dockerd, so containers restored by a Docker restart policy may already be running; do not put security gates here (see [security best practices](./security/security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first))
-- `--init-script`: Optional Bash script to run before dockerd starts. Repeat it for up to 5 scripts, which run in order. For a one-line script, Bash process substitution saves a file: `--init-script <(echo 'dstack-util import-env API_KEY')`
+- `--init-script`: Optional Bash script to run before dockerd starts. Repeat it for up to 5 scripts, which run in order; several scripts set `manifest_version` to `"3"`, which guests before 0.6.0 reject. For a one-line script, Bash process substitution saves a file: `--init-script <(echo 'sysctl -w net.core.somaxconn=4096')`
 - `--kms`: Enable Key Management Service for secrets
 - `--gateway`: Enable dstack-gateway for external access
 - `--local-key-provider`: Use local key provider
@@ -601,9 +601,7 @@ Use the all-in-one `update` command to update multiple VM aspects in a single op
 
 # Update application configuration
 ./vmm-cli.py update <vm-id> \
-  --compose ./new-docker-compose.yml \
-  --prelaunch-script ./setup.sh \
-  --swap 4G \
+  --compose ./new-app-compose.json \
   --env-file ./new-secrets.env \
   --user-config ./new-config.json
 
@@ -624,9 +622,7 @@ Use the all-in-one `update` command to update multiple VM aspects in a single op
   --vcpu 8 \
   --memory 16G \
   --disk 200G \
-  --compose ./new-docker-compose.yml \
-  --prelaunch-script ./init.sh \
-  --swap 8G \
+  --compose ./new-app-compose.json \
   --env-file ./new-secrets.env \
   --port tcp:8080:80 \
   --ppcie
@@ -634,7 +630,7 @@ Use the all-in-one `update` command to update multiple VM aspects in a single op
 
 **Available Options:**
 - **Resource changes** (requires VM to be stopped): `--vcpu`, `--memory`, `--disk`, `--image`
-- **Application updates**: `--compose` (docker-compose file), `--prelaunch-script`, `--init-script` (repeatable; an empty file removes the scripts), `--swap`, `--env-file`, `--user-config`
+- **Application updates**: `--compose` (an app-compose.json made by `compose`, sent unchanged), `--env-file`, `--user-config`. To change the Docker Compose file, scripts or swap, run `compose` again and pass its output
 - **Networking** (mutually exclusive):
   - `--port <mapping>` (can be used multiple times)
   - `--no-ports` (remove all port mappings)

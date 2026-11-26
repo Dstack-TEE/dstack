@@ -9,10 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `vmm-cli compose --init-script` and `vmm-cli update --init-script` set `init_script` in the app compose file.
+- `vmm-cli compose --init-script` sets `init_script` in the app compose file.
 
 ### Changed
 
+- **`vmm-cli update --compose` takes an app compose file.** It sends the
+  `app-compose.json` written by `vmm-cli compose` unchanged instead of a Docker
+  Compose file patched into the stored one, and `--prelaunch-script` and
+  `--swap` are gone from `update`: run `compose` again to change them.
+  `update --env-file` no longer rewrites `allowed_envs`; render them with
+  `compose --env-file`.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import

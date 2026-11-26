@@ -1094,8 +1094,13 @@ class VmmCLI:
             )
         if args.init_script:
             scripts = [read_utf8(path) for path in args.init_script]
-            # A lone script stays a string, which guests before 0.6.0 require.
-            app_compose["init_script"] = scripts[0] if len(scripts) == 1 else scripts
+            if len(scripts) == 1:
+                # A lone script stays a string, which guests before 0.6.0 require.
+                app_compose["init_script"] = scripts[0]
+            else:
+                # A string version makes older guests fail closed.
+                app_compose["manifest_version"] = "3"
+                app_compose["init_script"] = scripts
         if args.swap is not None:
             swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
             if swap_bytes > 0:
@@ -1297,10 +1302,7 @@ class VmmCLI:
         memory: Optional[int] = None,
         disk_size: Optional[int] = None,
         image: Optional[str] = None,
-        docker_compose_content: Optional[str] = None,
-        prelaunch_script: Optional[str] = None,
-        init_scripts: Optional[List[str]] = None,
-        swap_size: Optional[int] = None,
+        app_compose: Optional[str] = None,
         env_file: Optional[str] = None,
         user_config: Optional[str] = None,
         ports: Optional[List[str]] = None,
@@ -1350,83 +1352,25 @@ class VmmCLI:
         if env_file:
             upgrade_params.update(resize_params)
 
-        # handle compose file updates (docker-compose, scripts, swap)
-        needs_compose_update = (
-            docker_compose_content
-            or prelaunch_script is not None
-            or init_scripts
-            or swap_size is not None
-        )
+        if app_compose is not None:
+            upgrade_params["compose_file"] = app_compose
+            updates.append("app compose")
+
         vm_info_response = None
-
-        if needs_compose_update or env_file:
-            vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
-            if (
-                not vm_info_response.get("found", False)
-                or "info" not in vm_info_response
-            ):
-                raise Exception(f"VM with ID {vm_id} not found")
-
-        if needs_compose_update:
-            vm_configuration = vm_info_response["info"].get("configuration") or {}
-            compose_file_content = vm_configuration.get("compose_file")
-
-            try:
-                app_compose = (
-                    json.loads(compose_file_content) if compose_file_content else {}
-                )
-            except json.JSONDecodeError:
-                app_compose = {}
-
-            if docker_compose_content:
-                app_compose["docker_compose_file"] = docker_compose_content
-                updates.append("docker compose")
-
-            if prelaunch_script is not None:
-                script_stripped = prelaunch_script.strip()
-                if script_stripped:
-                    app_compose["pre_launch_script"] = script_stripped
-                    updates.append("prelaunch script")
-                elif "pre_launch_script" in app_compose:
-                    del app_compose["pre_launch_script"]
-                    updates.append("prelaunch script (removed)")
-
-            if init_scripts:
-                scripts = [script for script in init_scripts if script.strip()]
-                if scripts:
-                    # A lone script stays a string, which guests before 0.6.0 require.
-                    app_compose["init_script"] = (
-                        scripts[0] if len(scripts) == 1 else scripts
-                    )
-                    updates.append("init script")
-                elif "init_script" in app_compose:
-                    del app_compose["init_script"]
-                    updates.append("init script (removed)")
-
-            if swap_size is not None:
-                swap_bytes = max(0, int(round(swap_size)) * 1024 * 1024)
-                if swap_bytes > 0:
-                    app_compose["swap_size"] = swap_bytes
-                    updates.append(f"swap: {swap_size}MB")
-                elif "swap_size" in app_compose:
-                    del app_compose["swap_size"]
-                    updates.append("swap (disabled)")
-
-            upgrade_params["compose_file"] = json.dumps(
-                app_compose, indent=4, ensure_ascii=False
-            )
-
         if env_file:
             envs = parse_env_file(env_file)
             if envs:
-                app_id = vm_info_response["info"]["app_id"]
+                vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
+                if (
+                    not vm_info_response.get("found", False)
+                    or "info" not in vm_info_response
+                ):
+                    raise Exception(f"VM with ID {vm_id} not found")
                 vm_configuration = vm_info_response["info"].get("configuration") or {}
-                compose_file_content = vm_configuration.get("compose_file")
-
                 upgrade_params.update(
                     self.encrypt_env_payload(
                         envs,
-                        app_id,
+                        vm_info_response["info"]["app_id"],
                         kms_urls[0],
                         self.image_supports_sealed_env(
                             image
@@ -1436,30 +1380,6 @@ class VmmCLI:
                     )
                 )
                 updates.append("environment variables")
-
-                # update allowed_envs in compose file if needed
-                if compose_file_content:
-                    try:
-                        app_compose = json.loads(compose_file_content)
-                    except json.JSONDecodeError:
-                        app_compose = {}
-                    compose_changed = False
-                    allowed_envs = list(envs.keys())
-                    if app_compose.get("allowed_envs") != allowed_envs:
-                        app_compose["allowed_envs"] = allowed_envs
-                        compose_changed = True
-                    launch_token_value = envs.get("APP_LAUNCH_TOKEN")
-                    if launch_token_value is not None:
-                        launch_token_hash = hashlib.sha256(
-                            launch_token_value.encode("utf-8")
-                        ).hexdigest()
-                        if app_compose.get("launch_token_hash") != launch_token_hash:
-                            app_compose["launch_token_hash"] = launch_token_hash
-                            compose_changed = True
-                    if compose_changed:
-                        upgrade_params["compose_file"] = json.dumps(
-                            app_compose, indent=4, ensure_ascii=False
-                        )
 
         if net or net_vhost is not None or net_vhost_inherit or net_queues:
             # The RPC replaces the whole NIC list, so merge into what the VM
@@ -2438,17 +2358,8 @@ def main():
     update_parser.add_argument("--image", type=str, help="Image name")
 
     # Application options
-    update_parser.add_argument("--compose", help="Path to app-compose.json file")
     update_parser.add_argument(
-        "--prelaunch-script", help="Path to pre-launch script file"
-    )
-    update_parser.add_argument(
-        "--init-script",
-        action="append",
-        default=[],
-        metavar="PATH",
-        help="Path to a Bash script to run before dockerd starts "
-        "(can be used multiple times; an empty file removes the scripts)",
+        "--compose", help="Path to an app-compose.json file made by `compose`"
     )
     update_parser.add_argument(
         "--env-file", help="File with environment variables to encrypt"
@@ -2503,12 +2414,6 @@ def main():
         action="store_true",
         help="Remove all port mappings from the VM",
     )
-    update_parser.add_argument(
-        "--swap",
-        type=parse_memory_size,
-        help="Swap size (e.g. 4G). Set to 0 to disable",
-    )
-
     # GPU options (mutually exclusive)
     gpu_group = update_parser.add_mutually_exclusive_group()
     gpu_group.add_argument(
@@ -2646,12 +2551,6 @@ def main():
     elif args.command == "update-ports":
         cli.update_vm_ports(args.vm_id, args.port)
     elif args.command == "update":
-        compose_content = None
-        if args.compose:
-            compose_content = read_utf8(args.compose)
-        prelaunch_content = None
-        if hasattr(args, "prelaunch_script") and args.prelaunch_script:
-            prelaunch_content = read_utf8(args.prelaunch_script)
         user_config_content = None
         if args.user_config:
             user_config_content = read_utf8(args.user_config)
@@ -2661,10 +2560,7 @@ def main():
             memory=args.memory,
             disk_size=args.disk,
             image=args.image,
-            docker_compose_content=compose_content,
-            prelaunch_script=prelaunch_content,
-            init_scripts=[read_utf8(path) for path in args.init_script],
-            swap_size=args.swap if hasattr(args, "swap") else None,
+            app_compose=args.compose and read_utf8(args.compose),
             env_file=args.env_file,
             user_config=user_config_content,
             ports=args.port,
