@@ -213,6 +213,7 @@ fi
 grep -q '"firmware_sev":"files/ovmf-sev.fd"' "$D/scripts/make-release-artifacts.sh"
 grep -q 'measurement.snp.cbor' "$D/tests/check-output.sh"
 grep -q '0002-validate-ocsp-response-freshness.patch' "$D/components/nvattest/nvattest-build.sh"
+grep -q '0003-expose-signed-ppcie-claims.patch' "$D/components/nvattest/nvattest-build.sh"
 grep -q -- '--fuzz=0' "$D/components/nvattest/nvattest-build.sh"
 grep -q '0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest-build.sh"
 grep -q 'COMPONENT_PATH/patches/0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest.sh"

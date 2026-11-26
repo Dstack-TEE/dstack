@@ -41,6 +41,8 @@ patch -d "$src" -p1 --fuzz=0 < \
   "$SELF/components/nvattest/patches/0001-pin-fetchcontent-inputs.patch"
 patch -d "$src" -p1 --fuzz=0 < \
   "$SELF/components/nvattest/patches/0002-validate-ocsp-response-freshness.patch"
+patch -d "$src" -p1 --fuzz=0 < \
+  "$SELF/components/nvattest/patches/0003-expose-signed-ppcie-claims.patch"
 
 rm -rf "$build"
 export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$canonical=/usr/src/nvattest -fmacro-prefix-map=$canonical=/usr/src/nvattest"
