@@ -19,7 +19,6 @@ serde_json.workspace = true
 tdx-attest.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
-p256.workspace = true
 tokio.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 

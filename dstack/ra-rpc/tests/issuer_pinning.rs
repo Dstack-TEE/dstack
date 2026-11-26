@@ -23,63 +23,17 @@ async fn nothing_is_sent_to_a_server_failing_the_pin() {
     let registered = TestCa::new().unwrap();
     let other = TestCa::new().unwrap();
     let expired = SystemTime::now() - Duration::from_secs(60);
-    for (issuer, usage, ca, not_after, trusted_ca, san, reached) in [
-        (&registered, "kms:rpc", false, None, None, "localhost", true),
-        (&registered, "app:ca", false, None, None, "localhost", false),
-        (&registered, "kms:rpc", true, None, None, "localhost", false),
-        (
-            &registered,
-            "kms:rpc",
-            false,
-            Some(expired),
-            None,
-            "localhost",
-            false,
-        ),
-        (&other, "kms:rpc", false, None, None, "localhost", false),
-        (
-            &registered,
-            "kms:rpc",
-            false,
-            None,
-            Some(&registered),
-            "127.0.0.1",
-            true,
-        ),
-        // Matching CA and hostname do not replace the KMS role check.
-        (
-            &registered,
-            "app:custom",
-            false,
-            None,
-            Some(&registered),
-            "127.0.0.1",
-            false,
-        ),
-        // A matching pin does not replace hostname or CA verification.
-        (
-            &registered,
-            "kms:rpc",
-            false,
-            None,
-            Some(&registered),
-            "localhost",
-            false,
-        ),
-        (
-            &registered,
-            "kms:rpc",
-            false,
-            None,
-            Some(&other),
-            "127.0.0.1",
-            false,
-        ),
+    for (issuer, usage, ca, not_after, reached) in [
+        (&registered, "kms:rpc", false, None, true),
+        (&registered, "app:ca", false, None, false),
+        (&registered, "kms:rpc", true, None, false),
+        (&registered, "kms:rpc", false, Some(expired), false),
+        (&other, "kms:rpc", false, None, false),
     ] {
         let key = KeyPair::generate().unwrap();
         let cert = CertRequest::builder()
             .subject("localhost")
-            .alt_names(&[san.to_string()])
+            .alt_names(&["localhost".to_string()])
             .special_usage(usage)
             .maybe_ca_level(ca.then_some(0))
             .maybe_not_after(not_after)
@@ -124,7 +78,6 @@ async fn nothing_is_sent_to_a_server_failing_the_pin() {
                 pubkey: registered.cert_key().key.public_key_der(),
                 usage: "kms:rpc".into(),
             })
-            .maybe_tls_ca_cert(trusted_ca.map(TestCa::cert_pem))
             .bearer_token("secret".into())
             .verify_server_attestation(false)
             .build()

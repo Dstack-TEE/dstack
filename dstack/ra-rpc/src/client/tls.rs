@@ -7,13 +7,10 @@ use std::sync::Arc;
 use super::PinnedIssuer;
 use anyhow::{bail, Context, Result};
 use rustls::{
-    client::{
-        danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        WebPkiServerVerifier,
-    },
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     crypto::WebPkiSupportedAlgorithms,
     pki_types::{CertificateDer, ServerName, UnixTime},
-    DigitallySignedStruct, RootCertStore, SignatureScheme,
+    DigitallySignedStruct, SignatureScheme,
 };
 
 /// Attestation is checked on the response, but TLS must still prove possession
@@ -25,7 +22,6 @@ use rustls::{
 struct AttestedCertVerifier {
     algorithms: WebPkiSupportedAlgorithms,
     pinned: Option<PinnedIssuer>,
-    webpki: Option<Arc<WebPkiServerVerifier>>,
 }
 
 fn matches_pin(pin: &PinnedIssuer, end_entity: &[u8]) -> bool {
@@ -34,7 +30,7 @@ fn matches_pin(pin: &PinnedIssuer, end_entity: &[u8]) -> bool {
     let Ok((_, cert)) = X509Certificate::from_der(end_entity) else {
         return false;
     };
-    let Ok(([], pubkey)) = SubjectPublicKeyInfo::from_der(&pin.pubkey) else {
+    let Ok((_, pubkey)) = SubjectPublicKeyInfo::from_der(&pin.pubkey) else {
         return false;
     };
     !cert.is_ca()
@@ -47,20 +43,11 @@ impl ServerCertVerifier for AttestedCertVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        server_name: &ServerName<'_>,
-        ocsp_response: &[u8],
-        now: UnixTime,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        if let Some(verifier) = &self.webpki {
-            verifier.verify_server_cert(
-                end_entity,
-                intermediates,
-                server_name,
-                ocsp_response,
-                now,
-            )?;
-        }
         if let Some(pin) = &self.pinned {
             if !matches_pin(pin, end_entity) {
                 return Err(rustls::Error::General(
@@ -94,31 +81,18 @@ impl ServerCertVerifier for AttestedCertVerifier {
     }
 }
 
-pub(super) fn custom_client_config(
+pub(super) fn config_without_ca_verification(
     cert: Option<&str>,
     key: Option<&str>,
     pinned: Option<PinnedIssuer>,
-    ca: Option<&str>,
 ) -> Result<rustls::ClientConfig> {
     use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
     let provider = rustls::crypto::CryptoProvider::get_default()
         .cloned()
         .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-    let webpki = ca
-        .map(|pem| -> Result<_> {
-            let mut roots = RootCertStore::empty();
-            for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
-                roots.add(cert?).context("invalid TLS root CA")?;
-            }
-            WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
-                .build()
-                .context("failed to build TLS CA verifier")
-        })
-        .transpose()?;
     let verifier = AttestedCertVerifier {
         algorithms: provider.signature_verification_algorithms,
         pinned,
-        webpki,
     };
     let builder = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?

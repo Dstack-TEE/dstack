@@ -36,9 +36,8 @@ pub struct RaClientConfig {
     /// TLS handshake signatures remain verified; attestation is checked separately.
     #[builder(default = false)]
     tls_skip_ca_verification: bool,
-    /// Require a server certificate issued as `PinnedIssuer` says during TLS.
-    /// With `tls_ca_cert`, also verify the chain against those roots and check
-    /// the hostname. Without `tls_ca_cert`, check the pin alone.
+    /// Instead of a CA chain, require at the handshake a server certificate
+    /// issued as `PinnedIssuer` says.
     tls_pinned_issuer: Option<PinnedIssuer>,
     #[builder(default = true)]
     verify_server_attestation: bool,
@@ -80,18 +79,10 @@ impl RaClientConfig {
             builder = builder.redirect(reqwest::redirect::Policy::none());
         }
         if self.tls_skip_ca_verification || self.tls_pinned_issuer.is_some() {
-            let ca = self
-                .tls_pinned_issuer
-                .as_ref()
-                .and(self.tls_ca_cert.as_deref());
-            if ca.is_some() && (self.tls_skip_ca_verification || self.tls_no_check_hostname) {
-                bail!("a pinned issuer with a CA requires chain and hostname verification");
-            }
-            builder = builder.use_preconfigured_tls(tls::custom_client_config(
+            builder = builder.use_preconfigured_tls(tls::config_without_ca_verification(
                 self.tls_client_cert.as_deref(),
                 self.tls_client_key.as_deref(),
                 self.tls_pinned_issuer,
-                ca,
             )?);
         } else if let (Some(cert_pem), Some(key_pem)) = (self.tls_client_cert, self.tls_client_key)
         {
