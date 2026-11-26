@@ -24,10 +24,10 @@ Signed-off-by: Kevin Wang <wy721@qq.com>
  4 files changed, 28 insertions(+), 12 deletions(-)
 
 diff --git a/libcontainer/rootfs_init_linux.go b/libcontainer/rootfs_init_linux.go
-index 88fe7b9..80696bd 100644
+index 1507926..de9c378 100644
 --- a/libcontainer/rootfs_init_linux.go
 +++ b/libcontainer/rootfs_init_linux.go
-@@ -328,7 +328,7 @@ func (l *linuxRootfsInit) Init() error {
+@@ -364,7 +364,7 @@ func (l *linuxRootfsInit) Init() error {
  			return err
  		}
  
@@ -36,7 +36,7 @@ index 88fe7b9..80696bd 100644
  
  			// Get info about the ovfs mount (layers, mount opts, propagation, etc.)
  			mounts, err := sysboxmount.GetMountsPid(uint32(os.Getpid()))
-@@ -468,9 +468,12 @@ func (l *linuxRootfsInit) Init() error {
+@@ -478,9 +478,12 @@ func (l *linuxRootfsInit) Init() error {
  		}
  
  		// ID-mapping by itself won't allow the container to write to "/"; must
