@@ -136,7 +136,10 @@ class UpdateVmTests(unittest.TestCase):
 
 
 class ComposeTests(unittest.TestCase):
+    """Verify the app compose written by `compose`."""
+
     def compose(self, *scripts: str) -> dict:
+        """Run `compose` with these init scripts and return the result."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "docker-compose.yaml").write_text("services: {}")
@@ -169,6 +172,7 @@ class ComposeTests(unittest.TestCase):
             return json.loads(args.output.read_text())
 
     def test_init_script_shape_follows_manifest_version(self) -> None:
+        """Write one script as a v2 string and several as a v3 array."""
         self.assertNotIn("init_script", self.compose())
         one = self.compose("echo a")
         self.assertEqual((one["manifest_version"], one["init_script"]), (2, "echo a"))
