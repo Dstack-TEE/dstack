@@ -51,11 +51,9 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
 }
 
 /// Fetch keys directly over the attested connection, without a metadata/CA preflight.
-/// A supplied CA always pins the connection, independently of the epoch selector.
-/// Callers retain the startup KMS CA for the CVM lifetime, including later key
-/// requests. Without a supplied CA, bind the response CA to this connection and
-/// establish its identity through the provider pin or launch-measurement policy.
-/// A non-empty `key_provider_id` is a root CA public key in SPKI DER form.
+/// A supplied CA identifies the KMS issuer regardless of the epoch selector;
+/// chain and hostname verification still apply. On first contact, a non-empty
+/// `key_provider_id` pins the KMS issuer (root public key in SPKI DER form).
 pub async fn request_app_keys(
     url: String,
     request: GetAppKeyRequest,
@@ -64,11 +62,14 @@ pub async fn request_app_keys(
     trusted_ca: Option<String>,
     key_provider_id: &[u8],
 ) -> Result<AppKeyResponse> {
-    let pinned_issuer =
-        (trusted_ca.is_none() && !key_provider_id.is_empty()).then(|| PinnedIssuer {
+    let pinned_issuer = match trusted_ca.as_deref() {
+        Some(ca) => Some(kms_issuer_from_ca(ca)?),
+        None if !key_provider_id.is_empty() => Some(PinnedIssuer {
             pubkey: key_provider_id.to_vec(),
             usage: KMS_RPC_CERT_USAGE.into(),
-        });
+        }),
+        None => None,
+    };
     let server_cert = Arc::new(Mutex::new(None));
     let captured = server_cert.clone();
     let client = RaClientConfig::builder()
@@ -129,6 +130,19 @@ fn validate_kms_root(server_cert: &[u8], root_ca: &str) -> Result<()> {
         .context("KMS root CA did not sign the attested RPC certificate")
 }
 
+fn kms_issuer_from_ca(ca: &str) -> Result<PinnedIssuer> {
+    let (_, pem) =
+        x509_parser::pem::parse_x509_pem(ca.as_bytes()).context("invalid KMS root CA")?;
+    let root = pem.parse_x509().context("invalid KMS root CA")?;
+    if !root.is_ca() || !root.validity().is_valid() {
+        bail!("invalid or expired KMS root CA");
+    }
+    Ok(PinnedIssuer {
+        pubkey: root.public_key().raw.to_vec(),
+        usage: KMS_RPC_CERT_USAGE.into(),
+    })
+}
+
 fn kms_client(
     url: String,
     ca_cert: String,
@@ -136,15 +150,16 @@ fn kms_client(
     client_key_pem: String,
     attestation_verifier: Arc<AttestationVerifier>,
 ) -> Result<KmsClient<RaClient>> {
+    let pinned_issuer = kms_issuer_from_ca(&ca_cert)?;
     let ra_client = RaClientConfig::builder()
         .remote_uri(url)
         .tls_client_cert(client_cert_pem)
         .tls_client_key(client_key_pem)
         .tls_ca_cert(ca_cert)
+        .tls_pinned_issuer(pinned_issuer)
         .tls_built_in_root_certs(false)
         .attestation_verifier(attestation_verifier)
-        // Root pin plus `kms:rpc` already identify the KMS; re-verifying its
-        // quote on every `SignCert` would only add a collateral fetch.
+        // The handshake authenticates the KMS role before sending the ticket.
         .verify_server_attestation(false)
         .cert_validator(Box::new(validate_kms_rpc_cert))
         .build()
@@ -714,6 +729,44 @@ mod tests {
         .is_err());
         assert_eq!(requests.lock().unwrap().len(), requests_before);
 
+        let mut malformed_pin = matching_pin.clone();
+        malformed_pin.push(0);
+        let requests_before = requests.lock().unwrap().len();
+        assert!(request_app_keys(
+            url.clone(),
+            request(),
+            client_cert(),
+            verifier.clone(),
+            None,
+            &malformed_pin,
+        )
+        .await
+        .is_err());
+        assert_eq!(requests.lock().unwrap().len(), requests_before);
+
+        let requests_before = requests.lock().unwrap().len();
+        let historical = GetAppKeyRequest {
+            root_epoch: Some(response.root_epoch),
+            app_epoch: Some(response.app_epoch),
+            ..request()
+        };
+        // The saved CA remains authoritative for explicit epoch requests.
+        request_app_keys(
+            url.clone(),
+            historical,
+            client_cert(),
+            verifier.clone(),
+            Some(root.pem_cert.clone()),
+            &other_root.key.public_key_der(),
+        )
+        .await
+        .unwrap();
+        {
+            let recorded = requests.lock().unwrap();
+            assert_eq!(recorded.len(), requests_before + 1);
+            assert_eq!(recorded.last().unwrap().launch_ticket, "secret-ticket");
+        }
+
         let other_ca = other_root.pem_cert;
         for requested_root_epoch in [None, Some(0), Some(1)] {
             let request = || GetAppKeyRequest {
@@ -778,7 +831,7 @@ mod tests {
             .await
             .is_err());
         }
-        assert_eq!(requests.lock().unwrap().len(), 11);
+        assert_eq!(requests.lock().unwrap().len(), 12);
 
         let cert = client_cert();
         let client = CertRequestClient::Kms {
@@ -791,7 +844,7 @@ mod tests {
             )
             .unwrap(),
             vm_config: "selector-test".into(),
-            launch_ticket: String::new(),
+            launch_ticket: "secret-ticket".into(),
         };
         for root_epoch in [None, Some(0), Some(1)] {
             for app_epoch in [None, Some(0), Some(2)] {
@@ -813,6 +866,7 @@ mod tests {
                 );
                 assert_eq!(received.api_version, 1);
                 assert_eq!(received.vm_config, "selector-test");
+                assert_eq!(received.launch_ticket, "secret-ticket");
 
                 for (wrong_root, wrong_app, message) in [
                     (selected.root_epoch + 1, selected.app_epoch, "root epoch"),
@@ -844,7 +898,7 @@ mod tests {
         );
         shutdown.notify();
         task.await.unwrap().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 39);
+        assert_eq!(requests.lock().unwrap().len(), 40);
     }
 
     #[test]
@@ -863,14 +917,19 @@ mod tests {
         assert!(validate_kms_root(&app_leaf.contents, &root.pem_cert).is_err());
     }
 
-    #[rocket::post("/GetMeta")]
-    fn get_meta() -> &'static str {
-        r#"{"ca_cert":"served ca cert"}"#
+    #[rocket::post("/GetAppKey", data = "<body>")]
+    fn record_app_key(
+        body: String,
+        requests: &rocket::State<Arc<Mutex<Vec<String>>>>,
+    ) -> &'static str {
+        requests.lock().unwrap().push(body);
+        "{}"
     }
 
-    /// Serve `GetMeta` over TLS with `(cert, key)` and query it through the
-    /// guest's KMS client, pinning `root`.
-    async fn get_meta_from(root: &CaCert, (cert, key): (String, String)) -> Result<String> {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn saved_ca_does_not_send_tickets_to_an_app_certificate() {
+        let root = kms_root();
+        let (cert, key) = app_cert(&root, &[0xa1; 20], "127.0.0.1");
         let dir = tempfile::tempdir().expect("tempdir");
         let cert_path = dir.path().join("server.crt");
         let key_path = dir.path().join("server.key");
@@ -885,8 +944,10 @@ mod tests {
             .merge(("tls.key", key_path));
         let (port_tx, port_rx) = tokio::sync::oneshot::channel();
         let port_tx = std::sync::Mutex::new(Some(port_tx));
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
         let rocket = rocket::custom(figment)
-            .mount("/", rocket::routes![get_meta])
+            .manage(requests.clone())
+            .mount("/", rocket::routes![record_app_key])
             .attach(rocket::fairing::AdHoc::on_liftoff("port", move |rocket| {
                 let port = rocket.endpoints().find_map(|e| e.port());
                 if let Some(tx) = port_tx.lock().unwrap().take() {
@@ -898,7 +959,7 @@ mod tests {
             .await
             .expect("ignite");
         let shutdown = rocket.shutdown();
-        tokio::spawn(rocket.launch());
+        let task = tokio::spawn(rocket.launch());
         let port = port_rx.await.ok().flatten().expect("bound port");
 
         let client_key = p256_key();
@@ -909,36 +970,49 @@ mod tests {
             .build()
             .self_signed()
             .expect("client cert");
-        let client = kms_client(
-            format!("https://127.0.0.1:{port}"),
-            root.pem_cert.clone(),
-            client_cert.pem(),
-            client_key.serialize_pem(),
-            Arc::new(AttestationVerifier::new_prod(None).expect("verifier")),
-        )?;
-        let result = client.get_meta().await.map(|meta| meta.ca_cert);
+        let url = format!("https://127.0.0.1:{port}");
+        let verifier = Arc::new(AttestationVerifier::new_prod(None).expect("verifier"));
+        let request = GetAppKeyRequest {
+            api_version: 1,
+            root_epoch: Some(0),
+            app_epoch: Some(0),
+            launch_ticket: "secret-ticket".into(),
+            ..Default::default()
+        };
+        let historical = request_app_keys(
+            url.clone(),
+            request.clone(),
+            CertPair {
+                cert_pem: client_cert.pem(),
+                key_pem: client_key.serialize_pem(),
+            },
+            verifier.clone(),
+            Some(root.pem_cert.clone()),
+            &[],
+        )
+        .await;
+        let runtime = CertRequestClient::Kms {
+            client: kms_client(
+                url,
+                root.pem_cert,
+                client_cert.pem(),
+                client_key.serialize_pem(),
+                verifier,
+            )
+            .unwrap(),
+            vm_config: String::new(),
+            launch_ticket: request.launch_ticket,
+        };
+        let runtime = runtime.get_app_key(Some(0), Some(0)).await;
         shutdown.notify();
-        result
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_app_certificate_is_not_accepted_as_the_kms() {
-        let root = kms_root();
-        let err = get_meta_from(&root, app_cert(&root, &[0xa1; 20], "127.0.0.1"))
-            .await
-            .expect_err("an app's certificate must not authenticate the KMS");
-        assert!(
-            format!("{err:#}").contains("invalid server cert usage: app:custom"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_kms_rpc_certificate_is_accepted() {
-        let root = kms_root();
-        let ca_cert = get_meta_from(&root, kms_rpc_cert(&root, "127.0.0.1"))
-            .await
-            .expect("the KMS's own certificate must be accepted");
-        assert_eq!(ca_cert, "served ca cert");
+        task.await.unwrap().unwrap();
+        assert!(requests.lock().unwrap().is_empty());
+        for result in [historical, runtime] {
+            let err = result.expect_err("an app's certificate must not authenticate the KMS");
+            assert!(
+                format!("{err:#}").contains("server certificate does not match the pinned issuer"),
+                "unexpected error: {err:#}"
+            );
+        }
     }
 }
