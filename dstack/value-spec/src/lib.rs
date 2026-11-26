@@ -100,7 +100,8 @@ enum Kind {
 
 /// Splits a `NAME: spec` entry into the name and the text of its spec. The
 /// whitespace after the colon is optional, and an entry without a colon is a
-/// bare name. A name that carries a spec must be `[A-Za-z_][A-Za-z0-9_]*`.
+/// bare name. A name that carries a spec must be `[A-Za-z_][A-Za-z0-9_]*` and at
+/// most 255 bytes.
 pub fn split_named(entry: &str) -> Result<(&str, Option<&str>), ParseError> {
     let Some((name, spec)) = entry.split_once(':') else {
         return Ok((entry, None));
@@ -111,6 +112,7 @@ pub fn split_named(entry: &str) -> Result<(&str, Option<&str>), ParseError> {
     match name.char_indices().find(|&at| !is_valid(at)) {
         Some((offset, _)) => Err(ParseError::name(offset)),
         None if name.is_empty() => Err(ParseError::name(0)),
+        None if name.len() > MAX_NAME_LEN => Err(ParseError::name(MAX_NAME_LEN)),
         None => Ok((name, Some(spec.trim_start()))),
     }
 }
@@ -121,6 +123,7 @@ pub fn parse_named(entry: &str) -> Result<(&str, Option<ValueSpec>), ParseError>
     Ok((name, spec.map(str::parse).transpose()?))
 }
 
+const MAX_NAME_LEN: usize = 255;
 const MAX_NUMBER_LEN: usize = 64;
 const MAX_SPEC_LEN: usize = 4096;
 const MAX_REGEX_SIZE: usize = 10 << 20;
@@ -132,7 +135,7 @@ impl ParseError {
         Self {
             what: "name",
             offset,
-            message: "expected `[A-Za-z_][A-Za-z0-9_]*` before the `:`".into(),
+            message: "expected `[A-Za-z_][A-Za-z0-9_]*` of at most 255 bytes before the `:`".into(),
         }
     }
 }
@@ -586,6 +589,9 @@ mod tests {
         assert_eq!(name("PORT:  int(1..=65535)?").unwrap(), ("PORT", true));
         assert_eq!(name("URL: /https://.*/").unwrap(), ("URL", true));
         assert_eq!(name("not a name").unwrap(), ("not a name", false));
+        let long = |len: usize| format!("{}: int", "A".repeat(len));
+        assert!(parse_named(&long(MAX_NAME_LEN)).is_ok());
+        assert!(parse_named(&long(MAX_NAME_LEN + 1)).is_err());
         for entry in ["A:", "A: ", "A: int ", "A:int:int", "A: string"] {
             assert!(name(entry).is_err(), "{entry:?} should fail");
         }

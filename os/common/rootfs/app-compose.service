@@ -11,7 +11,7 @@ Type=oneshot
 RemainAfterExit=true
 WorkingDirectory=/dstack
 ExecStart=/bin/dstack-util exec-with-env --env-file /dstack/.host-shared/.decrypted-env.json --compose /dstack/app-compose.json -- /bin/app-compose.sh
-ExecStop=/bin/dstack-util exec-with-env --env-file /dstack/.host-shared/.decrypted-env.json --compose /dstack/app-compose.json -- /bin/app-compose.sh stop
+ExecStop=/bin/dstack-util exec-with-env --env-file /dstack/.host-shared/.decrypted-env.json -- /bin/app-compose.sh stop
 StandardOutput=journal+console
 StandardError=journal+console
 

@@ -133,7 +133,7 @@ This file is not measured to RTMRs, and the envelope is not bound to an instance
 
 #### Environment value specs
 
-Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional, and `NAME` must be `[A-Za-z_][A-Za-z0-9_]*` with nothing between it and the colon. The CVM refuses to boot when the encrypted environment gives `NAME` a value that does not match the spec. Before the application starts, after every `init_script` has run, a variable that is still not set counts as empty, so `NAME` is required unless its spec accepts the empty string, as one ending in `?` does. This last check is made by `app-compose.service`; a program that reads `.decrypted-env` on its own does not get it. A spec is one of:
+Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional, and `NAME` must be `[A-Za-z_][A-Za-z0-9_]*`, at most 255 bytes, with nothing between it and the colon. The CVM refuses to boot when the encrypted environment gives `NAME` a value that does not match the spec. Before the application starts, after every `init_script` has run, a variable that is still not set counts as empty, so `NAME` is required unless its spec accepts the empty string, as one ending in `?` does. This last check is made by `app-compose.service`; a program that reads `.decrypted-env` on its own does not get it. A spec is one of:
 
 | Spec | Accepts |
 |------|---------|
