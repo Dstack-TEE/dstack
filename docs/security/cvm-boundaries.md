@@ -127,7 +127,7 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM decrypts the ciphertext using AESGCM with the derived shared secret
    - CVM parses the JSON and only stores variables listed in allowed_envs from app-compose.json
    - CVM validates variable names and checks each value against the specs given in allowed_envs
-   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`, which checks the values against the specs again
+   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`, which rejects variables outside allowed_envs and checks the values against the specs again
 
 This file is not measured to RTMRs, and the envelope is not bound to an instance or compose hash: the KMS derives `env_crypt_key` from the app ID alone, so the host can withhold the file or replay any earlier ciphertext for the same app. It is highly recommended to add application-specific integrity checks, such as a version or expiry inside the plaintext, at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
 
@@ -147,16 +147,16 @@ Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..
 
 A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A trailing `?` makes any spec accept the empty string as well. A spec is at most 4096 bytes. In a regex, `\d` and `\w` also match non-ASCII digits and letters; write `[0-9]` and `[A-Za-z0-9_]` for ASCII only. A name listed more than once must match every spec given for it.
 
-`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. It checks `NAME: spec` arguments, plus the `allowed_envs` specs of an app compose file given with `--compose`, the same way the boot does. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
+`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. It checks `NAME: spec` arguments, plus the `allowed_envs` specs of an app compose file given with `--compose`, the same way the boot does. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. The arguments and `allowed_envs` together are also the list of permitted names: any other variable in the environment or the `--env-file` is an error unless `--allow-unlisted` is given. A bare `NAME` argument permits a variable without constraining it. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
 
 ```bash
 PORT=$(jq -r .port /dstack/.host-shared/.user-config)
-PORT=$PORT dstack-util validate-env 'PORT: int(1024..=65535)' || exit 1
+PORT=$PORT dstack-util validate-env --allow-unlisted 'PORT: int(1024..=65535)' || exit 1
 
-dstack-util validate-env --compose /dstack/app-compose.json --env-file /dstack/.host-shared/.user-config || exit 1
+dstack-util validate-env --compose /dstack/app-compose.json --allow-unlisted --env-file /dstack/.host-shared/.user-config || exit 1
 ```
 
-`app-compose.service` passes `--compose /dstack/app-compose.json` to `dstack-util exec-with-env`, so an `init_script` that rewrites `.decrypted-env.json` cannot hand the application a value that breaks an `allowed_envs` spec.
+`app-compose.service` passes `--compose /dstack/app-compose.json` to `dstack-util exec-with-env`, so an `init_script` that rewrites `.decrypted-env.json` cannot hand the application a variable that is not in `allowed_envs` or a value that breaks a spec there.
 
 Guests older than 0.6.7 treat `NAME: spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.
 

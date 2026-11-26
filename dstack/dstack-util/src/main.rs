@@ -118,7 +118,10 @@ struct ValidateEnvArgs {
     /// JSON object mapping variable names to values, checked instead of the environment
     #[arg(long)]
     env_file: Option<PathBuf>,
-    /// Specs to check, as `NAME: spec`; an unset variable counts as empty
+    /// Accept variables that no spec or `allowed_envs` entry names
+    #[arg(long)]
+    allow_unlisted: bool,
+    /// Variables to allow, as `NAME` or `NAME: spec`; an unset variable counts as empty
     #[arg(required_unless_present = "compose")]
     specs: Vec<String>,
 }
@@ -128,7 +131,7 @@ struct ExecWithEnvArgs {
     /// JSON object mapping variable names to values
     #[arg(long)]
     env_file: PathBuf,
-    /// App compose file whose `allowed_envs` specs the values must match
+    /// App compose file; variables must be in its `allowed_envs` and match the specs there
     #[arg(long)]
     compose: Option<PathBuf>,
     /// Command to exec, with its arguments
@@ -150,16 +153,24 @@ fn load_allowed_envs(path: &Path) -> Result<Vec<String>> {
 }
 
 fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
-    let envs = args.env_file.as_deref().map(load_envs).transpose()?;
+    let envs = match &args.env_file {
+        Some(path) => load_envs(path)?,
+        None => std::env::vars_os()
+            .map(|(name, value)| {
+                let name = name.to_string_lossy().into_owned();
+                (name, value.to_string_lossy().into_owned())
+            })
+            .collect(),
+    };
     let mut entries = args.specs;
     if let Some(compose) = &args.compose {
         entries.extend(load_allowed_envs(compose)?);
     }
     let allowed = parse_env_file::parse_allowed_envs(&entries)?;
-    parse_env_file::check_env(&allowed, |name| match &envs {
-        Some(envs) => envs.get(name).cloned(),
-        None => std::env::var(name).ok(),
-    })
+    if !args.allow_unlisted {
+        parse_env_file::check_names(&allowed, envs.keys())?;
+    }
+    parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())
 }
 
 #[derive(Parser)]
@@ -781,6 +792,7 @@ fn cmd_exec_with_env(args: ExecWithEnvArgs) -> Result<()> {
     let envs = load_envs(&args.env_file)?;
     if let Some(compose) = &args.compose {
         let allowed = parse_env_file::parse_allowed_envs(&load_allowed_envs(compose)?)?;
+        parse_env_file::check_names(&allowed, envs.keys())?;
         parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
     }
     let (program, program_args) = args.command.split_first().context("no command given")?;
