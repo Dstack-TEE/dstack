@@ -1248,6 +1248,7 @@ class VmmCLI:
         image: Optional[str] = None,
         app_compose: Optional[str] = None,
         env_file: Optional[str] = None,
+        drop_env_specs: Iterable[str] = (),
         user_config: Optional[str] = None,
         ports: Optional[List[str]] = None,
         no_ports: bool = False,
@@ -1624,13 +1625,29 @@ def format_table(rows, headers):
     return "\n".join(table)
 
 
-def merge_allowed_envs(existing: List[str], names: Iterable[str]) -> List[str]:
+def add_drop_env_spec_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the option that removes value specs kept in allowed_envs."""
+    parser.add_argument(
+        "--drop-env-spec",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="With --env-file, remove the value specs of an environment variable "
+        "from allowed_envs (can be used multiple times)",
+    )
+
+
+def merge_allowed_envs(
+    existing: List[str], names: Iterable[str], drop: Iterable[str] = ()
+) -> List[str]:
     """Return allowed_envs for the variables `names`.
 
     Entries of `existing` that carry a value spec (`NAME: spec`) are part of
-    the app's identity and are always kept; plain names follow `names`.
+    the app's identity and are kept unless `drop` names them; plain names
+    follow `names`.
     """
-    specs = [entry for entry in existing if ":" in entry]
+    drop = set(drop)
+    specs = [e for e in existing if ":" in e and e.split(":", 1)[0] not in drop]
     covered = {entry.split(":", 1)[0] for entry in specs}
     return specs + [name for name in names if name not in covered]
 
@@ -2332,6 +2349,7 @@ def main():
     update_parser.add_argument(
         "--env-file", help="File with environment variables to encrypt"
     )
+    add_drop_env_spec_argument(update_parser)
     update_parser.add_argument("--user-config", help="Path to user config file")
     update_parser.add_argument(
         "--net",
@@ -2534,6 +2552,7 @@ def main():
             image=args.image,
             app_compose=args.compose and read_utf8(args.compose),
             env_file=args.env_file,
+            drop_env_specs=args.drop_env_spec,
             user_config=user_config_content,
             ports=args.port,
             no_ports=args.no_ports if hasattr(args, "no_ports") else False,

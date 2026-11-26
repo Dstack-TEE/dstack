@@ -13,18 +13,19 @@ type KeyClient = {
   getAppEnvEncryptPubKey(request: VmmTypes.IAppId): Promise<VmmTypes.IPublicKeyResponse>;
 };
 
-/**
- * allowed_envs for `envs`. Entries with a value spec (`NAME: spec`), whether
- * already in `existing` or given by `envs`, are part of the app's identity and
- * are always kept; plain names follow `envs`.
- */
-export function mergeAllowedEnvs(existing: string[], envs: EnvEntry[]): string[] {
-  const nameOf = (entry: string) => entry.split(':', 1)[0];
-  const given = envs.filter((env) => env.spec?.trim()).map((env) => `${env.key}: ${env.spec!.trim()}`);
-  const replaced = new Set(given.map(nameOf));
-  const specs = [...existing.filter((entry) => entry.includes(':') && !replaced.has(nameOf(entry))), ...given];
-  const covered = new Set(specs.map(nameOf));
+/** allowed_envs for `envs`: `NAME: spec` for each variable with a value spec, the plain name otherwise. */
+export function allowedEnvsOf(envs: EnvEntry[]): string[] {
+  const specs = envs.filter((env) => env.spec?.trim()).map((env) => `${env.key}: ${env.spec!.trim()}`);
+  const covered = new Set(envs.filter((env) => env.spec?.trim()).map((env) => env.key));
   return [...specs, ...envs.map((env) => env.key).filter((key) => !covered.has(key))];
+}
+
+/** The `NAME: spec` entries of `allowedEnvs` as variables without a value, to edit or remove. */
+export function specEntries(allowedEnvs: string[]): EnvEntry[] {
+  return allowedEnvs.filter((entry) => entry.includes(':')).map((entry) => {
+    const at = entry.indexOf(':');
+    return { key: entry.slice(0, at), value: '', spec: entry.slice(at + 1).trim() };
+  });
 }
 
 /** Keep key retrieval on the authenticated, same-origin VMM transport. */

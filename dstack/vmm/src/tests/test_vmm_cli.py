@@ -232,6 +232,11 @@ class AllowedEnvsTests(unittest.TestCase):
             merge(existing, ["TOKEN", "PORT"]),
             ["PORT: int(1..=65535)", "NET:/main|test/", "NET: /.{1,8}/", "TOKEN"],
         )
+        self.assertEqual(
+            merge(existing, ["TOKEN", "PORT"], ["NET", "TOKEN"]),
+            ["PORT: int(1..=65535)", "TOKEN"],
+        )
+        self.assertEqual(merge(existing, [], ["PORT", "NET"]), [])
         merged = merge(existing, ["NET", "PORT", "TOKEN"])
         self.assertEqual(merge(merged, ["TOKEN", "NET", "PORT"]), merged)
 
