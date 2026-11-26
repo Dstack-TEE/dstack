@@ -132,7 +132,7 @@ impl Limits {
 /// Applies the limits of [`parse_env`] to variables that did not come through it.
 pub fn check_limits(env: &BTreeMap<String, String>) -> Result<()> {
     if env.len() > MAX_ITEMS {
-        bail!("Too many environment variables: {}", env.len());
+        bail!("too many environment variables: {}", env.len());
     }
     let mut limits = Limits::new()?;
     env.iter()

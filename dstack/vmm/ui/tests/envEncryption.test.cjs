@@ -61,6 +61,8 @@ test('seals JSON bytes with HPKE, binds epoch, and rejects tampering', async () 
 
 test('value specs go to allowed_envs and never into the encrypted payload', async () => {
   const withSpecs = [{ key: 'PORT', value: '8080', spec: ' int(1..=65535) ' }, { key: 'TOKEN', value: 't', spec: '' }];
+  const sent = withSpecs.map(({ key, value }) => ({ key, value }));
+  const unset = [...withSpecs, { key: 'NET', value: '', spec: '/a|b/' }, { key: 'EMPTY', value: '' }];
   assert.deepEqual(allowedEnvsOf(withSpecs), ['PORT: int(1..=65535)', 'TOKEN']);
   assert.deepEqual(allowedEnvsOf(envs), ['GREETING']);
   const existing = ['OLD', 'NET:/main|test:x/', 'PORT: int(1..)'];
@@ -79,14 +81,14 @@ test('value specs go to allowed_envs and never into the encrypted payload', asyn
   const payload = await encryptEnvPayload({
     getSealedEnvPubKey: async () => response,
     getAppEnvEncryptPubKey: noLegacy,
-  }, withSpecs, appId, noLegacy, true);
-  assert.deepEqual(await open(pair, payload.sealed_env), { env: withSpecs.map(({ key, value }) => ({ key, value })) });
+  }, unset, appId, noLegacy, true);
+  assert.deepEqual(await open(pair, payload.sealed_env), { env: [...sent, { key: 'EMPTY', value: '' }] });
   let legacyEnvs;
   await encryptEnvPayload({
     getSealedEnvPubKey: noLegacy,
     getAppEnvEncryptPubKey: async () => ({ public_key: new Uint8Array(32) }),
   }, withSpecs, appId, async (given) => { legacyEnvs = given; return new Uint8Array(); }, false);
-  assert.deepEqual(legacyEnvs, withSpecs.map(({ key, value }) => ({ key, value })));
+  assert.deepEqual(legacyEnvs, sent);
 });
 
 test('old or unknown images use legacy encryption even with a capable KMS', async () => {

@@ -60,7 +60,7 @@ const EncryptedEnvEditorComponent = {
         </div>
         <div v-for="(env, index) in envVars" :key="index" class="encrypted-env-row">
           <input type="text" v-model="env.key" placeholder="Variable name" required>
-          <input type="password" v-model="env.value" placeholder="Value" required>
+          <input type="password" v-model="env.value" placeholder="Value" :required="!env.spec">
           <input type="text" v-model="env.spec" placeholder="Value spec (optional), e.g. int(1..=65535)">
           <button type="button" class="action-btn danger" @click="removeEnv(index)">
             Remove

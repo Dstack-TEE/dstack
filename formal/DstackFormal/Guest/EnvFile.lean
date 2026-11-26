@@ -22,7 +22,8 @@ Proven:
   whitespace, `#` or quote, so `KEY=value` lines split at the first `=`.
 * `parseEnv_spec`: every accepted entry is allowed, has a valid key and
   respects the length limits; unauthorized keys are dropped, not rejected;
-  and every allowed name's value, empty when unset, matches its value specs.
+  and the value of every variable that is set matches its value specs. The
+  later `check_env`, which treats an unset variable as empty, is not modeled.
 
 Assumptions: Rust's `char::is_whitespace` is a parameter `rustWs` required to
 hold for systemd's `WHITESPACE` (` `, `\t`, `\n`, `\r`). Whether a value matches

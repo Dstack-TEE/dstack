@@ -56,7 +56,8 @@ export async function encryptEnvPayload(
   encryptLegacy: (envs: EnvEntry[], key: Uint8Array) => Promise<Uint8Array>,
   supportsSealedEnv: boolean,
 ): Promise<EnvPayload> {
-  envs = envs.map(({ key, value }) => ({ key, value }));
+  // A variable listed only for its value spec stays unset rather than set to the empty string.
+  envs = envs.filter((env) => env.value !== '' || !env.spec?.trim()).map(({ key, value }) => ({ key, value }));
   const legacyPayload = async () => {
     const legacy = await client.getAppEnvEncryptPubKey({ app_id: appId });
     return { encrypted_env: await encryptLegacy(envs, legacy.public_key) };

@@ -1274,6 +1274,8 @@ class VmmCLI:
                 "--env-file requires --kms-encrypt-url or --kms-url to encrypt "
                 "environment variables"
             )
+        if drop_env_specs and not env_file:
+            raise Exception("--drop-env-spec requires --env-file")
 
         updates = []
 

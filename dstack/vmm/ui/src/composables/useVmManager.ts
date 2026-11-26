@@ -1054,7 +1054,7 @@ type CreateVmPayloadSource = {
       appCompose.event_log_version = vmForm.value.event_log_version;
     }
 
-    const launchToken = vmForm.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN');
+    const launchToken = vmForm.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN' && env.value);
     if (launchToken) {
       appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
     }
@@ -1084,7 +1084,7 @@ type CreateVmPayloadSource = {
       // Update allowed_envs with the new environment variable keys and value specs
       appCompose.allowed_envs = allowedEnvsOf(updateDialog.value.encryptedEnvs);
 
-      const launchToken = updateDialog.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN');
+      const launchToken = updateDialog.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN' && env.value);
       if (launchToken) {
         appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
       }
