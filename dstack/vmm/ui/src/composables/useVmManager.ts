@@ -4,7 +4,7 @@
 declare const Vue: any;
 const { ref, computed, watch, onMounted } = Vue;
 import type { vmm as VmmTypes } from '../proto/vmm_rpc';
-import { encryptEnvPayload } from '../lib/envEncryption';
+import { allowedEnvsOf, encryptEnvPayload, specEntries } from '../lib/envEncryption';
 
 // Types based on Rust definitions
 type VmConfiguration = VmmTypes.IVmConfiguration;
@@ -125,6 +125,7 @@ type VmListItem = {
 type EncryptedEnvEntry = {
   key: string;
   value: string;
+  spec?: string;
 };
 
 type PortFormEntry = {
@@ -1013,7 +1014,7 @@ type CreateVmPayloadSource = {
       key_provider_id: vmForm.value.key_provider === 'kms' || vmForm.value.key_provider === 'local'
         ? vmForm.value.key_provider_id
         : '',
-      allowed_envs: vmForm.value.encryptedEnvs.map((env) => env.key),
+      allowed_envs: allowedEnvsOf(vmForm.value.encryptedEnvs),
       no_instance_id: !vmForm.value.gateway_enabled,
       secure_time: false,
       storage_discard: vmForm.value.storage_discard,
@@ -1053,7 +1054,7 @@ type CreateVmPayloadSource = {
       appCompose.event_log_version = vmForm.value.event_log_version;
     }
 
-    const launchToken = vmForm.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN');
+    const launchToken = vmForm.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN' && env.value);
     if (launchToken) {
       appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
     }
@@ -1080,10 +1081,10 @@ type CreateVmPayloadSource = {
       appCompose.manifest_version = targetManifestVersion;
     }
     if (updateDialog.value.resetSecrets) {
-      // Update allowed_envs with the new environment variable keys
-      appCompose.allowed_envs = updateDialog.value.encryptedEnvs.map(env => env.key);
+      // Update allowed_envs with the new environment variable keys and value specs
+      appCompose.allowed_envs = allowedEnvsOf(updateDialog.value.encryptedEnvs);
 
-      const launchToken = updateDialog.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN');
+      const launchToken = updateDialog.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN' && env.value);
       if (launchToken) {
         appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
       }
@@ -1124,6 +1125,16 @@ type CreateVmPayloadSource = {
       }
     },
     { deep: true },
+  );
+
+  // Show the value specs of the current compose so they can be kept, edited or removed.
+  watch(
+    () => updateDialog.value.resetSecrets,
+    (resetSecrets) => {
+      if (resetSecrets && updateDialog.value.encryptedEnvs.length === 0) {
+        updateDialog.value.encryptedEnvs = specEntries(updateDialog.value.vm?.appCompose?.allowed_envs || []);
+      }
+    },
   );
 
   watch(

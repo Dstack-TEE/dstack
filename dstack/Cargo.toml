@@ -65,6 +65,7 @@ members = [
     "nvidia-attest-proxy",
     "verifier",
     "size-parser",
+    "value-spec",
     "crates/dstack-cli-core",
     "crates/dstack-cli",
     "crates/dstack-volume",
@@ -130,6 +131,7 @@ serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
+value-spec = { path = "value-spec" }
 nvattest = { path = "nvattest" }
 wavekv = "2.2"
 vfio-ioctls = { git = "https://github.com/kvinwang/vfio.git", rev = "1b560c2", default-features = false }
@@ -301,6 +303,8 @@ humantime = "2.2.0"
 parcelona = "0.4.3"
 pin-project = "1.1.10"
 regex = "1.11.1"
+winnow = "1.0.3"
+bigdecimal = "0.4.11"
 rinja = "0.3.5"
 shared_child = "1.0.1"
 strip-ansi-escapes = "0.2.1"

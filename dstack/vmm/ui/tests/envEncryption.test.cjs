@@ -9,7 +9,7 @@ const { runInNewContext } = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const { CipherSuite, Aes256Gcm, HkdfSha256 } = require('@hpke/core');
 const { DhkemX25519HkdfSha256 } = require('@hpke/dhkem-x25519');
-const { encryptEnvPayload } = require('../build/ts/lib/envEncryption.js');
+const { allowedEnvsOf, encryptEnvPayload, replaceEnvs, specEntries } = require('../build/ts/lib/envEncryption.js');
 const { RpcError } = require('../build/ts/lib/vmmRpcClient.js');
 const { vmm } = require('../build/ts/proto/vmm_rpc.js');
 const { prpc } = require('../build/ts/proto/prpc.js');
@@ -57,6 +57,38 @@ test('seals JSON bytes with HPKE, binds epoch, and rejects tampering', async () 
     modified.ciphertext = ct.toString('base64');
     await assert.rejects(open(pair, new TextEncoder().encode(JSON.stringify(modified))));
   }
+});
+
+test('value specs go to allowed_envs and never into the encrypted payload', async () => {
+  const withSpecs = [{ key: 'PORT', value: '8080', spec: ' int(1..=65535) ' }, { key: 'TOKEN', value: 't', spec: '' }];
+  const sent = withSpecs.map(({ key, value }) => ({ key, value }));
+  const unset = [...withSpecs, { key: 'NET', value: '', spec: '/a|b/' }, { key: 'EMPTY', value: '' }];
+  assert.deepEqual(allowedEnvsOf(withSpecs), ['PORT: int(1..=65535)', 'TOKEN']);
+  assert.deepEqual(allowedEnvsOf(envs), ['GREETING']);
+  const existing = ['OLD', 'NET:/main|test:x/', 'PORT: int(1..)'];
+  const kept = specEntries(existing);
+  assert.deepEqual(kept, [{ key: 'NET', value: '', spec: '/main|test:x/' }, { key: 'PORT', value: '', spec: 'int(1..)' }]);
+  assert.deepEqual(allowedEnvsOf(kept), ['NET: /main|test:x/', 'PORT: int(1..)']);
+  assert.deepEqual(allowedEnvsOf(kept.slice(1)), ['PORT: int(1..)']);
+  assert.deepEqual(allowedEnvsOf([{ key: 'A', value: '' }, ...kept, { key: 'PORT', value: '' }]), ['A', 'NET: /main|test:x/', 'PORT: int(1..)']);
+  assert.deepEqual(replaceEnvs([...kept, { key: 'OLD', value: 'o' }], '# c\nTOKEN=t=1\n PORT = 80 \nbad\n=x'), [
+    { key: 'TOKEN', value: 't=1' },
+    { key: 'PORT', value: '80', spec: 'int(1..)' },
+    { key: 'NET', value: '', spec: '/main|test:x/' },
+  ]);
+
+  const { pair, response } = await recipient();
+  const payload = await encryptEnvPayload({
+    getSealedEnvPubKey: async () => response,
+    getAppEnvEncryptPubKey: noLegacy,
+  }, unset, appId, noLegacy, true);
+  assert.deepEqual(await open(pair, payload.sealed_env), { env: [...sent, { key: 'EMPTY', value: '' }] });
+  let legacyEnvs;
+  await encryptEnvPayload({
+    getSealedEnvPubKey: noLegacy,
+    getAppEnvEncryptPubKey: async () => ({ public_key: new Uint8Array(32) }),
+  }, withSpecs, appId, async (given) => { legacyEnvs = given; return new Uint8Array(); }, false);
+  assert.deepEqual(legacyEnvs, sent);
 });
 
 test('old or unknown images use legacy encryption even with a capable KMS', async () => {

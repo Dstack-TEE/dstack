@@ -238,6 +238,7 @@ First, create an application composition file that describes your application:
 - `--public-logs`: Make logs publicly accessible
 - `--public-sysinfo`: Make system info publicly accessible
 - `--env-file`: File with environment variables to encrypt
+- `--env-spec`: Allow an environment variable, as `NAME`, or also constrain its value, as `NAME: SPEC`, e.g. `--env-spec 'PORT: int(1..=65535)'`; repeat for more variables. See [environment value specs](./security/cvm-boundaries.md#environment-value-specs). Variables of `--env-file` that no `--env-spec` names are allowed without a spec
 - `--no-instance-id`: Disable unique instance identification
 - `--no-storage-discard`: Keep deleted data-disk blocks instead of returning them to the host. Required by `deploy --disk-prealloc falloc|full`, and it also keeps filesystem allocation and deletion patterns from the host. The cost is that the image only ever grows: space freed inside the guest is never given back
 

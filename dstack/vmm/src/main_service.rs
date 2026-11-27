@@ -369,6 +369,7 @@ pub fn create_manifest_from_vm_config(
     let swtpm = needs_swtpm(key_provider, simulated_tee);
     let disk_prealloc = disk_prealloc_from_vm_config(&request, cvm_config)?;
     validate_disk_prealloc_against_compose(disk_prealloc, &request.compose_file)?;
+    validate_allowed_envs(&allowed_envs_from_compose(&request.compose_file)?)?;
 
     Ok(Manifest {
         id,
@@ -457,6 +458,34 @@ fn validate_disk_prealloc_against_compose(
          with disk_prealloc = \"off\" or \"metadata\" -- the mode is fixed at deployment",
         prealloc.as_str()
     )
+}
+
+/// Catch mistyped `allowed_envs` value specs before the guest fails on them at
+/// boot. Regex specs are left to the guest: compiling one is too costly to do
+/// for as many entries as a compose file can hold.
+fn validate_allowed_envs(entries: &[String]) -> Result<()> {
+    for entry in entries {
+        let check = || {
+            let (_, spec) = value_spec::split_named(entry)?;
+            match spec.filter(|spec| !spec.starts_with('/')) {
+                Some(spec) => spec.parse::<value_spec::ValueSpec>().map(drop),
+                None => Ok(()),
+            }
+        };
+        check().with_context(|| format!("invalid allowed_envs entry {entry:?}"))?;
+    }
+    Ok(())
+}
+
+fn allowed_envs_from_compose(compose_file: &str) -> Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Compose {
+        #[serde(default)]
+        allowed_envs: Vec<String>,
+    }
+    let compose: Compose =
+        serde_json::from_str(compose_file).context("invalid app compose JSON")?;
+    Ok(compose.allowed_envs)
 }
 
 /// Read `storage_discard` out of app-compose. Everything else in the document
@@ -1156,12 +1185,13 @@ impl VmmRpc for RpcHandler {
         // touching the host, so a rejected update changes nothing.
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
-            let _app_compose: AppCompose =
+            let app_compose: AppCompose =
                 serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
             if !self.compose_file_path(&request.id)?.exists() {
                 bail!("The instance {} not found", request.id);
             }
             validate_disk_prealloc_against_compose(manifest.disk_prealloc, &request.compose_file)?;
+            validate_allowed_envs(&app_compose.allowed_envs)?;
             app_id_of(&request.compose_file)
         } else {
             Default::default()
@@ -1452,8 +1482,9 @@ impl VmmRpc for RpcHandler {
     async fn get_compose_hash(self, request: VmConfiguration) -> Result<RpcComposeHash> {
         validate_label(&request.name)?;
         // check the compose file is valid
-        let _app_compose: AppCompose =
+        let app_compose: AppCompose =
             serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
+        validate_allowed_envs(&app_compose.allowed_envs)?;
         let hash = hex_sha256(&request.compose_file);
         Ok(RpcComposeHash { hash })
     }
@@ -1750,6 +1781,30 @@ mod tests {
         request.disk_prealloc = Some("metadata".to_string());
         let manifest = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap();
         assert_eq!(manifest.disk_prealloc, DiskPrealloc::Metadata);
+    }
+
+    #[test]
+    fn allowed_envs_specs_are_checked_at_deployment() {
+        let create = |allowed_envs: &[&str]| {
+            let mut request = test_vm_configuration();
+            request.compose_file = serde_json::json!({ "allowed_envs": allowed_envs }).to_string();
+            create_manifest_from_vm_config(request, &test_cvm_config())
+        };
+        create(&["TOKEN", "PORT: int(1..=65535)", "RATIO:float(0<..=1)?"]).unwrap();
+        // Regex specs are not compiled here, valid or not.
+        create(&["NET: /main|test/?", "BAD: /(/", r"SLOW: /\w{200}/"]).unwrap();
+        for bad in [
+            "PORT: int(1..=",
+            "PORT: integer",
+            "PORT:",
+            "PORT: int(5..=1)",
+            "PORT : int",
+            "PORT : /.*/",
+        ] {
+            let err = format!("{:#}", create(&["TOKEN", bad]).unwrap_err());
+            assert!(err.contains("invalid allowed_envs entry"), "{err}");
+            assert!(err.contains("PORT"), "{err}");
+        }
     }
 
     #[test]
