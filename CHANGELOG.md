@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **TDX quotes go to QGS over vsock first.** When `/etc/tdx-attest.conf`
+  sets a port, `tdx-attest` asks QGS directly and falls back to configfs only
+  if that fails, or uses configfs alone when `DCAP_TDX_QUOTE_CONFIGFS_PATH` is
+  set. The kernel's configfs path polls once a second, so a quote took about
+  1 s there and takes about 5 ms over vsock.
 - **`vmm-cli update --compose` takes an app compose file.** It sends the
   `app-compose.json` written by `vmm-cli compose` unchanged instead of a Docker
   Compose file patched into the stored one, and `--prelaunch-script` and
