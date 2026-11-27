@@ -63,9 +63,11 @@ An application may additionally set `requirements.gpu_policy` to an object with 
 
 - `attest_gpu` (boolean, default `true`): require local NVIDIA GPU attestation before enabling an attached GPU. Setting this to `false` skips attestation and is an explicit reduction in protection.
 - `rego` (optional string): a Rego v0 script evaluated with the nvattest output's `claims` array as `input`. It must define the boolean entrypoint `data.policy.nv_match` in `package policy`.
-- `allow_devtools` (boolean, default `false`): permit NVIDIA DevTools mode. Production applications should leave this disabled because DevTools removes the expected GPU memory-confidentiality guarantee.
+- `allow_devtools` (boolean, default `false`): skip dstack's NVML DevTools check. It cannot make a DevTools GPU boot with `attest_gpu` on: DevTools changes the GPU's signed measurements, so NVIDIA's appraisal fails. DevTools lifts the GPU's profiling and debugging restrictions and must not be used in production.
 - `allow_debug` (boolean, default `false`): permit an attestation claim whose `dbgstat` is `enabled`.
 - `allow_insecure_boot` (boolean, default `false`): permit an attestation claim whose GPU `secboot` value is false.
+
+nvattest sets `dbgstat` to `disabled` and `secboot` to `true` exactly when the measurements match, and dstack always requires `measres == "success"`, so `allow_debug` and `allow_insecure_boot` currently have no effect.
 
 The optional Rego v0 policy can enforce deployment-specific claims. A minimal `app-compose.json` containing one looks like this; replace the placeholder with the policy source:
 
@@ -114,7 +116,7 @@ The policy digest is remotely verifiable on each supported platform, but through
 - **AWS NitroTPM:** the same `gpu-policy-hash` event is extended into non-resettable SHA384 PCR14. Replay the PCR14 event chain against the signed NitroTPM Attestation Document, then compare the payload with the expected digest.
 - **AMD SEV-SNP:** there is no quote-bound runtime event register in the current stack. The signed SNP report's `HOST_DATA` binds the exact MrConfigV3 document, whose `compose_hash` covers the app-compose file and so the policy in it; the guest stops boot if that file does not match. GPU launches also put the digest in `MrConfigV3.gpu_policy_hash`. Verify the SNP report and `HOST_DATA` binding, then compare the policy, or the field when present, with the expected one.
 
-For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Device::is_cc_dev_mode_enabled()` and requires the NVML device count to match the expected GPU count. CC must always be ON; DevTools must be OFF unless the measured policy explicitly permits it. The typed claim checks always require `measres == "success"`; by default they also require `dbgstat == "disabled"` and `secboot == true`, with the latter two checks controlled by their explicit opt-ins. Only after the default appraisal, typed claim checks, optional Rego policy, and per-device NVML checks succeed does dstack call `Device::set_confidential_compute_state(true)` to set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
+For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Device::is_cc_dev_mode_enabled()` and requires the NVML device count to match the expected GPU count. CC must always be ON; DevTools must be OFF unless the measured policy explicitly permits it. These NVML checks only give an early, specific error: the guest driver reads both states from GPU registers over MMIO, which the host can emulate. The signed evidence is what excludes DevTools. Its firmware and driver measurements differ from NVIDIA's reference values, so `measres` is not `success`. The typed claim checks always require `measres == "success"`; by default they also require `dbgstat == "disabled"` and `secboot == true`, with the latter two checks controlled by their explicit opt-ins. Only after the default appraisal, typed claim checks, optional Rego policy, and per-device NVML checks succeed does dstack call `Device::set_confidential_compute_state(true)` to set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
 
 ### Dual Attestation
 
@@ -151,7 +153,8 @@ The GPU gate itself runs before the app keys are requested, and a failed gate st
 ```
 
 `devtools` is the aggregate NVML state and is true if any device has DevTools
-mode enabled. `dbgstat` and `secboot` summarize the NVIDIA-signed claims:
+mode enabled. It is host-reported; the signed `measres` check is what excludes
+DevTools. `dbgstat` and `secboot` summarize the NVIDIA-signed claims:
 `dbgstat` is `enabled` if any device reports enabled, and `secboot` is true only
 if every device reports secure boot. The complete per-device claims remain in
 the boot-time evidence committed by `evidence_sha256`.
@@ -278,7 +281,7 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] Exactly one `gpu-policy-hash` event follows `compose-hash`, and its payload matches `SHA-256(JCS(requirements.gpu_policy))` (default `{}` when omitted)
 - [ ] When MrConfigV3 includes `gpu_policy_hash`, it matches the same expected GPU policy digest
 - [ ] Exactly one `gpu-attestation` event appears before `system-ready`
-- [ ] CC is ON and the event's DevTools field complies with the measured policy
+- [ ] The event reports CC ON (DevTools is excluded by the signed appraisal, not by the event's `devtools` field)
 - [ ] The platform binds the event log to a quoted RTMR/PCR (TDX, NitroTPM)
 - [ ] On SEV-SNP, where the event checks above do not apply: the policy bound by `compose_hash` keeps `attest_gpu` on and its Rego rule requires the expected GPU count
 
