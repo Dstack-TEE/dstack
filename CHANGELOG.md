@@ -56,10 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have, and now stops the boot.
 - **The KMS auth-eth server pins contract reads to a block hash.** Each
   request reads the block it resolved by hash (EIP-1898) rather than by number,
-  so the RPC endpoint must accept a block hash in `eth_call`. HTTP redirects
-  from the endpoint are refused. The server no longer falls back to
-  `http://localhost:8545`: it exits unless `ETH_RPC_URL` or `ETH_RPC_URLS` is
-  set.
+  so the RPC endpoint must accept a block hash in `eth_call`, which the server
+  checks at startup. HTTP redirects from the endpoint are refused. The server
+  no longer falls back to `http://localhost:8545`: it exits unless
+  `ETH_RPC_URL` or `ETH_RPC_URLS` is set.
+- A failing `init_script` is reported to the VMM as a boot error.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import
