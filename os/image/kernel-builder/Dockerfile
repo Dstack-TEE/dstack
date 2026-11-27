@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Toolchain image for building out-of-tree modules against one dstack guest OS
-# kernel: its exported build tree plus a compiler from the same pinned Debian
-# snapshot the kernel was built with. Built by build.sh.
+# kernel: its exported build tree and the NVIDIA open modules' headers, plus a
+# compiler from the same pinned Debian snapshot the kernel was built with.
+# Built by build.sh.
 
 ARG BASE_IMAGE=debian:trixie-slim
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_SNAPSHOT
 ARG KERNEL_RELEASE
+ARG NVIDIA_VERSION
 ARG IMAGE_VERSION=unknown
 ARG GIT_REVISION=unknown
 
@@ -27,12 +29,14 @@ RUN set -eux; \
 
 ENV KERNEL_RELEASE=${KERNEL_RELEASE}
 ENV KDIR=/usr/src/linux-headers-${KERNEL_RELEASE}
+ENV NVIDIA_HEADERS=/usr/src/nvidia-${NVIDIA_VERSION}
 
 ADD kernel-devel.tar.gz /tmp/
 RUN set -eux; \
-    mv /tmp/*-kernel-devel/linux-headers-* /usr/src/; \
+    mv /tmp/*-kernel-devel/* /usr/src/; \
     rm -rf /tmp/*-kernel-devel; \
     test "$(cat "$KDIR/include/config/kernel.release")" = "${KERNEL_RELEASE:?}"; \
+    test -f "$NVIDIA_HEADERS/kernel-open/Module.symvers"; \
     mkdir -p "/lib/modules/${KERNEL_RELEASE}"; \
     ln -s "$KDIR" "/lib/modules/${KERNEL_RELEASE}/build"
 

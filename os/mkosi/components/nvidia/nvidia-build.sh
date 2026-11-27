@@ -50,6 +50,22 @@ ln -sfn usr/lib "$KERNEL_STAGE/lib"
 depmod -b "$KERNEL_STAGE" "$KERNEL_VERSION-dstack"
 rm -f "$KERNEL_STAGE/lib"
 
+# The interface headers and Module.symvers of the modules just built, for out-of-tree
+# modules that call into nvidia.ko, as the kernel's are for those that call into the
+# kernel. The RM SDK headers are only in the open-gpu-kernel-modules source, not in the
+# .run's kernel-open, so that source must be the one the .run was cut from.
+ogkm="$BUILD_DIR/open-gpu-kernel-modules"
+if [[ ! -d $ogkm/.git ]]; then git init -q "$ogkm"; git -C "$ogkm" remote add origin https://github.com/NVIDIA/open-gpu-kernel-modules.git; fi
+git -C "$ogkm" fetch -q --depth=1 origin "$NVIDIA_OPEN_REVISION"
+headers="$ROOT_STAGE/usr/src/nvidia-$NVIDIA_VERSION"
+mkdir -p "$headers"
+git -C "$ogkm" archive "$NVIDIA_OPEN_REVISION" kernel-open/common/inc src/common/inc \
+  src/common/sdk/nvidia/inc src/nvidia/arch/nvalloc/unix/include | tar -C "$headers" -x
+diff -rq "$headers/kernel-open/common/inc" "$src/kernel-open/common/inc" || {
+  echo "open-gpu-kernel-modules $NVIDIA_OPEN_REVISION does not match the .run's kernel-open" >&2; exit 1;
+}
+install -m0644 "$src/kernel-open/Module.symvers" "$headers/kernel-open/"
+
 libdir="$ROOT_STAGE/usr/lib/x86_64-linux-gnu"
 for lib in libnvidia-ml libnvidia-allocator libnvidia-eglcore libnvidia-encode \
  libnvidia-glcore libnvidia-gpucomp libnvidia-ngx libnvidia-nvvm \
