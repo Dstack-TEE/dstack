@@ -101,6 +101,12 @@
     "kernel-headers": [
       "usr/lib/modules/*/build/Module.symvers"
     ],
+    "nvidia-headers": [
+      "usr/src/nvidia-595.91.07/kernel-open/common/inc/nv-gpu-info.h",
+      "usr/src/nvidia-595.91.07/src/common/sdk/nvidia/inc/nvos.h",
+      "usr/src/nvidia-595.91.07/src/nvidia/arch/nvalloc/unix/include/nv-kernel-rmapi-ops.h",
+      "usr/src/nvidia-595.91.07/kernel-open/Module.symvers"
+    ],
     "nvidia-firmware": [
       "usr/lib/firmware/nvidia/595.91.07/*"
     ],

@@ -105,7 +105,7 @@ The bare-metal archive includes the kernel, initramfs, OVMF firmware,
 partitioned dm-verity rootfs, platform measurement CBOR files,
 `sha256sum.txt`, `digest.txt`, and `metadata.json`. The UKI archive
 includes the bootable `disk.raw` plus its identity and measurement files. The
-kernel-devel archive is the build tree for out-of-tree modules (see below).
+kernel-devel archive holds the build trees for out-of-tree modules (see below).
 
 Inspect and verify an archive with:
 
@@ -135,13 +135,16 @@ The guest rootfs ships the kernel's build tree at
 `/usr/src/linux-headers-<release>`, linked from
 `/lib/modules/<release>/build`, so tools that compile against the running
 kernel (for example eBPF tooling) find it at the usual Debian location when it
-is bind-mounted into a container. The same tree is also published for building
-out-of-tree modules outside the CVM:
+is bind-mounted into a container. Beside it, `/usr/src/nvidia-<driver>` holds
+the interface headers and `Module.symvers` of the NVIDIA open modules the image
+loads, in the open-gpu-kernel-modules layout, for modules that call into
+`nvidia.ko`. Both trees are also published for building out-of-tree modules
+outside the CVM:
 
-- `dstack-<version>-kernel-devel.tar.gz`, the exported build tree, and
-- `ghcr.io/dstack-tee/dstack-kernel-builder:<version>`, the same tree plus a
+- `dstack-<version>-kernel-devel.tar.gz`, the exported trees, and
+- `ghcr.io/dstack-tee/dstack-kernel-builder:<version>`, the same trees plus a
   compiler from the pinned Debian snapshot the kernel was built with, with
-  `KDIR` set.
+  `KDIR` and `NVIDIA_HEADERS` set.
 
 ```dockerfile
 FROM ghcr.io/dstack-tee/dstack-kernel-builder:<version> AS kmod
@@ -152,10 +155,15 @@ FROM alpine
 COPY --from=kmod /src/mymod.ko /opt/
 ```
 
+A module that calls into `nvidia.ko` also takes its include directories from
+`$NVIDIA_HEADERS` and passes
+`KBUILD_EXTRA_SYMBOLS=$NVIDIA_HEADERS/kernel-open/Module.symvers`, without which
+modpost rejects its references to the driver's symbols.
+
 To build the image locally from a release archive, run
 `os/image/kernel-builder/build.sh <kernel-devel.tar.gz> <image-ref>`.
 
-The in-image tree is part of the dm-verity rootfs and therefore of
+The in-image trees are part of the dm-verity rootfs and therefore of
 `os_image_hash`; the two release artifacts are not in `sha256sum.txt`. A module loaded by an application (which needs
 `CAP_SYS_MODULE`) is covered by the container image digest and therefore the
 compose hash, but it is not measured separately and dstack does not enforce

@@ -21,6 +21,7 @@ ${DOCKER:-docker} build \
     --build-arg "BASE_IMAGE=$DEBIAN_BASE_IMAGE" \
     --build-arg "DEBIAN_SNAPSHOT=$DEBIAN_SNAPSHOT" \
     --build-arg "KERNEL_RELEASE=$KERNEL_VERSION-dstack" \
+    --build-arg "NVIDIA_VERSION=$NVIDIA_VERSION" \
     --build-arg "IMAGE_VERSION=${IMAGE_VERSION:-$DSTACK_VERSION}" \
     --build-arg "GIT_REVISION=${GIT_REVISION:-unknown}" \
     --tag "$image" \

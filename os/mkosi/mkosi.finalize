@@ -21,7 +21,8 @@ install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf.fd" "$KSTAGE/ovmf.fd"
 install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf-sev.fd" "$KSTAGE/ovmf-sev.fd"
 install -m0755 "$TREE/usr/lib/dstack/image-tools/"* "$OUTPUTDIR/.image-tools/"
 mkdir -p "$KSTAGE/kernel-devel"
-cp -a "$TREE/usr/src/linux-headers-$KERNEL_VERSION-dstack" "$KSTAGE/kernel-devel/"
+cp -a "$TREE/usr/src/linux-headers-$KERNEL_VERSION-dstack" \
+	"$TREE/usr/src/nvidia-$NVIDIA_VERSION" "$KSTAGE/kernel-devel/"
 rm -rf "$TREE/usr/lib/dstack/firmware" "$TREE/usr/lib/dstack/image-tools"
 
 rm -f "$TREE/var/cache/ldconfig/aux-cache"
