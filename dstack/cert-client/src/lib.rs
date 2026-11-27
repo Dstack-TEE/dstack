@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider, SysConfig};
-use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
+use ra_rpc::client::{CertInfo, PinnedIssuer, RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
     cert::{generate_self_signed_ra_cert, CaCert, CertPair, CertSigningRequestV2},
@@ -55,13 +55,21 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
 /// Callers retain the startup KMS CA for the CVM lifetime, including later key
 /// requests. Without a supplied CA, bind the response CA to this connection and
 /// establish its identity through the provider pin or launch-measurement policy.
+/// A supplied CA, else a non-empty `key_provider_id`, pins the TLS handshake so
+/// the request is never sent to a server without a `kms:rpc` certificate.
 pub async fn request_app_keys(
     url: String,
     request: GetAppKeyRequest,
     client_cert: CertPair,
     attestation_verifier: Arc<AttestationVerifier>,
     trusted_ca: Option<String>,
+    key_provider_id: &[u8],
 ) -> Result<AppKeyResponse> {
+    let pinned_issuer = match trusted_ca.as_deref() {
+        Some(ca) => Some(kms_rpc_pin(ca_pubkey(ca)?)),
+        None if !key_provider_id.is_empty() => Some(kms_rpc_pin(key_provider_id.to_vec())),
+        None => None,
+    };
     let server_cert = Arc::new(Mutex::new(None));
     let captured = server_cert.clone();
     let client = RaClientConfig::builder()
@@ -69,6 +77,7 @@ pub async fn request_app_keys(
         .tls_client_cert(client_cert.cert_pem)
         .tls_client_key(client_cert.key_pem)
         .tls_skip_ca_verification(trusted_ca.is_none())
+        .maybe_tls_pinned_issuer(pinned_issuer)
         .tls_built_in_root_certs(false)
         .maybe_tls_ca_cert(trusted_ca.clone())
         .attestation_verifier(attestation_verifier)
@@ -121,6 +130,20 @@ fn validate_kms_root(server_cert: &[u8], root_ca: &str) -> Result<()> {
         .context("KMS root CA did not sign the attested RPC certificate")
 }
 
+fn kms_rpc_pin(pubkey: Vec<u8>) -> PinnedIssuer {
+    PinnedIssuer {
+        pubkey,
+        usage: KMS_RPC_CERT_USAGE.into(),
+    }
+}
+
+fn ca_pubkey(ca: &str) -> Result<Vec<u8>> {
+    let (_, pem) =
+        x509_parser::pem::parse_x509_pem(ca.as_bytes()).context("invalid KMS root CA")?;
+    let root = pem.parse_x509().context("invalid KMS root CA")?;
+    Ok(root.public_key().raw.to_vec())
+}
+
 fn kms_client(
     url: String,
     ca_cert: String,
@@ -128,11 +151,13 @@ fn kms_client(
     client_key_pem: String,
     attestation_verifier: Arc<AttestationVerifier>,
 ) -> Result<KmsClient<RaClient>> {
+    let pinned_issuer = kms_rpc_pin(ca_pubkey(&ca_cert)?);
     let ra_client = RaClientConfig::builder()
         .remote_uri(url)
         .tls_client_cert(client_cert_pem)
         .tls_client_key(client_key_pem)
         .tls_ca_cert(ca_cert)
+        .tls_pinned_issuer(pinned_issuer)
         .tls_built_in_root_certs(false)
         .attestation_verifier(attestation_verifier)
         // Root pin plus `kms:rpc` already identify the KMS; re-verifying its
@@ -667,6 +692,7 @@ mod tests {
             client_cert(),
             verifier.clone(),
             None,
+            &[],
         )
         .await
         .unwrap();
@@ -674,6 +700,25 @@ mod tests {
         assert_eq!(result.root_epoch, 1);
         let received = requests.lock().unwrap().last().unwrap().clone();
         assert_eq!((received.root_epoch, received.app_epoch), (None, None));
+
+        // A provider pin is enforced in TLS, before the RPC handler runs.
+        for (pin, ok) in [
+            (root.key.public_key_der(), true),
+            (kms_root().key.public_key_der(), false),
+        ] {
+            let before = requests.lock().unwrap().len();
+            let result = request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None,
+                &pin,
+            )
+            .await;
+            assert_eq!(result.is_ok(), ok);
+            assert_eq!(requests.lock().unwrap().len(), before + ok as usize);
+        }
 
         let other_ca = kms_root().pem_cert;
         for requested_root_epoch in [None, Some(0), Some(1)] {
@@ -693,7 +738,8 @@ mod tests {
                 request(),
                 client_cert(),
                 verifier.clone(),
-                None
+                None,
+                &[],
             )
             .await
             .is_ok());
@@ -703,7 +749,8 @@ mod tests {
                 request(),
                 client_cert(),
                 verifier.clone(),
-                Some(other_ca.clone())
+                Some(other_ca.clone()),
+                &[],
             )
             .await
             .is_err());
@@ -720,6 +767,7 @@ mod tests {
                 client_cert(),
                 verifier.clone(),
                 Some(root.pem_cert.clone()),
+                &[],
             )
             .await
             .unwrap();
@@ -730,12 +778,13 @@ mod tests {
                 request(),
                 client_cert(),
                 verifier.clone(),
-                None
+                None,
+                &[],
             )
             .await
             .is_err());
         }
-        assert_eq!(requests.lock().unwrap().len(), 10);
+        assert_eq!(requests.lock().unwrap().len(), 11);
 
         let cert = client_cert();
         let client = CertRequestClient::Kms {
@@ -795,13 +844,13 @@ mod tests {
         *response_body.lock().unwrap() = serde_json::to_string(&response).unwrap();
         let production = Arc::new(AttestationVerifier::new_prod(None).unwrap());
         assert!(
-            request_app_keys(url, request(), client_cert(), production, None)
+            request_app_keys(url, request(), client_cert(), production, None, &[])
                 .await
                 .is_err()
         );
         shutdown.notify();
         task.await.unwrap().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 38);
+        assert_eq!(requests.lock().unwrap().len(), 39);
     }
 
     #[test]
@@ -885,7 +934,7 @@ mod tests {
             .await
             .expect_err("an app's certificate must not authenticate the KMS");
         assert!(
-            format!("{err:#}").contains("invalid server cert usage: app:custom"),
+            format!("{err:#}").contains("server certificate does not match the pinned issuer"),
             "unexpected error: {err:#}"
         );
     }

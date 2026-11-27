@@ -2460,6 +2460,7 @@ impl HostShared {
             cert_pair,
             attestation_verifier(&self.sys_config)?,
             trusted_ca.clone(),
+            &self.app_compose.key_provider_id,
         )
         .await
         .context("Failed to get app keys from the attested KMS")?;
