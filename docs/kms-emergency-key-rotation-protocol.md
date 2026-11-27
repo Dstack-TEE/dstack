@@ -159,7 +159,9 @@ copy the header to tmpfs -> validate the copy
   initialization label set -> reformat (the disk holds no data yet)
   token_or_0 > current -> refuse
   current key unlocks a keyslot of the copy -> finish
-  otherwise, token_or_0 < current -> old keys of epoch token_or_0
+  otherwise, token_or_0 < current -> refuse unless
+          unsafe_allow_disk_migration
+          -> old keys of epoch token_or_0
           -> check they unlock the recorded slot (token slot, else slot 0)
           -> luksKillSlot any other slot
           -> luksAddKey (old key authorizes the new key in the free slot)
@@ -180,6 +182,21 @@ confirmed to unlock that slot, and the migration restarts from it. A crash betwe
 cleared only after the filesystem exists, so such a disk is reformatted. Never
 format on unlock failure. Invalid or unsupported metadata requires recovery.
 The disk is opened only with the last validated in-memory copy.
+
+The guest refuses such a disk unless the app compose sets
+`requirements.unsafe_allow_disk_migration`, which is strongly discouraged.
+Re-keying keeps the volume key. The old root and any copy of the old LUKS
+header reveal it, and every host, storage backend or snapshot that saw the disk
+before the rotation has such a copy, since the header is plaintext. Whoever
+holds both can read and modify a migrated disk at any time, before or after the
+migration, and no later check can tell. Disabling the flag afterwards does not
+help: the disk is then at the current epochs and never migrates again. Use it
+only when the old root is known not to have leaked, or when losing the data is
+worse than exposing it to whoever holds that root; otherwise start from a fresh
+disk and restore data at the application layer. A resumed migration whose
+current key already unlocks a keyslot needs no flag. Refusing historical keys to
+the new image in the old policy row also blocks migration, but for every app and
+together with env migration and historical `GetKey`.
 
 No extra reboot is required. Historical material is confined to the migration
 step, not persisted or passed to applications.
@@ -312,7 +329,9 @@ Protect root storage and independent admin access.
 3. Rotation-onboard one node, register its new epoch, then ordinary-onboard peers.
    Authorize new KMS images before removing old OS images; do not rotate again
    during the cutover.
-4. Boot new OS with business services held by orchestration. Migrate slots and
+4. Boot new OS with business services held by orchestration. Start apps from
+   fresh data disks; `requirements.unsafe_allow_disk_migration` keeps an old
+   disk but leaves it exposed to the old root (section 5). Migrate slots and
    complete platform env replacement; confirm app readiness. Ingress closure alone does
    not stop workers, cron jobs, queues, or outbound database/wallet writes.
 5. Start gateways with fresh data directories/KV namespaces and clean WireGuard
