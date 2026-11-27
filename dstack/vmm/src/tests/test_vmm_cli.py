@@ -161,8 +161,8 @@ class UpdateVmTests(unittest.TestCase):
 class ComposeTests(unittest.TestCase):
     """Verify the app compose written by `compose`."""
 
-    def compose(self, *scripts: str, env: str = "") -> dict:
-        """Run `compose` with these init scripts and env file, return the result."""
+    def compose(self, *scripts: str, env: str = "", specs: tuple = ()) -> dict:
+        """Run `compose` with these init scripts, env file and env specs."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "docker-compose.yaml").write_text("services: {}")
@@ -175,6 +175,7 @@ class ComposeTests(unittest.TestCase):
                 name="app",
                 docker_compose=tmp / "docker-compose.yaml",
                 env_file=tmp / ".env",
+                env_spec=list(specs),
                 kms=bool(env),
                 gateway=False,
                 local_key_provider=False,
@@ -214,33 +215,15 @@ class ComposeTests(unittest.TestCase):
             ("launch_token_hash", hashlib.sha256(b"token").hexdigest()),
         )
 
+    def test_env_specs_come_first(self) -> None:
+        """List `--env-spec` entries in order, then names they do not cover."""
+        specs = ("PORT: int(1..=65535)", "TOKEN", "PORT: /8.*/")
+        compose = self.compose(env="A=1\nPORT=8080\nTOKEN=t\n", specs=specs)
+        self.assertEqual(compose["allowed_envs"], [*specs, "A"])
 
-class AllowedEnvsTests(unittest.TestCase):
-    """Verify value specs survive rewriting allowed_envs from an env file."""
 
-    def test_plain_names_follow_the_env_file(self) -> None:
-        """Rebuild entries without a spec from the env file."""
-        merge = VMM_CLI.merge_allowed_envs
-        self.assertEqual(merge([], {"A": "1", "B": "2"}), ["A", "B"])
-        self.assertEqual(merge(["A", "C"], ["B", "A"]), ["A", "B"])
-
-    def test_specs_are_kept(self) -> None:
-        """Keep entries with a spec, and stay stable when merged again."""
-        merge = VMM_CLI.merge_allowed_envs
-        existing = ["PORT: int(1..=65535)", "OLD", "NET:/main|test/", "NET: /.{1,8}/"]
-        self.assertEqual(
-            merge(existing, ["TOKEN", "PORT"]),
-            ["PORT: int(1..=65535)", "NET:/main|test/", "NET: /.{1,8}/", "TOKEN"],
-        )
-        unchanged = ["TOKEN", "PORT: int(1..)", "OTHER"]
-        self.assertEqual(merge(unchanged, ["OTHER", "TOKEN"]), unchanged)
-        self.assertEqual(
-            merge(existing, ["TOKEN", "PORT"], ["NET", "TOKEN"]),
-            ["PORT: int(1..=65535)", "TOKEN"],
-        )
-        self.assertEqual(merge(existing, [], ["PORT", "NET"]), [])
-        merged = merge(existing, ["NET", "PORT", "TOKEN"])
-        self.assertEqual(merge(merged, ["TOKEN", "NET", "PORT"]), merged)
+class EnvSpecTests(unittest.TestCase):
+    """Verify `--env-spec` arguments."""
 
     def test_env_spec_arguments_are_checked(self) -> None:
         """Accept a bare name or a name with a spec, and nothing else."""

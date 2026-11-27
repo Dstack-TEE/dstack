@@ -1077,9 +1077,7 @@ class VmmCLI:
             "key_provider_id": args.key_provider_id or "",
             "public_logs": args.public_logs,
             "public_sysinfo": args.public_sysinfo,
-            "allowed_envs": merge_allowed_envs(
-                args.env_spec, [*(s for s in args.env_spec if ":" not in s), *envs]
-            ),
+            "allowed_envs": allowed_envs(args.env_spec, envs),
             "no_instance_id": args.no_instance_id,
             "secure_time": args.secure_time,
         }
@@ -1250,7 +1248,6 @@ class VmmCLI:
         image: Optional[str] = None,
         app_compose: Optional[str] = None,
         env_file: Optional[str] = None,
-        drop_env_specs: Iterable[str] = (),
         user_config: Optional[str] = None,
         ports: Optional[List[str]] = None,
         no_ports: bool = False,
@@ -1274,8 +1271,6 @@ class VmmCLI:
                 "--env-file requires --kms-encrypt-url or --kms-url to encrypt "
                 "environment variables"
             )
-        if drop_env_specs and not env_file:
-            raise Exception("--drop-env-spec requires --env-file")
 
         updates = []
 
@@ -1629,18 +1624,6 @@ def format_table(rows, headers):
     return "\n".join(table)
 
 
-def add_drop_env_spec_argument(parser: argparse.ArgumentParser) -> None:
-    """Add the option that removes value specs kept in allowed_envs."""
-    parser.add_argument(
-        "--drop-env-spec",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="With --env-file, remove the value specs of an environment variable "
-        "from allowed_envs (can be used multiple times)",
-    )
-
-
 def env_spec(entry: str) -> str:
     """Check an `--env-spec` argument: `NAME` or `NAME: SPEC`."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(:\s*\S.*)?", entry):
@@ -1650,25 +1633,10 @@ def env_spec(entry: str) -> str:
     return entry
 
 
-def merge_allowed_envs(
-    existing: List[str], names: Iterable[str], drop: Iterable[str] = ()
-) -> List[str]:
-    """Return allowed_envs for the variables `names`, in the order of `existing`.
-
-    Entries of `existing` that carry a value spec (`NAME: spec`) are part of
-    the app's identity and are kept unless `drop` names them; plain names
-    follow `names`, and new ones go last.
-    """
-    names, drop = list(names), set(drop)
-
-    def keep(entry: str) -> bool:
-        if ":" in entry:
-            return entry.split(":", 1)[0] not in drop
-        return entry in names
-
-    kept = [entry for entry in existing if keep(entry)]
-    covered = {entry.split(":", 1)[0] for entry in kept}
-    return kept + [name for name in names if name not in covered]
+def allowed_envs(specs: List[str], names: Iterable[str]) -> List[str]:
+    """Return the `--env-spec` entries, then the other names of the env file."""
+    listed = {spec.split(":", 1)[0] for spec in specs}
+    return [*specs, *(name for name in names if name not in listed)]
 
 
 def parse_env_file(file_path: str) -> Dict[str, str]:
@@ -2369,7 +2337,6 @@ def main():
     update_parser.add_argument(
         "--env-file", help="File with environment variables to encrypt"
     )
-    add_drop_env_spec_argument(update_parser)
     update_parser.add_argument("--user-config", help="Path to user config file")
     update_parser.add_argument(
         "--net",
@@ -2572,7 +2539,6 @@ def main():
             image=args.image,
             app_compose=args.compose and read_utf8(args.compose),
             env_file=args.env_file,
-            drop_env_specs=args.drop_env_spec,
             user_config=user_config_content,
             ports=args.port,
             no_ports=args.no_ports if hasattr(args, "no_ports") else False,
