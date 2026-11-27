@@ -166,17 +166,26 @@ static CONFIGFS_MKDIR_TRIED: Mutex<bool> = Mutex::new(false);
 /// Get a TDX quote for the given report data.
 ///
 /// Tries multiple methods in order:
-/// 1. ConfigFS (Linux 6.7+)
-/// 2. VSock to QGS service
+/// 1. VSock to QGS service, when a port is configured and no configfs path is
+///    forced through the environment
+/// 2. ConfigFS (Linux 6.7+)
+///
+/// VSock goes first because the kernel's configfs path polls for the quote
+/// once a second, so a quote QGS returns in milliseconds takes a second there.
 pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
     let _guard = TDX_LOCK.lock().map_err(|_| TdxAttestError::Busy)?;
 
-    if should_try_configfs() {
-        return get_quote_via_configfs(report_data);
+    if std::env::var_os(CONFIGFS_PATH_ENV).is_none() && is_vsock_available() {
+        match get_quote_via_vsock(report_data) {
+            Ok(quote) => return Ok(quote),
+            Err(err) if !should_try_configfs() => return Err(err),
+            // Images configure the port whether or not the host serves it.
+            Err(_) => {}
+        }
     }
 
-    if is_vsock_available() {
-        return get_quote_via_vsock(report_data);
+    if should_try_configfs() {
+        return get_quote_via_configfs(report_data);
     }
 
     Err(TdxAttestError::NotSupported(
