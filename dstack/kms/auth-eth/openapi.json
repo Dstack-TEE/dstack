@@ -334,7 +334,7 @@
           },
           "ethRpcUrl": {
             "type": "string",
-            "description": "Ethereum RPC URL"
+            "description": "Origins of the Ethereum RPC endpoints, joined by commas"
           },
           "gatewayAppId": {
             "type": "string",
@@ -354,7 +354,7 @@
           },
           "authApiInfo": {
             "type": "string",
-            "description": "JSON-encoded public metadata the KMS forwards verbatim through GetMeta: kmsContractAddr, chainId, appImplementation, ethRpcUrl, blockTag, finalityConfirmations, policyBlockNumber"
+            "description": "JSON-encoded public metadata the KMS forwards verbatim through GetMeta: kmsContractAddr, chainId, appImplementation, ethRpcUrl, ethRpcUrls, rpcQuorum, blockTag, finalityConfirmations, maxBlockAge, policyBlockNumber"
           },
           "rootEpoch": {
             "type": "integer",

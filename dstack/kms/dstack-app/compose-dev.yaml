@@ -20,14 +20,22 @@ services:
         ENV NODE_ENV=production
         CMD ["bun", "index.ts"]
     environment:
-      - PORT=8000
-      - ETH_RPC_URL=${ETH_RPC_URL}
+      PORT: 8000
+      # One endpoint per line. Every read must be answered alike by n of the m
+      # endpoints, with ETH_RPC_QUORUM as n/m. A ${NAME} is an API key from
+      # env in the unmeasured .user-config; its allowed_envs spec keeps it
+      # to one path segment, so it cannot change an endpoint or add one.
+      ETH_RPC_URLS: |
+        ${ETH_RPC_URLS}
+      ETH_RPC_QUORUM: ${ETH_RPC_QUORUM}
       # finalized on L1; an OP-stack chain read through Helios requires latest.
-      - ETH_BLOCK_TAG=${ETH_BLOCK_TAG}
-      - ETH_FINALITY_CONFIRMATIONS=${ETH_FINALITY_CONFIRMATIONS}
+      ETH_BLOCK_TAG: ${ETH_BLOCK_TAG}
+      ETH_FINALITY_CONFIRMATIONS: ${ETH_FINALITY_CONFIRMATIONS}
+      # Empty disables the block age check.
+      ETH_MAX_BLOCK_AGE: "${ETH_MAX_BLOCK_AGE}"
       # Empty disables the chain ID check.
-      - ETH_CHAIN_ID=${ETH_CHAIN_ID}
-      - KMS_CONTRACT_ADDR=${KMS_CONTRACT_ADDR}
+      ETH_CHAIN_ID: "${ETH_CHAIN_ID}"
+      KMS_CONTRACT_ADDR: "${KMS_CONTRACT_ADDR}"
     restart: unless-stopped
     ports:
       - 8001:8000
