@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use crate::{Result, TdxReport, TdxReportData};
+use crate::{Result, TdxMeasurements, TdxReport, TdxReportData};
 
 // ============================================================================
 // Constants
@@ -153,7 +153,7 @@ pub enum TdxAttestError {
 // Global state
 // ============================================================================
 
-/// Serializes quote requests that share a configfs report or use the QGS transport.
+/// Global lock for TDX operations - the driver doesn't support concurrent access
 static TDX_LOCK: Mutex<()> = Mutex::new(());
 
 /// Track if we've already tried to create the configfs directory
@@ -216,7 +216,7 @@ fn absolute_env_path(var: &str, value: impl AsRef<OsStr>) -> Result<PathBuf> {
 /// Return whether a TDX guest provider is available through either the legacy
 /// misc device or the standard TSM report interface.
 pub fn is_tdx_available() -> bool {
-    if is_report_available() {
+    if Path::new(TDX_GUEST_DEVICE).exists() {
         return true;
     }
 
@@ -239,20 +239,11 @@ pub fn is_tdx_available() -> bool {
         .any(|entry| verify_configfs_provider(&entry.path()).unwrap_or(false))
 }
 
-/// Return whether the guest exposes the local TDREPORT device.
-pub fn is_report_available() -> bool {
-    Path::new(TDX_GUEST_DEVICE).exists()
-}
-
 fn is_vsock_available() -> bool {
     read_vsock_port().map(|p| p > 0).unwrap_or(false)
 }
 
 /// Get a TDX report for the given report data.
-///
-/// The ioctl uses per-call buffers on older kernels and the driver's measurement
-/// lock on newer kernels. Configfs releases that lock before waiting for the quote,
-/// and the vsock path completes this ioctl before contacting QGS.
 pub fn get_report(report_data: &TdxReportData) -> Result<TdxReport> {
     let file = OpenOptions::new()
         .read(true)
@@ -316,6 +307,30 @@ fn rtmr_sysfs_base() -> Result<Option<PathBuf>> {
     Ok(Path::new(RTMR_SYSFS_BASE)
         .is_dir()
         .then(|| PathBuf::from(RTMR_SYSFS_BASE)))
+}
+
+/// Read MRTD and RTMR0-3 from the kernel's TSM measurement sysfs, or `None` on
+/// kernels without it.
+pub fn read_measurements() -> Result<Option<TdxMeasurements>> {
+    let Some(base) = rtmr_sysfs_base()? else {
+        return Ok(None);
+    };
+    let read = |name: &str| -> Result<[u8; 48]> {
+        let path = base.join(format!("{name}:sha384"));
+        fs::read(&path)
+            .map_err(|e| TdxAttestError::DeviceFailure(format!("read {}: {e}", path.display())))?
+            .try_into()
+            .map_err(|_| TdxAttestError::DeviceFailure(format!("{}: not 48 bytes", path.display())))
+    };
+    Ok(Some(TdxMeasurements {
+        mrtd: read("mrtd")?,
+        rtmrs: [
+            read("rtmr0")?,
+            read("rtmr1")?,
+            read("rtmr2")?,
+            read("rtmr3")?,
+        ],
+    }))
 }
 
 fn extend_rtmr_via_sysfs(base: &Path, index: u32, digest: &[u8; 48]) -> Result<()> {

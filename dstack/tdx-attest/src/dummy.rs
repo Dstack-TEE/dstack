@@ -8,7 +8,7 @@
 
 use thiserror::Error;
 
-use crate::{Result, TdxReport, TdxReportData};
+use crate::{Result, TdxMeasurements, TdxReport, TdxReportData};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TdxAttestError {
@@ -50,10 +50,10 @@ pub fn extend_rtmr(_index: u32, _event_type: u32, _digest: [u8; 48]) -> Result<(
     Err(TdxAttestError::NotSupported)
 }
 
-pub fn is_tdx_available() -> bool {
-    false
+pub fn read_measurements() -> Result<Option<TdxMeasurements>> {
+    Ok(None)
 }
 
-pub fn is_report_available() -> bool {
+pub fn is_tdx_available() -> bool {
     false
 }

@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
-use std::fmt;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -25,7 +24,8 @@ use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Verifier};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
-use ra_rpc::{CallContext, ErrorExt, RpcCall};
+use or_panic::ResultOrPanic;
+use ra_rpc::{CallContext, ResultExt as _, RpcCall};
 use ra_tls::{
     api_v1::sign_recoverable_keccak256,
     attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
@@ -35,7 +35,6 @@ use ra_tls::{
 use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
-use tokio::time::{timeout_at, Instant as TokioInstant};
 
 use tracing::error;
 
@@ -61,20 +60,12 @@ const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// every `Info` may start: a quote plus an RA-TLS round trip to the KMS.
 const DEMO_CERT_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
-#[derive(Debug)]
-struct AttestationQueueBusy;
-
-impl AttestationQueueBusy {
-    fn rpc_error() -> anyhow::Error {
-        anyhow::anyhow!("please retry").with_code(503).context(Self)
-    }
-}
-
-impl fmt::Display for AttestationQueueBusy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the attestation queue is busy")
-    }
-}
+/// How long a caller may wait for the attestation queue.
+///
+/// Callers keep running after their client disconnects, so without a bound a
+/// slow platform lets abandoned requests take every quote slot from live ones.
+/// A timeout counts as a failure for the identity and demo-cert throttles.
+const ATTEST_QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Decode the immutable identity fields out of a boot attestation.
 ///
@@ -157,9 +148,10 @@ struct AppStateInner {
     /// when each parsed the key itself.
     app_root_signing_key: Option<SigningKey>,
     /// Identity as decoded from the boot attestation. See [`AppIdentity`].
-    identity: OnceLock<AppIdentity>,
-    /// Serializes identity initialization and stores the last decode failure.
-    identity_last_failure: Arc<tokio::sync::Mutex<Option<Instant>>>,
+    identity: tokio::sync::OnceCell<AppIdentity>,
+    /// When the last identity decode failed, so the retry can be throttled.
+    /// See [`IDENTITY_RETRY_INTERVAL`].
+    identity_last_failure: Mutex<Option<Instant>>,
     /// Queues platform calls; see [`AppStateInner::attest`].
     attest_lock: Arc<tokio::sync::Mutex<()>>,
     /// `sys_vendor` and `product_name`, read once. Neither changes while the
@@ -190,37 +182,24 @@ pub(crate) struct AppIdentity {
 }
 
 impl AppStateInner {
-    fn attest_deadline(&self) -> TokioInstant {
-        TokioInstant::now()
-            + Duration::from_secs(self.config.attest_queue_timeout_secs.get().into())
-    }
-
     /// Run a platform call on the blocking pool, one at a time.
     ///
     /// Platform calls block on the hardware quote (about a second on TDX), so
     /// running one on the executor stalls every connection the agent serves,
     /// including the systemd watchdog heartbeat. Callers queue here rather than
     /// on `dstack-attest`'s quote lock, so a flood of requests holds no threads.
-    /// The wait is bounded so old requests stop taking queue slots. The guard
-    /// moves into the task, so a cancelled caller cannot let the next call in
-    /// while its own is still running.
+    /// The wait is bounded by [`ATTEST_QUEUE_TIMEOUT`]. The guard moves into
+    /// the task, so a cancelled caller cannot let the next call in while its
+    /// own is still running.
     async fn attest<T: Send + 'static>(
         &self,
         work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        self.attest_until(self.attest_deadline(), work).await
-    }
-
-    async fn attest_until<T: Send + 'static>(
-        &self,
-        deadline: TokioInstant,
-        work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
-    ) -> Result<T> {
-        let guard = timeout_at(deadline, self.attest_lock.clone().lock_owned()).await;
-        // The lock and timer can both be ready when the waiter is polled again.
-        let Some(guard) = guard.ok().filter(|_| TokioInstant::now() < deadline) else {
-            return Err(AttestationQueueBusy::rpc_error());
-        };
+        let guard =
+            tokio::time::timeout(ATTEST_QUEUE_TIMEOUT, self.attest_lock.clone().lock_owned())
+                .await
+                .context("the attestation queue is busy, retry later")
+                .with_code(503)?;
         let platform = self.platform.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
@@ -230,18 +209,21 @@ impl AppStateInner {
         .context("the attestation task panicked")?
     }
 
+    /// The TCB info for legacy `Info`, read without a quote where the platform
+    /// allows, so `Info` does not queue behind quote callers.
     async fn tcb_info(&self) -> Result<TcbInfo> {
         let platform = self.platform.clone();
-        if let Some(tcb) = tokio::task::spawn_blocking(move || platform.local_tcb_info())
+        let local = tokio::task::spawn_blocking(move || platform.local_tcb_info())
             .await
-            .context("the local TCB info task panicked")??
-        {
-            return Ok(tcb);
+            .context("the TCB info task panicked")??;
+        match local {
+            Some(tcb) => Ok(tcb),
+            None => Ok(self
+                .attest(|platform| platform.attestation_for_info())
+                .await?
+                .into_v1()
+                .into()),
         }
-        let attestation = self
-            .attest(|platform| platform.attestation_for_info())
-            .await?;
-        Ok(attestation.into_v1().into())
     }
 
     async fn issue_cert(
@@ -271,7 +253,7 @@ impl AppStateInner {
     }
 
     async fn request_demo_cert(&self) -> Result<String> {
-        let key = KeyPair::generate().context("failed to generate demo key")?;
+        let key = KeyPair::generate().context("Failed to generate demo key")?;
         let demo_cert = self
             .issue_cert(
                 &key,
@@ -316,7 +298,6 @@ impl AppState {
             }
             match state.request_demo_cert().await {
                 Ok(demo_cert) => _ = state.demo_cert.set(demo_cert),
-                Err(err) if err.is::<AttestationQueueBusy>() => {}
                 Err(e) => {
                     error!("failed to request demo cert: {e:?}");
                     *last_failure = Some(Instant::now());
@@ -405,7 +386,7 @@ impl AppState {
     }
 
     pub async fn new(config: Config) -> Result<Self> {
-        Self::new_with_platform(config, Arc::new(RealPlatform::default())).await
+        Self::new_with_platform(config, Arc::new(RealPlatform)).await
     }
 
     pub fn config(&self) -> &Config {
@@ -554,46 +535,28 @@ impl AppState {
     /// identity is unavailable and when the next attempt is, and the platform
     /// is not touched at all.
     pub(crate) async fn identity(&self) -> Result<&AppIdentity> {
-        if let Some(identity) = self.inner.identity.get() {
-            return Ok(identity);
-        }
-        // Share one wait budget between the initializer and the platform queue.
-        let deadline = self.inner.attest_deadline();
-        let mut last_failure = timeout_at(
-            deadline,
-            self.inner.identity_last_failure.clone().lock_owned(),
-        )
-        .await
-        .map_err(|_| AttestationQueueBusy::rpc_error())?;
-        if let Some(identity) = self.inner.identity.get() {
-            return Ok(identity);
-        }
-        if let Some(failed_at) = *last_failure {
-            let elapsed = failed_at.elapsed();
-            if elapsed < IDENTITY_RETRY_INTERVAL {
-                let retry_in = (IDENTITY_RETRY_INTERVAL - elapsed).as_secs() + 1;
-                anyhow::bail!(
-                    "the app identity is unavailable: decoding it failed and the next attempt is at most {retry_in}s away"
-                );
-            }
-        }
-
-        // Keep the initializer lock with the decode so a cancelled caller
-        // still leaves a cached identity or records the failure.
-        let state = self.inner.clone();
-        self.inner
-            .attest_until(deadline, move |platform| {
-                let identity = decode_identity(platform).inspect_err(|_| {
-                    *last_failure = Some(Instant::now());
-                })?;
-                let _ = state.identity.set(identity);
-                Ok(())
-            })
-            .await?;
         self.inner
             .identity
-            .get()
-            .context("app identity was not cached")
+            .get_or_try_init(|| async {
+                let last_failure = &self.inner.identity_last_failure;
+                if let Some(failed_at) = *last_failure.lock().or_panic("lock should never fail") {
+                    let elapsed = failed_at.elapsed();
+                    if elapsed < IDENTITY_RETRY_INTERVAL {
+                        let retry_in = (IDENTITY_RETRY_INTERVAL - elapsed).as_secs() + 1;
+                        anyhow::bail!(
+                            "the app identity is unavailable: decoding it failed and the next attempt is at most {retry_in}s away"
+                        );
+                    }
+                }
+                self.inner
+                    .attest(decode_identity)
+                    .await
+                    .inspect_err(|_| {
+                        *last_failure.lock().or_panic("lock should never fail") =
+                            Some(Instant::now());
+                    })
+            })
+            .await
     }
 
     /// The VM's hardware configuration, as the VMM produced it.
@@ -732,13 +695,13 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
         Default::default()
     } else {
         let tcb = state.inner.tcb_info().await?;
-        let measurements = tcb.measurements.as_ref();
+        let mr = tcb.measurements.as_ref();
         let tcb_info = serde_json::to_string_pretty(&json!({
-            "mrtd": measurements.map(|m| hex::encode(m.mrtd)),
-            "rtmr0": measurements.map(|m| hex::encode(m.rtmrs[0])),
-            "rtmr1": measurements.map(|m| hex::encode(m.rtmrs[1])),
-            "rtmr2": measurements.map(|m| hex::encode(m.rtmrs[2])),
-            "rtmr3": measurements.map(|m| hex::encode(m.rtmrs[3])),
+            "mrtd": mr.map(|m| hex::encode(m.mrtd)),
+            "rtmr0": mr.map(|m| hex::encode(m.rtmrs[0])),
+            "rtmr1": mr.map(|m| hex::encode(m.rtmrs[1])),
+            "rtmr2": mr.map(|m| hex::encode(m.rtmrs[2])),
+            "rtmr3": mr.map(|m| hex::encode(m.rtmrs[3])),
             "mr_aggregated": hex::encode(&identity.mr_aggregated),
             "os_image_hash": hex::encode(&identity.os_image_hash),
             "compose_hash": hex::encode(&identity.compose_hash),
@@ -1280,7 +1243,6 @@ pub(crate) mod tests {
     use std::convert::TryFrom;
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Mutex;
 
     pub(crate) const DUMMY_K256_KEY: [u8; 32] = [
         0x1A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0x0D, 0x1E, 0x2F, 0x3A, 0x4B, 0x5C,
@@ -1366,7 +1328,6 @@ pub(crate) mod tests {
     struct InfoAttestationProbe {
         calls: AtomicUsize,
         cert_calls: AtomicUsize,
-        quote_calls: Mutex<Vec<[u8; 64]>>,
         failing: AtomicBool,
         gate: Mutex<
             Option<(
@@ -1496,7 +1457,6 @@ pub(crate) mod tests {
             app_compose: dummy_appcompose_wrapper,
             sys_config_file: String::new().into(),
             data_disks: HashSet::new(),
-            attest_queue_timeout_secs: 15.try_into().unwrap(),
         };
         configure(&mut dummy_config);
 
@@ -1620,7 +1580,6 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
-                self.probe.quote_calls.lock().unwrap().push(report_data);
                 self.probe.pass_gate();
                 let attestation = patch_report_data(&self.attestation, report_data);
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
@@ -2339,24 +2298,29 @@ pNs85uhOZE8z2jr8Pg==
         quote.await.unwrap().unwrap();
     }
 
+    /// Legacy `Info` reads the TCB info without a quote, so it answers while a
+    /// quote holds the queue, with the same document the quote would give.
     #[tokio::test]
-    async fn tdx_info_returns_the_legacy_tcb_document_during_a_quote() {
+    async fn legacy_info_does_not_queue_behind_a_quote() {
         let probe = Arc::new(InfoAttestationProbe::default());
-        let (state, fixture) = setup_test_state_with_probe(probe.clone()).await;
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
         let identity = state.identity().await.unwrap();
         state.inner.demo_cert.set(String::new()).unwrap();
-        let (entered, release) = probe.arm_gate();
+        let (entered_rx, release_tx) = probe.arm_gate();
         let quote = tokio::spawn({
             let state = state.clone();
             async move { state.quote_response([0; 64]).await }
         });
-        entered.await.unwrap();
+        entered_rx.await.unwrap();
 
         let info = tokio::time::timeout(Duration::from_secs(2), get_info(&state, false))
             .await
-            .expect("Info answers before the quote is released")
+            .expect("Info answers while the quote is held")
             .unwrap();
-        let attestation = VersionedAttestation::from_bytes(&fs::read(fixture.path()).unwrap())
+        let attestation = state
+            .inner
+            .platform
+            .attestation_for_info()
             .unwrap()
             .into_v1();
         let report = attestation.td10_report().unwrap();
@@ -2371,116 +2335,44 @@ pNs85uhOZE8z2jr8Pg==
             "compose_hash": hex::encode(&identity.compose_hash),
             "device_id": hex::encode(&identity.device_id),
             "event_log": attestation.tdx_event_log().unwrap(),
-            "app_compose": "",
+            "app_compose": state.config().app_compose.raw,
         });
         assert_eq!(
             info.tcb_info,
             serde_json::to_string_pretty(&expected).unwrap()
         );
-        assert_eq!(probe.calls(), 1, "only the cached identity needs a quote");
-        assert_eq!(*probe.quote_calls.lock().unwrap(), [[0; 64]]);
-        release.send(()).unwrap();
+
+        release_tx.send(()).unwrap();
         quote.await.unwrap().unwrap();
     }
 
     #[tokio::test(start_paused = true)]
-    async fn an_expired_quote_waiter_returns_rpc_unavailable_and_never_runs() {
-        let probe = Arc::new(InfoAttestationProbe::default());
-        let (state, _guard) = build_test_state(
-            None,
-            |config| config.attest_queue_timeout_secs = 3.try_into().unwrap(),
-            probe.clone(),
-        )
-        .await;
-        let (entered, release) = probe.arm_gate();
-        let quote = tokio::spawn({
-            let state = state.clone();
-            async move { state.quote_response([1; 64]).await }
-        });
-        entered.await.unwrap();
+    async fn a_platform_call_gives_up_on_a_held_queue_with_503() {
+        let (state, _guard) = setup_test_state_with_probe(Arc::default()).await;
+        let held = state.inner.attest_lock.lock().await;
 
-        let request = InternalRpcHandler::new(state.clone()).call(
-            "GetQuote".into(),
-            b"{}".to_vec(),
-            true,
-            false,
-        );
-        tokio::pin!(request);
-        assert!(futures::poll!(&mut request).is_pending());
-        tokio::time::advance(Duration::from_secs(4)).await;
-        let (code, body) = request.await;
-        assert_eq!(code, 503);
-        assert!(String::from_utf8(body).unwrap().contains("queue is busy"));
+        let err = state
+            .quote_response([0; 64])
+            .await
+            .expect_err("the queue is held");
+        assert_eq!(ra_rpc::code_of(&err), Some(503));
 
-        release.send(()).unwrap();
-        quote.await.unwrap().unwrap();
-        state.quote_response([2; 64]).await.unwrap();
-        assert_eq!(*probe.quote_calls.lock().unwrap(), [[1; 64], [2; 64]]);
+        drop(held);
+        state.quote_response([0; 64]).await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
-    async fn queued_quotes_run_in_order_after_a_cancelled_waiter_leaves() {
+    async fn identity_callers_wait_at_most_one_queue_timeout() {
         let probe = Arc::new(InfoAttestationProbe::default());
         let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
-        let (entered, release) = probe.arm_gate();
-        let quote = tokio::spawn({
-            let state = state.clone();
-            async move { state.quote_response([1; 64]).await }
-        });
-        entered.await.unwrap();
+        let _held = state.inner.attest_lock.lock().await;
 
-        let first = state.quote_response([2; 64]);
-        let mut cancelled = Box::pin(state.quote_response([3; 64]));
-        let second = state.quote_response([4; 64]);
-        tokio::pin!(first, second);
-        assert!(futures::poll!(&mut first).is_pending());
-        assert!(futures::poll!(&mut cancelled).is_pending());
-        assert!(futures::poll!(&mut second).is_pending());
-        drop(cancelled);
-        release.send(()).unwrap();
-
-        let (second, first) = tokio::join!(second, first);
-        first.unwrap();
-        second.unwrap();
-        quote.await.unwrap().unwrap();
-        assert_eq!(
-            *probe.quote_calls.lock().unwrap(),
-            [[1; 64], [2; 64], [4; 64]]
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn identity_retries_immediately_after_a_queue_timeout() {
-        let probe = Arc::new(InfoAttestationProbe::default());
-        let (state, _fixture) = setup_test_state_with_probe(probe.clone()).await;
-        let guard = state.inner.attest_lock.lock().await;
-
-        let err = state.identity().await.expect_err("the queue is still busy");
-        assert_eq!(ra_rpc::code_of(&err), Some(503));
-        assert_eq!(probe.calls(), 0);
-        drop(guard);
-
-        state
-            .identity()
-            .await
-            .expect("identity retries immediately");
-        assert_eq!(probe.calls(), 1);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn concurrent_identity_requests_time_out_within_one_queue_wait() {
-        let probe = Arc::new(InfoAttestationProbe::default());
-        let (state, _fixture) = setup_test_state_with_probe(probe.clone()).await;
-        let _guard = state.inner.attest_lock.lock().await;
-
-        let (first, second) = tokio::time::timeout(Duration::from_secs(16), async {
-            tokio::join!(state.identity(), state.identity())
-        })
-        .await
-        .expect("both callers time out within one 15-second queue wait");
-
+        let start = tokio::time::Instant::now();
+        let (first, second) = tokio::join!(state.identity(), state.identity());
+        assert_eq!(start.elapsed(), ATTEST_QUEUE_TIMEOUT);
         assert_eq!(ra_rpc::code_of(&first.unwrap_err()), Some(503));
-        assert_eq!(ra_rpc::code_of(&second.unwrap_err()), Some(503));
+        let throttled = second.unwrap_err().to_string();
+        assert!(throttled.contains("next attempt"), "{throttled}");
         assert_eq!(probe.calls(), 0);
     }
 
@@ -2528,7 +2420,11 @@ pNs85uhOZE8z2jr8Pg==
             .expect_err("the platform refuses to attest");
 
         // Age the recorded failure rather than sleeping out the interval.
-        *state.inner.identity_last_failure.lock().await = Some(
+        *state
+            .inner
+            .identity_last_failure
+            .lock()
+            .expect("lock should never fail") = Some(
             Instant::now()
                 .checked_sub(IDENTITY_RETRY_INTERVAL)
                 .expect("the monotonic clock is older than the throttle window"),

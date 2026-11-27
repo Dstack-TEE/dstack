@@ -15,7 +15,6 @@ keys_file = "appkeys.json"
 compose_file = "app-compose.json"
 sys_config_file = "sys-config.json"
 data_disks = ["/"]
-attest_queue_timeout_secs = 15
 
 [default.core.simulator]
 attestation_file = "attestation.bin"
