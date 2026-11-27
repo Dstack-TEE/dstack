@@ -1,0 +1,172 @@
+Subject: [PATCH] Expose signed PPCIe mode and NVSwitch lock claims
+
+A relying party needs to know that a CC-off Protected PCIe launch is really
+in PPCIe mode with locked NVSwitches. NVML and NSCQ report that state from
+the host-controlled driver, so it is not evidence.
+
+The signed SPDM opaque data already carries both facts. The GPU verifier
+derives m_mode from FEATURE_FLAG but never serializes it, although the CLI
+prints x-nvidia-gpu-mode. The switch parser reads SWITCH_LOCK_STATUS but
+drops it. Emit both: x-nvidia-gpu-mode as the SDK names it, and the
+little-endian lock status as x-dstack-switch-lock-status.
+
+Upstream-Status: Pending
+
+---
+ .../include/nv_attestation/switch/claims.h    |  1 +
+ .../include/nv_attestation/switch/evidence.h  |  2 ++
+ nv-attestation-sdk-cpp/src/gpu/claims.cpp     |  5 ++++
+ nv-attestation-sdk-cpp/src/switch/claims.cpp  |  5 ++++
+ .../src/switch/evidence.cpp                   | 27 +++++++++++++++++++
+ nv-attestation-sdk-cpp/src/switch/verify.cpp  |  1 +
+ 6 files changed, 41 insertions(+)
+
+diff --git a/nv-attestation-sdk-cpp/include/nv_attestation/switch/claims.h b/nv-attestation-sdk-cpp/include/nv_attestation/switch/claims.h
+index e7f6a35..b21a00c 100644
+--- a/nv-attestation-sdk-cpp/include/nv_attestation/switch/claims.h
++++ b/nv-attestation-sdk-cpp/include/nv_attestation/switch/claims.h
+@@ -45,6 +45,7 @@ class SerializableSwitchClaimsV3 : public Claims {
+         std::string m_switch_bios_version; 
+         std::string m_switch_pdi;
+         std::vector<std::string> m_switch_gpu_pdis;
++        std::shared_ptr<uint64_t> m_switch_lock_status;
+         
+         // AR claims
+         SerializableCertChainClaims m_ar_cert_chain_claims;
+diff --git a/nv-attestation-sdk-cpp/include/nv_attestation/switch/evidence.h b/nv-attestation-sdk-cpp/include/nv_attestation/switch/evidence.h
+index f2cd412..245e20a 100644
+--- a/nv-attestation-sdk-cpp/include/nv_attestation/switch/evidence.h
++++ b/nv-attestation-sdk-cpp/include/nv_attestation/switch/evidence.h
+@@ -75,6 +75,7 @@ class SwitchEvidenceClaims {
+         std::string m_switch_bios_version;
+         std::string m_switch_pdi;
+         std::vector<std::string> m_switch_gpu_pdis;
++        std::shared_ptr<uint64_t> m_switch_lock_status;
+         bool m_switch_ar_nonce_match; // true if nonce matches between switch evidence and switch attestation report
+         AttestationReportClaims m_attestation_report_claims;
+ };
+@@ -97,6 +98,7 @@ class SwitchEvidence {
+                 Error get_vbios_version(std::string& out_bios_version) const;
+                 Error get_switch_pdi(std::string& out_pdi) const;
+                 Error get_switch_gpu_pdis(std::vector<std::string>& out_pdis) const;
++                Error get_switch_lock_status(uint64_t& out_lock_status) const;
+                 Error get_vbios_rim_id(std::string& out_vbios_rim_id, SwitchArchitecture architecture) const;
+                 Error get_spdm_req_nonce(std::vector<uint8_t>& out_nonce) const;
+                 Error get_measurements(std::unordered_map<int, std::vector<uint8_t>>& out_measurements) const;
+diff --git a/nv-attestation-sdk-cpp/src/gpu/claims.cpp b/nv-attestation-sdk-cpp/src/gpu/claims.cpp
+index 69e7457..fd6ac1c 100644
+--- a/nv-attestation-sdk-cpp/src/gpu/claims.cpp
++++ b/nv-attestation-sdk-cpp/src/gpu/claims.cpp
+@@ -180,6 +180,7 @@ namespace nvattestation
+         out_claims.m_vbios_rim_signature_verified = js.at("x-nvidia-gpu-vbios-rim-signature-verified").get<bool>();
+         out_claims.m_vbios_rim_measurements_available = js.at("x-nvidia-gpu-vbios-rim-measurements-available").get<bool>();
+         out_claims.m_vbios_index_no_conflict = js.at("x-nvidia-gpu-vbios-index-no-conflict").get<bool>();
++        out_claims.m_mode = js.value("x-nvidia-gpu-mode", "");
+ 
+         if (js.contains("x-nvidia-attester-claims")) {
+             for (const auto& kv : js.at("x-nvidia-attester-claims").items()) {
+@@ -242,6 +243,9 @@ namespace nvattestation
+         js["x-nvidia-gpu-vbios-rim-signature-verified"] = claims.m_vbios_rim_signature_verified;
+         js["x-nvidia-gpu-vbios-rim-measurements-available"] = claims.m_vbios_rim_measurements_available;
+         js["x-nvidia-gpu-vbios-index-no-conflict"] = claims.m_vbios_index_no_conflict;
++        if (!claims.m_mode.empty()) {
++            js["x-nvidia-gpu-mode"] = claims.m_mode;
++        }
+ 
+         js["x-nvidia-attester-claims"] = nlohmann::json::object();
+         for (const auto& kv : claims.m_attester_claims) {
+@@ -289,6 +293,7 @@ namespace nvattestation
+                lhs.m_vbios_rim_signature_verified == rhs.m_vbios_rim_signature_verified &&
+                lhs.m_vbios_rim_measurements_available == rhs.m_vbios_rim_measurements_available &&
+                lhs.m_vbios_index_no_conflict == rhs.m_vbios_index_no_conflict &&
++               lhs.m_mode == rhs.m_mode &&
+                lhs.m_attester_claims == rhs.m_attester_claims &&
+                compare_shared_ptr(lhs.m_mismatched_opaque_records, rhs.m_mismatched_opaque_records) &&
+                lhs.m_version == rhs.m_version;
+diff --git a/nv-attestation-sdk-cpp/src/switch/claims.cpp b/nv-attestation-sdk-cpp/src/switch/claims.cpp
+index faeda08..b906aae 100644
+--- a/nv-attestation-sdk-cpp/src/switch/claims.cpp
++++ b/nv-attestation-sdk-cpp/src/switch/claims.cpp
+@@ -101,6 +101,7 @@ namespace nvattestation {
+         if (js.contains("x-nvidia-switch-gpu-pdis")) {
+             out_claims.m_switch_gpu_pdis = js.at("x-nvidia-switch-gpu-pdis").get<std::vector<std::string>>();
+         }
++        out_claims.m_switch_lock_status = deserialize_optional_shared_ptr<uint64_t>(js, "x-dstack-switch-lock-status");
+ 
+         out_claims.m_ar_cert_chain_claims = js.at("x-nvidia-switch-attestation-report-cert-chain").get<SerializableCertChainClaims>();
+         out_claims.m_ar_cert_chain_fwid_match = js.at("x-nvidia-switch-attestation-report-cert-chain-fwid-match").get<bool>();
+@@ -138,6 +139,9 @@ namespace nvattestation {
+         if (!claims.m_switch_gpu_pdis.empty()) {
+             js["x-nvidia-switch-gpu-pdis"] = claims.m_switch_gpu_pdis;
+         }
++        if (claims.m_switch_lock_status) {
++            js["x-dstack-switch-lock-status"] = *claims.m_switch_lock_status;
++        }
+ 
+         js["x-nvidia-switch-attestation-report-cert-chain"] = claims.m_ar_cert_chain_claims;
+         js["x-nvidia-switch-attestation-report-cert-chain-fwid-match"] = claims.m_ar_cert_chain_fwid_match;
+@@ -173,6 +177,7 @@ namespace nvattestation {
+                 lhs.m_switch_bios_version == rhs.m_switch_bios_version &&
+                 lhs.m_switch_pdi == rhs.m_switch_pdi &&
+                 lhs.m_switch_gpu_pdis == rhs.m_switch_gpu_pdis &&
++                compare_shared_ptr(lhs.m_switch_lock_status, rhs.m_switch_lock_status) &&
+                 lhs.m_ar_cert_chain_claims == rhs.m_ar_cert_chain_claims &&
+                 lhs.m_ar_cert_chain_fwid_match == rhs.m_ar_cert_chain_fwid_match &&
+                 lhs.m_ar_parsed == rhs.m_ar_parsed &&
+diff --git a/nv-attestation-sdk-cpp/src/switch/evidence.cpp b/nv-attestation-sdk-cpp/src/switch/evidence.cpp
+index 1c6bf88..ddea4af 100644
+--- a/nv-attestation-sdk-cpp/src/switch/evidence.cpp
++++ b/nv-attestation-sdk-cpp/src/switch/evidence.cpp
+@@ -222,6 +222,14 @@ Error SwitchEvidence::generate_switch_evidence_claims(const AttestationReport& p
+         return error;
+     }
+ 
++    uint64_t lock_status = 0;
++    error = parsed_attestation_report.get_switch_lock_status(lock_status);
++    if (error == Error::Ok) {
++        out_switch_evidence_claims.m_switch_lock_status = std::make_shared<uint64_t>(lock_status);
++    } else if (error != Error::SpdmFieldNotFound) {
++        return error;
++    }
++
+     error = parsed_attestation_report.generate_attestation_report_claims(ocsp_verify_options, ocsp_client, arch_data, out_switch_evidence_claims.m_attestation_report_claims);
+     if (error != Error::Ok) {
+         return error;
+@@ -423,6 +431,25 @@ Error SwitchEvidence::AttestationReport::get_switch_gpu_pdis(std::vector<std::st
+     return Error::Ok;
+ }
+ 
++Error SwitchEvidence::AttestationReport::get_switch_lock_status(uint64_t& out_lock_status) const {
++    const SwitchParsedOpaqueFieldData* lock_status_field = nullptr;
++    Error error = m_switch_opaque_data_parser.get_field(SwitchOpaqueDataType::SWITCH_LOCK_STATUS, lock_status_field);
++    if (error != Error::Ok) {
++        return error;
++    }
++    const std::vector<uint8_t>* lock_status_data = nullptr;
++    error = lock_status_field->get_byte_vector(lock_status_data);
++    if (error != Error::Ok) {
++        return error;
++    }
++    if (lock_status_data->empty() || lock_status_data->size() > sizeof(out_lock_status) ||
++        !read_little_endian(*lock_status_data, 0, lock_status_data->size(), out_lock_status)) {
++        LOG_ERROR("Invalid switch lock status size: " << lock_status_data->size());
++        return Error::SpdmParseError;
++    }
++    return Error::Ok;
++}
++
+ Error SwitchEvidence::AttestationReport::get_vbios_rim_id(std::string& out_vbios_rim_id, SwitchArchitecture architecture) const {
+     std::string vbios_version;
+     Error error = get_vbios_version(vbios_version);
+diff --git a/nv-attestation-sdk-cpp/src/switch/verify.cpp b/nv-attestation-sdk-cpp/src/switch/verify.cpp
+index 8e5d810..ccdd983 100644
+--- a/nv-attestation-sdk-cpp/src/switch/verify.cpp
++++ b/nv-attestation-sdk-cpp/src/switch/verify.cpp
+@@ -132,6 +132,7 @@ Error LocalSwitchVerifier::set_switch_evidence_claims(const SwitchEvidenceClaims
+     out_serializable_claims.m_switch_bios_version = switch_evidence_claims.m_switch_bios_version;
+     out_serializable_claims.m_switch_pdi = switch_evidence_claims.m_switch_pdi;
+     out_serializable_claims.m_switch_gpu_pdis = switch_evidence_claims.m_switch_gpu_pdis;
++    out_serializable_claims.m_switch_lock_status = switch_evidence_claims.m_switch_lock_status;
+ 
+     out_serializable_claims.m_ar_cert_chain_claims.m_cert_expiration_date = switch_evidence_claims.m_attestation_report_claims.m_cert_chain_claims.expiration_date;
+     out_serializable_claims.m_ar_cert_chain_claims.m_cert_status = to_string(switch_evidence_claims.m_attestation_report_claims.m_cert_chain_claims.status);

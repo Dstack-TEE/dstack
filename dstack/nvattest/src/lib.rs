@@ -97,12 +97,13 @@ pub fn normalize_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>> {
     Ok(Some(parsed.as_str().trim_end_matches('/').to_string()))
 }
 
-/// Build the CLI arguments for a local (self-verifying) GPU attestation.
-pub fn args(nonce: &str, proxy_url: Option<&str>) -> Result<Vec<String>> {
+/// Build the CLI arguments for a local (self-verifying) attestation of
+/// `device` (`gpu` or `nvswitch`).
+pub fn args(device: &str, nonce: &str, proxy_url: Option<&str>) -> Result<Vec<String>> {
     let mut args = vec![
         "attest".to_string(),
         "--device".to_string(),
-        "gpu".to_string(),
+        device.to_string(),
         "--verifier".to_string(),
         "local".to_string(),
         "--nonce".to_string(),
@@ -153,7 +154,7 @@ pub async fn attest(
     proxy_url: Option<&str>,
     timeout: Duration,
 ) -> Result<Attestation> {
-    let (nonce, output) = run(nonce, proxy_url, timeout).await?;
+    let (nonce, output) = run("gpu", nonce, proxy_url, timeout).await?;
     check_status(&output)?;
     let claims = check_nonce(&output.stdout, &nonce)?;
     Ok(Attestation {
@@ -163,13 +164,14 @@ pub async fn attest(
     })
 }
 
-/// Run `nvattest` and hand back its raw output *whatever its exit status*,
-/// along with the hex nonce it was given.
+/// Run `nvattest` on `device` and hand back its raw output *whatever its
+/// exit status*, along with the hex nonce it was given.
 ///
 /// Errors only when the tool could not be run at all. The boot gate persists
 /// stdout before judging the status, so a failed appraisal still leaves
 /// evidence on disk to debug; that is why the status check is separate.
 pub async fn run(
+    device: &str,
     nonce: &[u8],
     proxy_url: Option<&str>,
     timeout: Duration,
@@ -178,7 +180,7 @@ pub async fn run(
         bail!("nvattest is not available in this image");
     }
     let nonce = check_nonce_len(nonce)?;
-    let args = args(&nonce, proxy_url)?;
+    let args = args(device, &nonce, proxy_url)?;
     if args.iter().any(|arg| arg == "--relying-party-policy")
         && !Path::new(TRUST_OUTPOST_POLICY).is_file()
     {
@@ -395,7 +397,7 @@ mod tests {
 
     #[test]
     fn proxy_routes_ocsp_and_rim_and_selects_outpost_policy() {
-        let proxied = args("aa", Some("http://10.0.2.2:8090/")).unwrap();
+        let proxied = args("gpu", "aa", Some("http://10.0.2.2:8090/")).unwrap();
         assert!(proxied
             .windows(2)
             .any(|w| w == ["--ocsp-url", "http://10.0.2.2:8090/ocsp"]));
@@ -406,7 +408,7 @@ mod tests {
             .windows(2)
             .any(|w| w == ["--relying-party-policy", TRUST_OUTPOST_POLICY]));
 
-        let direct = args("aa", None).unwrap();
+        let direct = args("gpu", "aa", None).unwrap();
         assert!(!direct.iter().any(|a| a == "--ocsp-url"));
         assert!(!direct.iter().any(|a| a == "--relying-party-policy"));
     }
