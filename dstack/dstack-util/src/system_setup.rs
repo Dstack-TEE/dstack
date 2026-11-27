@@ -1377,6 +1377,34 @@ fn verify_health_check_requirement(app_compose: &AppCompose) -> Result<()> {
     Ok(())
 }
 
+/// NTS fixes the absolute time; only a TSC the host cannot move keeps it
+/// between syncs.
+fn verify_secure_clock(platform: TeeVariant) -> Result<()> {
+    match platform {
+        TeeVariant::DstackTdx | TeeVariant::DstackGcpTdx => {}
+        TeeVariant::DstackAmdSevSnp => {
+            let secure_tsc = fs::read_to_string("/sys/devices/system/cpu/sev/secure_tsc")
+                .context("failed to read amd sev-snp Secure TSC status")?;
+            if secure_tsc.trim() != "1" {
+                bail!("secure_time requires amd sev-snp Secure TSC, which the host did not enable");
+            }
+        }
+        TeeVariant::DstackAwsNitroTpm | TeeVariant::DstackNitroEnclave => {
+            bail!("secure_time is not supported on AWS")
+        }
+    }
+    let clocksource =
+        fs::read_to_string("/sys/devices/system/clocksource/clocksource0/current_clocksource")
+            .context("failed to read the current clocksource")?;
+    if clocksource.trim() != "tsc" {
+        bail!(
+            "secure_time requires the tsc clocksource, found {}",
+            clocksource.trim()
+        );
+    }
+    Ok(())
+}
+
 fn verify_platform_requirements(
     app_compose: &AppCompose,
     current_platform: TeeVariant,
@@ -1515,6 +1543,8 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     verify_app_compose_policy(&stage0.shared).context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
+        let platform = detect_tee_variant().context("secure_time requires a TEE platform")?;
+        verify_secure_clock(platform)?;
         info!("Waiting for the system time to be synchronized");
         cmd! {
             chronyc waitsync 30 0.1 0 5;

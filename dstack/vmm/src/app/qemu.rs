@@ -45,6 +45,19 @@ struct AmdSevSnpLaunchParams {
     reduced_phys_bits: u32,
 }
 
+fn amd_sev_snp_guest_arg(
+    host_data: &str,
+    params: AmdSevSnpLaunchParams,
+    secure_tsc: bool,
+) -> String {
+    format!(
+        "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}{}",
+        params.cbitpos,
+        params.reduced_phys_bits,
+        if secure_tsc { ",secure-tsc=on" } else { "" }
+    )
+}
+
 fn parse_amd_sev_snp_qmp_capabilities(stdout: &[u8]) -> Result<AmdSevSnpLaunchParams> {
     let stdout = std::str::from_utf8(stdout).context("QMP output is not valid UTF-8")?;
     let mut qmp_error = None;
@@ -265,6 +278,7 @@ struct PreparedQemuLaunch {
     tdx_mr_config_id: Option<String>,
     snp_host_data: Option<String>,
     snp_launch_params: Option<AmdSevSnpLaunchParams>,
+    snp_secure_tsc: bool,
 }
 
 impl PreparedQemuLaunch {
@@ -367,6 +381,7 @@ impl PreparedQemuLaunch {
             tdx_mr_config_id,
             snp_host_data,
             snp_launch_params,
+            snp_secure_tsc: app_compose.secure_time,
         })
     }
 }
@@ -1100,7 +1115,14 @@ impl VmConfig {
                 let launch_params = prepared.snp_launch_params.context(
                     "snp launch parameters should be detected during launch preparation",
                 )?;
-                self.configure_amd_sev_snp_guest(command, cfg, mem, host_data, launch_params);
+                self.configure_amd_sev_snp_guest(
+                    command,
+                    cfg,
+                    mem,
+                    host_data,
+                    launch_params,
+                    prepared.snp_secure_tsc,
+                );
             }
         }
         Ok(())
@@ -1159,14 +1181,14 @@ impl VmConfig {
         mem: u32,
         host_data: &str,
         snp_params: AmdSevSnpLaunchParams,
+        secure_tsc: bool,
     ) {
         command
             .arg("-object")
             .arg(amd_sev_snp_memory_backend_arg(mem));
-        command.arg("-object").arg(format!(
-            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}",
-            snp_params.cbitpos, snp_params.reduced_phys_bits
-        ));
+        command
+            .arg("-object")
+            .arg(amd_sev_snp_guest_arg(host_data, snp_params, secure_tsc));
         command.arg("-machine").arg(
             "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",
         );
@@ -1252,10 +1274,10 @@ mod tests {
     use crate::vm_launcher::SidecarChannel;
 
     use super::{
-        amd_sev_snp_memory_backend_arg, create_hd, fs, nic_fd_layout,
+        amd_sev_snp_guest_arg, amd_sev_snp_memory_backend_arg, create_hd, fs, nic_fd_layout,
         parse_amd_sev_snp_qmp_capabilities, prepare_data_disk, qemu_img_create_args,
-        virtio_pci_device, Command, Path, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder,
-        VmConfig,
+        virtio_pci_device, AmdSevSnpLaunchParams, Command, Path, PreparedQemuLaunch,
+        PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
@@ -1287,6 +1309,19 @@ mod tests {
             amd_sev_snp_memory_backend_arg(4096),
             "memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false"
         );
+    }
+
+    #[test]
+    fn amd_sev_snp_guest_arg_enables_secure_tsc_on_request() {
+        let params = AmdSevSnpLaunchParams {
+            cbitpos: 51,
+            reduced_phys_bits: 1,
+        };
+        assert_eq!(
+            amd_sev_snp_guest_arg("aa", params, false),
+            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data=aa,cbitpos=51,reduced-phys-bits=1"
+        );
+        assert!(amd_sev_snp_guest_arg("aa", params, true).ends_with(",secure-tsc=on"));
     }
 
     #[test]
@@ -1536,6 +1571,7 @@ mod tests {
             tdx_mr_config_id: None,
             snp_host_data: None,
             snp_launch_params: None,
+            snp_secure_tsc: false,
         };
         (config, vm, prepared)
     }

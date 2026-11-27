@@ -20,6 +20,7 @@ use dstack_types::shared_filenames::{
     USER_CONFIG,
 };
 use dstack_types::version::Version;
+use dstack_types::AppCompose;
 use dstack_vmm_rpc::{
     self as pb, GpuInfo, ReloadVmsResponse, StatusRequest, StatusResponse, VmConfiguration,
 };
@@ -1788,7 +1789,7 @@ impl App {
             &manifest,
             &hex::encode(compose_hash),
             mr_config,
-            app_compose.requirements.as_ref(),
+            Some(&app_compose),
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
@@ -2146,7 +2147,7 @@ pub(crate) fn make_sys_config(
     manifest: &Manifest,
     compose_hash: &str,
     mr_config: Option<String>,
-    requirements: Option<&dstack_types::Requirements>,
+    app_compose: Option<&AppCompose>,
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
@@ -2187,7 +2188,7 @@ pub(crate) fn make_sys_config(
         &image,
         compose_hash,
         mr_config.clone(),
-        requirements,
+        app_compose,
     )?;
     let mut sys_config = json!({
         "kms_urls": kms_urls,
@@ -2274,8 +2275,9 @@ fn make_vm_config(
     image: &Image,
     _compose_hash: &str,
     mr_config: Option<String>,
-    requirements: Option<&dstack_types::Requirements>,
+    app_compose: Option<&AppCompose>,
 ) -> Result<serde_json::Value> {
+    let requirements = app_compose.and_then(|compose| compose.requirements.as_ref());
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
     // A simulated TDX guest gets the vm_config of a TDX guest, so the simulator
@@ -2447,7 +2449,9 @@ fn make_vm_config(
             measurement: image_measurement.measurement.clone(),
             vcpus: effective_vcpus,
             vcpu_type: Some("EPYC-v4".to_string()),
-            guest_features: 1,
+            guest_features: dstack_mr::sev::launch_guest_features(
+                app_compose.is_some_and(|compose| compose.secure_time),
+            ),
         };
         config["sev_snp_measurement"] = serde_json::Value::String(
             serde_json::to_string(&measurement)
@@ -4398,23 +4402,34 @@ mod tests {
         Ok(())
     }
 
+    fn test_app_compose(extra: serde_json::Value) -> AppCompose {
+        let mut compose = json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose"
+        });
+        if let (Some(compose), Some(extra)) = (compose.as_object_mut(), extra.as_object()) {
+            compose.extend(extra.clone());
+        }
+        serde_json::from_value(compose).expect("valid app compose")
+    }
+
     #[test]
     fn tdx_requirements_measure_acpi_tables_overrides_lite_to_legacy() -> Result<()> {
         let mut config = test_tdx_config()?;
         config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Lite;
         let manifest = test_manifest(2048);
         let image = test_tdx_image(true);
-        let requirements = dstack_types::Requirements {
-            tdx_measure_acpi_tables: Some(true),
-            ..Default::default()
-        };
+        let app_compose = test_app_compose(json!({
+            "requirements": { "tdx_measure_acpi_tables": true }
+        }));
         let vm_config = make_vm_config(
             &config,
             &manifest,
             &image,
             &hex_of(0x22, 32),
             None,
-            Some(&requirements),
+            Some(&app_compose),
         )?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
@@ -4430,17 +4445,16 @@ mod tests {
         config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Legacy;
         let manifest = test_manifest(2048);
         let image = test_tdx_image(true);
-        let requirements = dstack_types::Requirements {
-            tdx_measure_acpi_tables: Some(false),
-            ..Default::default()
-        };
+        let app_compose = test_app_compose(json!({
+            "requirements": { "tdx_measure_acpi_tables": false }
+        }));
         let vm_config = make_vm_config(
             &config,
             &manifest,
             &image,
             &hex_of(0x22, 32),
             None,
-            Some(&requirements),
+            Some(&app_compose),
         )?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
@@ -4541,6 +4555,22 @@ mod tests {
         let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
         fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
+        let secure_time = test_app_compose(json!({ "secure_time": true }));
+        let image = Image::load(&image_dir)?;
+        let secure_time_vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &image,
+            &compose_hash,
+            None,
+            Some(&secure_time),
+        )?;
+        let secure_time_measurement: dstack_mr::sev::SnpMeasurementDocument = serde_json::from_str(
+            secure_time_vm_config["sev_snp_measurement"]
+                .as_str()
+                .context("sev_snp_measurement must be a string")?,
+        )?;
+        assert_eq!(secure_time_measurement.guest_features, 0x201);
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
