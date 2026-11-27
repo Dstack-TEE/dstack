@@ -8,7 +8,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { HTTPException } from 'hono/http-exception';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { BaseError, createPublicClient, custom, http, keccak256, toBytes, type Address, type Hex } from 'viem';
+import { BaseError, createPublicClient, custom, http, keccak256, toBytes, zeroAddress, type Address, type Hex } from 'viem';
 
 // zod schemas for validation - compatible with original fastify implementation
 const boundedHex = (bytes: number, description: string) =>
@@ -231,8 +231,9 @@ export function parseRpcConfig(env: Record<string, string | undefined>) {
   const match = /^(\d+)\/(\d+)$/.exec(quorum);
   const threshold = Number(match?.[1]);
   const total = Number(match?.[2]);
-  if (!match || threshold < 1 || threshold > total) {
-    throw new Error('ETH_RPC_QUORUM must be n/m with 1 <= n <= m');
+  // Two answers cannot both reach n only when n is more than half of m.
+  if (!match || threshold > total || threshold * 2 <= total) {
+    throw new Error('ETH_RPC_QUORUM must be n/m with m/2 < n <= m');
   }
   // The count is pinned apart from the list, so a value interpolated into one
   // URL cannot add an endpoint.
@@ -376,15 +377,16 @@ export class EthereumBackend {
     return { number, at: { blockHash: hash, requireCanonical: true } };
   }
 
-  /// Resolve the tag once at startup, so an RPC that cannot serve it fails the
-  /// deployment instead of every later request.
-  async probeBlockTag(): Promise<void> {
-    try {
-      await this.resolveBlock();
-    } catch (err) {
+  /// Resolve the tag and read at its block once at startup, so an RPC that
+  /// cannot serve either fails the deployment instead of every later request.
+  async probe(): Promise<void> {
+    const block = await this.resolveBlock().catch((err) => {
       const hint = this.blockTag === 'latest' ? '' : '; an RPC that cannot serve the tag, as OP-stack via Helios, requires latest';
       throw new Error(`cannot resolve ETH_BLOCK_TAG=${this.blockTag} (${errorSummary(err)})${hint}`);
-    }
+    });
+    await this.client.call({ to: zeroAddress, ...block.at }).catch((err) => {
+      throw new Error(`cannot read at a block hash, which requires EIP-1898 of the RPC (${errorSummary(err)})`);
+    });
   }
 
   private decodeHex(hex: string, sz: number = 32): Hex {
@@ -510,9 +512,13 @@ export class EthereumBackend {
   }
 
   async getAppEpoch(appId: string): Promise<number> {
+    // Providers a block apart share no newest block once one of them reports
+    // a head the others lack, so fall back to the depth they do agree at.
+    const block = await this.resolveBlock('latest', 0n)
+      .catch(() => this.resolveBlock('latest', this.finalityConfirmations || 1n));
     const epoch = Number(await this.client.readContract({
       address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'currentAppEpoch',
-      args: [this.decodeHex(appId, 20)], ...(await this.resolveBlock('latest', 0n)).at,
+      args: [this.decodeHex(appId, 20)], ...block.at,
     }));
     if (!Number.isSafeInteger(epoch)) throw new Error('app epoch exceeds the supported range');
     return epoch;
@@ -753,7 +759,7 @@ app.post('/bootAuth/kms',
 );
 
 // start server
-if (import.meta.main) await ethereum.probeBlockTag();
+if (import.meta.main) await ethereum.probe();
 const port = parseInt(process.env.PORT || '3000');
 console.log(`starting server on port ${port}`);
 

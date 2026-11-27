@@ -704,21 +704,25 @@ describe('Ethereum finalized snapshot authorization', () => {
     expect(mockGetBlock.mock.calls).toEqual([[{ blockTag: 'finalized' }], [{ blockNumber: 98n }]]);
   });
 
-  it('probes the block tag at startup and names the fix when the RPC cannot serve it', async () => {
+  it('probes the block tag and a pinned read at startup and names what the RPC cannot serve', async () => {
     const { EthereumBackend } = await import('./index.ts');
     const getBlock = vi.fn(chainAt(5n));
-    const client = { getChainId: async () => 1337, getBlock };
+    const call = vi.fn(async (_: unknown) => ({}));
+    const client = { getChainId: async () => 1337, getBlock, call };
     const backend = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'safe', 0n);
-    await expect(backend.probeBlockTag()).resolves.toBeUndefined();
+    await expect(backend.probe()).resolves.toBeUndefined();
     expect(getBlock).toHaveBeenCalledWith({ blockTag: 'safe' });
+    expect(call.mock.calls[0][0]).toMatchObject({ blockHash: blockHash(5n), requireCanonical: true });
+    call.mockRejectedValueOnce(new Error('invalid params'));
+    await expect(backend.probe()).rejects.toThrow(/^cannot read at a block hash, .+ \(invalid params\)$/);
     getBlock.mockRejectedValue(new Error('invalid block tag'));
-    await expect(backend.probeBlockTag()).rejects.toThrow(
+    await expect(backend.probe()).rejects.toThrow(
       /^cannot resolve ETH_BLOCK_TAG=safe \(invalid block tag\); .+ requires latest$/,
     );
     // Behind the confirmation depth counts as unavailable too.
     getBlock.mockResolvedValue({ number: 1n });
     const deep = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'finalized', 2n);
-    await expect(deep.probeBlockTag()).rejects.toThrow(/ETH_BLOCK_TAG=finalized/);
+    await expect(deep.probe()).rejects.toThrow(/ETH_BLOCK_TAG=finalized/);
   });
 
   it('fails closed when the block is older than ETH_MAX_BLOCK_AGE', async () => {
@@ -927,6 +931,11 @@ describe('GET /app/:appId', () => {
     expect(await legacy.json()).toEqual({ currentAppEpoch: 0 });
     expect(mockGetBlock).toHaveBeenCalledWith({ blockTag: 'latest' });
     expect(mockReadContract.mock.lastCall![0].blockHash).toBe(blockHash(100n));
+    // Without agreement on the newest block, the read steps back by the confirmation depth.
+    mockGetBlock.mockImplementationOnce(chainAt(100n)).mockRejectedValueOnce(new Error('no quorum'));
+    mockReadContract.mockResolvedValueOnce(3n);
+    expect(await (await appFetch(new Request(url))).json()).toEqual({ currentAppEpoch: 3 });
+    expect(mockReadContract.mock.lastCall![0].blockHash).toBe(blockHash(98n));
   });
 });
 
@@ -1124,10 +1133,13 @@ describe('RPC quorum', () => {
       [{ ETH_RPC_URLS: urls }, /ETH_RPC_QUORUM must be n\/m/],
       [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '4/3' }, /ETH_RPC_QUORUM must be n\/m/],
       [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '2' }, /ETH_RPC_QUORUM must be n\/m/],
+      // One provider of three, or either half of four, could answer alone.
+      [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '1/3' }, /ETH_RPC_QUORUM must be n\/m/],
+      [{ ETH_RPC_URLS: urls + ' https://d.example', ETH_RPC_QUORUM: '2/4' }, /ETH_RPC_QUORUM must be n\/m/],
       // A key that smuggles in an endpoint changes the count.
       [{ ETH_RPC_URLS: urls + ' https://evil.example', ETH_RPC_QUORUM: '2/3' }, /expects 3 RPC URLs, got 4/],
-      [{ ETH_RPC_URLS: 'https://a.example/1 https://a.example/2', ETH_RPC_QUORUM: '1/2' }, /distinct origins/],
-      [{ ETH_RPC_URLS: 'https://a.example/key1 key2', ETH_RPC_QUORUM: '1/2' }, /^RPC URL 2 is invalid$/],
+      [{ ETH_RPC_URLS: 'https://a.example/1 https://a.example/2', ETH_RPC_QUORUM: '2/2' }, /distinct origins/],
+      [{ ETH_RPC_URLS: 'https://a.example/key1 key2', ETH_RPC_QUORUM: '2/2' }, /^RPC URL 2 is invalid$/],
       [{ ETH_RPC_URL: 'http://a', ETH_RPC_URLS: 'http://b', ETH_RPC_QUORUM: '1/1' }, /exactly one of/],
       [{}, /exactly one of/],
       [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '2/3' }, /ETH_MAX_BLOCK_AGE is required/],
