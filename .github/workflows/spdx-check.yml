@@ -10,6 +10,9 @@ on:
   pull_request:
     branches: [ next, 'release/**', 'feat/**' ]
 
+permissions:
+  contents: read
+
 jobs:
   reuse-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -17,6 +20,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5
+      with:
+        persist-credentials: false
 
     - name: REUSE Compliance Check
       uses: fsfe/reuse-action@v5

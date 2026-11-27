@@ -10,6 +10,9 @@ on:
   pull_request:
     branches: [ next, 'release/**', 'feat/**' ]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -24,6 +27,7 @@ jobs:
       with:
         # The change detection below diffs against the base commit.
         fetch-depth: 0
+        persist-credentials: false
 
     # Which files changed, decided here rather than with a workflow-level
     # `paths:` filter.
@@ -53,8 +57,9 @@ jobs:
         fi
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.92.0
+      uses: dtolnay/rust-toolchain@v1
       with:
+        toolchain: 1.92.0
         components: clippy, rustfmt
 
     # The largest job in the repository was compiling the workspace from nothing

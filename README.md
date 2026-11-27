@@ -7,6 +7,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Dstack-TEE/dstack/stargazers)
 [![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/next/LICENSE)
 [![REUSE status](https://api.reuse.software/badge/github.com/Dstack-TEE/dstack)](https://api.reuse.software/info/github.com/Dstack-TEE/dstack)
+[![Plumber Score](https://score.getplumber.io/github.com/Dstack-TEE/dstack.svg?style=flat-square)](https://score.getplumber.io/github.com/Dstack-TEE/dstack)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Dstack-TEE/dstack)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/+UO4bS4jflr45YmUx)
 

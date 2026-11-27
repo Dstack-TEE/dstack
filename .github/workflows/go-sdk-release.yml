@@ -24,7 +24,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -34,19 +34,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.92.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.92.0
 
       # The simulator is built from the dstack workspace; without the cache
       # this build is most of the job's wall time.
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: dstack
 
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           # The `go` directive in the released sdk/go/dstack/go.mod. sdk/go/ratls
           # and sdk/go/tappd ask for 1.24, so this one toolchain covers all
@@ -93,6 +97,9 @@ jobs:
     # which is false once `test` is skipped on workflow_dispatch.
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.test.result == 'success') }}
     runs-on: ubuntu-latest
+    permissions:
+      # The GitHub Release step creates the release.
+      contents: write
     steps:
       - name: Resolve module and version
         id: meta

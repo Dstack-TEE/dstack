@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: © 2026 Thibaud Van den Berghe <thibaud@getplumber.io>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Plumber configuration: the built-in defaults plus what this repository needs.
+extends: plumber:default
+version: "2.0"
+
+github:
+  controls:
+    githubActionMustComeFromAuthorizedSources:
+      includePlumberDefaults: true
+      # Third-party actions the workflows use, on top of the default trust list.
+      trustedGithubActions:
+        - dtolnay/rust-toolchain # installs the Rust toolchain
+        - Swatinem/rust-cache # cargo cache of the Rust jobs
+        - softprops/action-gh-release # creates the GitHub releases
+        - foundry-rs/foundry-toolchain # forge, for the KMS contracts
+        - leanprover/lean-action # builds the Lean proofs
+    # dtolnay/rust-toolchain downloads the rustup installer only when rustup
+    # is missing, and ubuntu-latest ships rustup. The four jobs that take
+    # their runner from `vars.CI_RUNNER` would run that download on a runner
+    # without it.
+    actionsMustNotExecuteMutableRemoteCode:
+      enabled: false

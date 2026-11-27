@@ -39,6 +39,8 @@ jobs:
       FOUNDRY_DYNAMIC_TEST_LINKING: 'false'
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Checkout contract dependencies
         working-directory: .
