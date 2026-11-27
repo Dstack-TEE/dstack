@@ -55,9 +55,10 @@ The Bun server sets `idleTimeout` to 255s (Bun's maximum). Bun's default of 10s 
 - `KMS_CONTRACT_ADDR` - KMS contract address (default: 0x0000000000000000000000000000000000000000)
 - `PORT` - server port (default: 3000)
 - `ETH_CHAIN_ID` - reject every decision if the RPC reports a different chain ID (default: unset, no check)
-- `ETH_BLOCK_TAG` - block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). each request resolves the tag to one block and reads all state there, except `GET /app/:appId`, which serves only the env public key RPCs and reads the app epoch at `latest`, or `ETH_FINALITY_CONFIRMATIONS` blocks behind it (at least one) when the providers do not agree on the newest block. the server resolves the tag and reads at that block's hash once at startup, and refuses to start if the RPC cannot serve either. a later tag delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). use `finalized` on L1. set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head. see [reorgs and the block tag](#reorgs-and-the-block-tag) before using `latest` or `safe`
+- `ETH_BLOCK_TAG` - block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). each request resolves the tag to one block and reads all state there, except `GET /app/:appId` when `APP_AUTH_URL` is unset, which serves only the env public key RPCs and reads the app epoch at `latest`, or `ETH_FINALITY_CONFIRMATIONS` blocks behind it (at least one) when the providers do not agree on the newest block. the server resolves the tag and reads at that block's hash once at startup, and refuses to start if the RPC cannot serve either. a later tag delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). use `finalized` on L1. set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head. see [reorgs and the block tag](#reorgs-and-the-block-tag) before using `latest` or `safe`
 - `ETH_FINALITY_CONFIRMATIONS` - read this many blocks further behind the block `ETH_BLOCK_TAG` resolves to (default: 0)
 - `ETH_MAX_BLOCK_AGE` - reject every decision if the block read is older than this many seconds by the server clock (default: unset, no check; required with more than one RPC endpoint). it bounds how far providers that withhold new blocks can hold policy back; leave room for `ETH_BLOCK_TAG`, as `finalized` on Ethereum mainnet is already about 13 minutes old
+- `APP_AUTH_URL` - optional absolute http(s) URL of an app-authorization service (default: unset). when unset, `/authorizeApp` and `GET /app/:appId` are read from `DstackKms`. when set, those two routes are forwarded to this URL at the same path. the server refuses to start if the value is not an absolute http(s) URL without credentials, a query, or a fragment. a blank value is unset. see [delegated app authorization](#delegated-app-authorization)
 
 ### Multiple RPC providers
 
@@ -250,7 +251,9 @@ this implementation keeps the API of the removed fastify + ethers server that us
 dstack-kms 0.6 posts `dstack_verifier::PolicyBootInfo`: bytes as unprefixed
 hex, plus `teeVariant` and `keyProviderInfo`. the legacy `/bootAuth/*` routes
 drop both; `/authorizeKms` and `/authorizeApp` require `teeVariant` and pass it
-to the contract unchanged, and always drop `keyProviderInfo`. the KMS checks
+to the contract unchanged, and drop `keyProviderInfo` — except that with
+`APP_AUTH_URL` set, `/authorizeApp` forwards the request body unchanged to the
+delegate, `keyProviderInfo` included. the KMS checks
 `appId`, `composeHash` and `instanceId` widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
 tests pin this contract.
 
@@ -293,6 +296,55 @@ remain available.
 [KMS authorization protocol](../README.md#authorization-protocol) for the names
 and subject semantics. Bootstrap alone may authorize before root registration;
 unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.
+
+#### Delegated app authorization
+
+Set `APP_AUTH_URL` to keep KMS policy on `DstackKms` and let another service
+decide app identity policy (registration, compose hash, app epoch). This is
+for app identities that are not `DstackApp` contracts. The KMS-owned app
+policy — the OS image allowlist at the selected root epoch and the TEE
+variant allowlist — stays on chain: before any delegate call, this server
+reads `DstackKms.checkKmsAppPolicy` at the request's pinned block and denies
+on a non-empty answer. Leave it unset to keep the chain path; the default is
+unchanged.
+
+When it is set:
+
+- `POST /authorizeApp` forwards the request body byte for byte, including
+  fields this server does not interpret. `launchTicketHash` passes through, and
+  so does a future top-level `userConfigHash` (lowercase hex, no `0x` prefix,
+  app operations only). The delegate returns `authorized`, `rejectionReason`,
+  and `currentAppEpoch`. This server overwrites `gatewayAppId`,
+  `currentRootEpoch`, `currentRootEpochHash`, `latestRootEpoch`, and
+  `latestRootEpochHash` with values read from `DstackKms` at the request's
+  pinned block, the same block `GET /` uses.
+- A `checkKmsAppPolicy` rejection is denied without calling the delegate: a
+  KMS operation posted to `/authorizeApp` (`Invalid authorization operation`),
+  no registered root epoch (`Root epoch not registered`), a
+  `requestedRootEpoch` newer than the current one (`Requested root epoch is
+  not active`), an OS image outside the allowlist of the selected epoch
+  (`OS image is not allowed`), or a disallowed TEE variant
+  (`TEE variant not allowed`).
+- A delegate error, timeout (20s, under the KMS webhook timeout of 60s),
+  non-2xx response, or invalid answer is a 503, as on `GET /app/:appId`; a
+  denial (`authorized: false`) is reserved for chain-side policy, and the KMS
+  never reads the root fields of one. The delegate's body is not copied into
+  the response. If the chain itself cannot be read, the route also returns 503
+  and does not call the delegate.
+- `GET /app/:appId` is forwarded to the same path. The app id is checked before
+  it is placed in the URL. A delegate failure is 503; this server does not
+  invent epoch 0. The chain's `latest` read for this route applies only when
+  `APP_AUTH_URL` is unset.
+- `POST /authorizeKms`, `GET /`, and `GET /sevSnpTcbRequirements` stay on chain.
+
+`POST /bootAuth/app` also stays on chain. Only KMS builds before 0.6.4 call it
+in production, and its response has no root-epoch fields to reconcile with a
+delegate. A delegated deployment must be used with a KMS that calls
+`/authorizeApp`. Do not point an older KMS at `APP_AUTH_URL`: its app boots
+would still be judged by `DstackKms`.
+
+The delegate is not followed across redirects, and its responses are not
+cached.
 
 ## Contracts
 

@@ -35,6 +35,8 @@ services:
       ETH_MAX_BLOCK_AGE: "${ETH_MAX_BLOCK_AGE}"
       # Empty disables the chain ID check.
       ETH_CHAIN_ID: "${ETH_CHAIN_ID}"
+      # Empty keeps app authorization on the DstackKms/DstackApp contracts.
+      APP_AUTH_URL: "${APP_AUTH_URL}"
       KMS_CONTRACT_ADDR: "${KMS_CONTRACT_ADDR}"
     restart: unless-stopped
     ports:

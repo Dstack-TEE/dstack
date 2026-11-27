@@ -199,6 +199,10 @@ previous epoch. `ETH_FINALITY_CONFIRMATIONS=N` hides reorgs shallower than N
 blocks but delays every policy change, emergency revocations included, by N
 blocks. See [reorgs and the block tag](../dstack/kms/auth-eth/README.md#reorgs-and-the-block-tag).
 
+Optional `APP_AUTH_URL` leaves KMS policy on `DstackKms` and forwards
+`/authorizeApp` and `GET /app/:appId` to another service. The default, leaving
+it unset, is unchanged. See [delegated app authorization](../dstack/kms/auth-eth/README.md#delegated-app-authorization).
+
 #### Getting OS Image Hash
 
 The OS image hash is in the `digest.txt` file inside the guest image tarball:

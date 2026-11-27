@@ -57,6 +57,16 @@ const BootResponseSchema = z.object({
 // keys of epochs 0..=rootEpoch; both absent when none is registered.
 type RootEpochInfo = { rootEpoch?: number; rootEpochHash?: Hex };
 
+const ZERO_ROOT_HASH = `0x${'00'.repeat(32)}` as Hex;
+
+type AuthorizationRoots = {
+  gatewayAppId: string;
+  currentRootEpoch: number;
+  currentRootEpochHash: Hex;
+  latestRootEpoch: number;
+  latestRootEpochHash: Hex;
+};
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 
@@ -130,6 +140,9 @@ const DSTACK_KMS_ABI = [
   { name: 'currentAppEpoch', type: 'function', stateMutability: 'view', inputs: [{ name: 'appId', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
   { ...AUTHORIZATION_ABI, name: 'authorizeKms' },
   { ...AUTHORIZATION_ABI, name: 'authorizeApp' },
+  // The KMS-owned app policy without the identity checks a delegate owns;
+  // empty string admits the request at its selected root epoch.
+  { ...AUTHORIZATION_ABI, name: 'checkKmsAppPolicy', outputs: [{ name: '', type: 'string' }] },
   {
     name: 'isKmsAllowed',
     type: 'function',
@@ -414,20 +427,26 @@ export class EthereumBackend {
 
   }
 
+  // The AuthorizationRequest tuple as the contract sees it; shared by every
+  // view that takes one.
+  private contractRequest(request: AuthorizationRequest) {
+    return {
+      appInfo: this.contractAppInfo(request),
+      operation: keccak256(toBytes(request.operation)),
+      requestedAppEpoch: { isSet: request.requestedAppEpoch !== undefined, value: BigInt(request.requestedAppEpoch ?? 0) },
+      requestedRootEpoch: { isSet: request.requestedRootEpoch !== undefined, value: BigInt(request.requestedRootEpoch ?? 0) },
+      teeVariant: request.teeVariant,
+      launchTicketHash: this.decodeHex(request.launchTicketHash ?? '', 32),
+    };
+  }
+
   async checkAuthorization(appInfo: AuthorizationRequest, method: 'authorizeKms' | 'authorizeApp') {
     const block = await this.resolveBlock();
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: method,
-      args: [{
-        appInfo: this.contractAppInfo(appInfo),
-        operation: keccak256(toBytes(appInfo.operation)),
-        requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
-        requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
-        teeVariant: appInfo.teeVariant,
-        launchTicketHash: this.decodeHex(appInfo.launchTicketHash ?? '', 32),
-      }],
+      args: [this.contractRequest(appInfo)],
       ...block.at,
     });
     const currentRootEpoch = Number(result.currentRootEpoch);
@@ -481,22 +500,30 @@ export class EthereumBackend {
     };
   }
 
-  // The current root epoch and its chain hash; empty only when no epoch is registered.
-  async getRootEpoch(block?: Snapshot): Promise<RootEpochInfo> {
-    block ??= await this.resolveBlock();
-    const count = await this.client.readContract({
+  private readRootEpochCount(block: Snapshot) {
+    return this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: 'rootEpochCount',
       ...block.at
     });
-    if (count === 0n) return {};
-    const [epoch, chainHash] = await this.client.readContract({
+  }
+
+  private readCurrentRootEpoch(block: Snapshot) {
+    return this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: 'currentRootEpoch',
       ...block.at
     });
+  }
+
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
+  async getRootEpoch(block?: Snapshot): Promise<RootEpochInfo> {
+    block ??= await this.resolveBlock();
+    // currentRootEpoch reverts while the registry is empty.
+    if (await this.readRootEpochCount(block) === 0n) return {};
+    const [epoch, chainHash] = await this.readCurrentRootEpoch(block);
     return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
@@ -555,6 +582,61 @@ export class EthereumBackend {
     });
     return result as string;
   }
+
+  // KMS-owned app policy (operation scope, selected root epoch, OS image and
+  // TEE variant allowlists) without the app identity checks a delegate owns.
+  // Non-empty denies.
+  async checkKmsAppPolicy(request: AuthorizationRequest, block: Snapshot): Promise<string> {
+    return await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'checkKmsAppPolicy',
+      args: [this.contractRequest(request)],
+      ...block.at,
+    });
+  }
+
+  // Root fields of an AuthorizationResult, from the same pinned block GET / uses.
+  async getAuthorizationRoots(block?: Snapshot): Promise<AuthorizationRoots> {
+    block ??= await this.resolveBlock();
+    const [gatewayAppId, count] = await Promise.all([
+      this.getGatewayAppId(block),
+      this.readRootEpochCount(block),
+    ]);
+    // Empty registry: zero epochs and hashes, and no call to currentRootEpoch, which reverts then.
+    if (count === 0n) {
+      return {
+        gatewayAppId,
+        currentRootEpoch: 0,
+        currentRootEpochHash: ZERO_ROOT_HASH,
+        latestRootEpoch: 0,
+        latestRootEpochHash: ZERO_ROOT_HASH,
+      };
+    }
+    const latest = count - 1n;
+    const [[epoch, chainHash], latestRoot] = await Promise.all([
+      this.readCurrentRootEpoch(block),
+      this.client.readContract({
+        address: this.kmsContractAddr,
+        abi: DSTACK_KMS_ABI,
+        functionName: 'rootEpoch',
+        args: [latest],
+        ...block.at,
+      }),
+    ]);
+    const currentRootEpoch = Number(epoch);
+    const latestRootEpoch = Number(latest);
+    if (!Number.isSafeInteger(currentRootEpoch) || !Number.isSafeInteger(latestRootEpoch)) {
+      throw new Error('root epoch exceeds the supported range');
+    }
+    return {
+      gatewayAppId,
+      currentRootEpoch,
+      currentRootEpochHash: chainHash,
+      latestRootEpoch,
+      latestRootEpochHash: latestRoot[3],
+    };
+  }
 }
 
 // initialize app
@@ -592,7 +674,135 @@ const ethereum = new EthereumBackend(
 );
 const ethRpcUrl = rpc.origins.join(',');
 
+// Stay under the KMS webhook timeout (60s) so a delegate failure still returns
+// the chain root fields before the KMS gives up on the call.
+export const APP_AUTH_TIMEOUT_MS = 20_000;
+
+// The answer of the app-authorization delegate; the root fields of an
+// AuthorizationResult always come from the chain, never from the delegate.
+const AppEpochSchema = z.number().int().min(0).max(0xffffffff);
+const DelegatedAuthorizationSchema = z.object({
+  authorized: z.boolean(),
+  rejectionReason: z.string(),
+  currentAppEpoch: AppEpochSchema,
+});
+
+export function parseAppAuthUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error('APP_AUTH_URL must be an absolute http(s) URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('APP_AUTH_URL must be an absolute http(s) URL');
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error('APP_AUTH_URL must not include credentials');
+  }
+  // A raw '?' or '#' cannot be told apart from an empty query or fragment in
+  // the parsed URL, so reject one in the raw value.
+  if (trimmed.includes('?') || trimmed.includes('#')) {
+    throw new Error('APP_AUTH_URL must not include a query or fragment');
+  }
+  return (url.origin + url.pathname).replace(/\/$/, '');
+}
+
+const appAuthBase = parseAppAuthUrl(process.env.APP_AUTH_URL);
 const backendUnavailable = 'authorization backend unavailable';
+
+type DelegateCall = { ok: true; body: string } | { ok: false; reason: string };
+
+function delegateTimedOut(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
+async function callDelegate(url: string, init: { method: string; body?: string }): Promise<DelegateCall> {
+  try {
+    const response = await fetch(url, {
+      method: init.method,
+      body: init.body,
+      headers: init.body === undefined ? undefined : { 'content-type': 'application/json' },
+      redirect: 'error',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(APP_AUTH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      return failedDelegate(`app authorization delegate returned HTTP ${response.status}`);
+    }
+    return { ok: true, body: await response.text() };
+  } catch (err) {
+    if (delegateTimedOut(err)) return failedDelegate('app authorization delegate timed out');
+    return failedDelegate(`app authorization delegate unavailable: ${errorSummary(err)}`);
+  }
+}
+
+function failedDelegate(reason: string): DelegateCall {
+  console.error(`app authorization delegate failed: ${reason}`);
+  return { ok: false, reason };
+}
+
+// A delegate failure is a 503, not a denial: the KMS bails on
+// `!result.authorized` without reading the root fields, so appDenial only
+// serves chain-side denials.
+function failedDelegateResponse(reason: string): { status: 503; body: unknown } {
+  console.error(`app authorization delegate failed: ${reason}`);
+  return { status: 503, body: { status: 'error', message: reason } };
+}
+
+function rootFields(roots: AuthorizationRoots) {
+  return {
+    gatewayAppId: roots.gatewayAppId,
+    currentRootEpoch: roots.currentRootEpoch,
+    currentRootEpochHash: roots.currentRootEpochHash,
+    latestRootEpoch: roots.latestRootEpoch,
+    latestRootEpochHash: roots.latestRootEpochHash,
+  };
+}
+
+function appDenial(roots: AuthorizationRoots, rejectionReason: string) {
+  return { authorized: false, rejectionReason, currentAppEpoch: 0, ...rootFields(roots) };
+}
+
+// App identity policy comes from the delegate; the KMS-owned policy (OS image
+// and TEE variant allowlists at the selected root epoch) and the root fields
+// always come from the chain at the request's pinned block. Called only when
+// APP_AUTH_URL is set, from the route's try, which turns a chain read failure
+// into a 503.
+async function delegatedAppAuthorization(
+  base: string,
+  request: AuthorizationRequest,
+  rawBody: string,
+): Promise<{ status: 200 | 503; body: unknown }> {
+  const block = await ethereum.resolveBlock();
+  const [roots, kmsRejection] = await Promise.all([
+    ethereum.getAuthorizationRoots(block),
+    ethereum.checkKmsAppPolicy(request, block),
+  ]);
+  if (kmsRejection !== '') {
+    return { status: 200, body: appDenial(roots, kmsRejection) };
+  }
+  const delegated = await callDelegate(`${base}/authorizeApp`, { method: 'POST', body: rawBody });
+  if (!delegated.ok) return { status: 503, body: { status: 'error', message: delegated.reason } };
+  let json: unknown;
+  try {
+    json = JSON.parse(delegated.body);
+  } catch {
+    return failedDelegateResponse('app authorization delegate returned invalid JSON');
+  }
+  const parsed = DelegatedAuthorizationSchema.safeParse(json);
+  if (!parsed.success) {
+    return failedDelegateResponse('app authorization delegate returned an invalid response');
+  }
+  return {
+    status: 200,
+    body: { ...parsed.data, ...rootFields(roots) },
+  };
+}
+
 const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
 const invalidAuthorization = {
   authorized: false,
@@ -666,6 +876,23 @@ app.get('/', async (c) => {
 app.get('/app/:appId', async (c) => {
   const appId = c.req.param('appId');
   if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  if (appAuthBase) {
+    const delegated = await callDelegate(`${appAuthBase}/app/${appId}`, { method: 'GET' });
+    if (!delegated.ok) return c.json({ error: delegated.reason }, 503);
+    let json: unknown;
+    try {
+      json = JSON.parse(delegated.body);
+    } catch {
+      console.error('app authorization delegate failed: app authorization delegate returned invalid JSON');
+      return c.json({ error: 'app authorization delegate returned invalid JSON' }, 503);
+    }
+    const parsed = DelegatedAuthorizationSchema.pick({ currentAppEpoch: true }).safeParse(json);
+    if (!parsed.success) {
+      console.error('app authorization delegate failed: app authorization delegate returned an invalid response');
+      return c.json({ error: 'app authorization delegate returned an invalid response' }, 503);
+    }
+    return c.json({ currentAppEpoch: parsed.data.currentAppEpoch });
+  }
   try {
     return c.json({ currentAppEpoch: await ethereum.getAppEpoch(appId) });
   } catch {
@@ -704,6 +931,12 @@ for (const method of ['authorizeKms', 'authorizeApp'] as const) {
     }),
     async (c) => {
       try {
+        if (method === 'authorizeApp' && appAuthBase) {
+          // The validator already consumed the body as JSON; text() is that same
+          // cached string, so fields this server does not interpret are unchanged.
+          const result = await delegatedAppAuthorization(appAuthBase, c.req.valid('json'), await c.req.text());
+          return c.json(result.body, result.status);
+        }
         return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));
       } catch (err) {
         logFailure('authorization backend failed', err);
@@ -713,7 +946,9 @@ for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   );
 }
 
-// app boot authentication
+// Legacy app boot. Left on chain when APP_AUTH_URL is set: KMS builds since
+// 0.6.4 do not call it, and the response has no root-epoch fields to reconcile
+// with a delegate. Do not point a pre-0.6.4 KMS at a delegated deployment.
 app.post('/bootAuth/app',
   zValidator('json', BootInfoSchema, (result, c) => {
     if (!result.success) return c.json(invalidRequest, 400);

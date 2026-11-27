@@ -174,7 +174,7 @@ client can choose the `remote` that the logs and the key release audit record.
    - Chain interface for permission checks
    - Two-step validation:
      1. KMS control contract check
-     2. App control contract check
+     2. App control contract check, or an external app-authorization service when `APP_AUTH_URL` is set ([delegated app authorization](auth-eth/README.md#delegated-app-authorization))
 
 3. **Authorization Contracts** ([`auth-eth`](auth-eth/))
    - `DstackKms.sol`
@@ -340,7 +340,11 @@ Authorization uses two explicit endpoints:
 The Ethereum backends call the matching `DstackKms` method. Both accept
 `AuthorizationRequest` and return `AuthorizationResult`; no caller-kind flag is
 sent. The KMS method checks the KMS policy; the app method applies registered app
-policy.
+policy. When auth-eth runs with `APP_AUTH_URL`, an external app-authorization
+service answers `/authorizeApp` in place of the app method, while the KMS
+policy — OS image and TEE variant allowlists at the selected root epoch —
+stays on chain via `DstackKms.checkKmsAppPolicy` (see
+[delegated app authorization](auth-eth/README.md#delegated-app-authorization)).
 KMS callers do not fetch contract metadata to decide which policy to use.
 
 Before authorizing an SEV-SNP attestation, the KMS reads
