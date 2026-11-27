@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `vmm-cli compose --init-script` sets `init_script` in the app compose file.
+- **`allowed_envs` entries can constrain values.** An entry may be `NAME: spec`,
+  such as `PORT: int(1..=65535)` or `NETWORK: /mainnet|testnet/`, and the guest
+  refuses to boot when a value does not match. `dstack-util validate-env`
+  applies the same specs from an `init_script`, and `dstack-util import-env`
+  takes variables from `.user-config` under them. `vmm-cli compose --env-spec`
+  and the VMM web UI set them, and the VMM rejects malformed `int` and
+  `float` specs at deployment. See
+  [Environment value specs](docs/security/cvm-boundaries.md#environment-value-specs).
 
 ### Security
 
@@ -34,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `update --compose`.
   `update --kms-encrypt-url` encrypts `--env-file` without replacing the VM's
   KMS URLs, which `--kms-url` does.
+- **`app-compose.service` rejects environment variables outside
+  `allowed_envs`.** It used to pass on whatever `.decrypted-env.json` held, so
+  an `init_script` that adds variables to that file must now have them listed
+  in `allowed_envs`. An `allowed_envs` entry that contains a `:` must now be
+  a valid `NAME: spec`; such an entry used to be a name no variable could
+  have, and now stops the boot.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import

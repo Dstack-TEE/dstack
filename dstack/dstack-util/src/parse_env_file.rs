@@ -4,8 +4,9 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use tracing::warn;
+use value_spec::ValueSpec;
 
 /// Escape a value for systemd's `EnvironmentFile=` parser. A newline cannot be
 /// represented there, so it is written as a literal `\n`.
@@ -40,28 +41,71 @@ struct Data {
     env: Vec<Pair>,
 }
 
-pub fn parse_env(env_json: &[u8], allowed: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
-    const MAX_ITEMS: usize = 1024;
-    const MAX_TOTAL_SIZE: usize = 1024 * 1024;
+/// The specs each allowed name's value must match.
+pub type AllowedEnvs = BTreeMap<String, Vec<ValueSpec>>;
 
-    let data: Data = serde_json::from_slice(env_json).context("Failed to parse env")?;
-
-    if data.env.len() > MAX_ITEMS {
-        bail!("Too many environment variables: {}", data.env.len());
+/// Parses `allowed_envs` entries, each a name optionally followed by `:`,
+/// optional whitespace and a value spec.
+pub fn parse_allowed_envs(entries: &[String]) -> Result<AllowedEnvs> {
+    let mut allowed = AllowedEnvs::new();
+    for entry in entries {
+        let (name, spec) = value_spec::parse_named(entry)
+            .with_context(|| format!("invalid allowed_envs entry {entry:?}"))?;
+        allowed.entry(name.to_string()).or_default().extend(spec);
     }
+    Ok(allowed)
+}
 
-    const KEY_REGEX: &str = r"^[a-zA-Z_][a-zA-Z0-9_]*$";
-    let key_regex = regex::Regex::new(KEY_REGEX)
-        .context("Failed to compile environment key validation regex")?;
-
-    let mut env = BTreeMap::new();
-    let mut total_size = 0;
-
-    for Pair { key, value } in data.env {
-        if !allowed.contains(&key) {
-            warn!("Skipping unauthorized environment variable: {key}");
+/// Checks the variables `allowed` names against their specs. An unset
+/// variable counts as empty, so only a spec that accepts the empty string
+/// leaves its variable optional.
+pub fn check_env(allowed: &AllowedEnvs, get: impl Fn(&str) -> Option<String>) -> Result<()> {
+    for (name, specs) in allowed {
+        let value = get(name);
+        if specs
+            .iter()
+            .all(|spec| spec.matches(value.as_deref().unwrap_or_default()))
+        {
             continue;
         }
+        match value {
+            Some(_) => bail!("value of env {name} does not match its spec"),
+            None => bail!("env {name} is not set and its spec does not accept an empty value"),
+        }
+    }
+    Ok(())
+}
+
+/// Rejects variables that `allowed` does not name.
+pub fn check_names<'a>(
+    allowed: &AllowedEnvs,
+    names: impl IntoIterator<Item = &'a String>,
+) -> Result<()> {
+    match names.into_iter().find(|name| !allowed.contains_key(*name)) {
+        Some(name) => bail!("env {name} is not allowed"),
+        None => Ok(()),
+    }
+}
+
+const MAX_ITEMS: usize = 1024;
+const MAX_TOTAL_SIZE: usize = 1024 * 1024;
+
+struct Limits {
+    key_regex: regex::Regex,
+    total_size: usize,
+}
+
+impl Limits {
+    fn new() -> Result<Self> {
+        const KEY_REGEX: &str = r"^[a-zA-Z_][a-zA-Z0-9_]*$";
+        Ok(Self {
+            key_regex: regex::Regex::new(KEY_REGEX)
+                .context("Failed to compile environment key validation regex")?,
+            total_size: 0,
+        })
+    }
+
+    fn add(&mut self, key: &str, value: &str) -> Result<()> {
         // Check key length (common Linux limit is 255)
         if key.len() > 255 {
             bail!("Environment variable name too long: {}", key);
@@ -73,15 +117,53 @@ pub fn parse_env(env_json: &[u8], allowed: &BTreeSet<String>) -> Result<BTreeMap
         }
 
         // validate key
-        if !key_regex.is_match(&key) {
+        if !self.key_regex.is_match(key) {
             bail!("Invalid env key: {}", key);
         }
 
-        total_size += key.len() + value.len();
-        if total_size > MAX_TOTAL_SIZE {
+        self.total_size += key.len() + value.len();
+        if self.total_size > MAX_TOTAL_SIZE {
             bail!("Environment variables total size too large");
         }
+        Ok(())
+    }
+}
+
+/// Applies the limits of [`parse_env`] to variables that did not come through it.
+pub fn check_limits(env: &BTreeMap<String, String>) -> Result<()> {
+    if env.len() > MAX_ITEMS {
+        bail!("too many environment variables: {}", env.len());
+    }
+    let mut limits = Limits::new()?;
+    env.iter()
+        .try_for_each(|(key, value)| limits.add(key, value))
+}
+
+/// Keeps the variables `allowed` names and checks their values against its
+/// specs. A variable that is absent is not checked here: an `init_script` may
+/// still supply it, and [`check_env`] runs before the app starts.
+pub fn parse_env(env_json: &[u8], allowed: &AllowedEnvs) -> Result<BTreeMap<String, String>> {
+    let data: Data = serde_json::from_slice(env_json).context("Failed to parse env")?;
+
+    if data.env.len() > MAX_ITEMS {
+        bail!("Too many environment variables: {}", data.env.len());
+    }
+
+    let mut limits = Limits::new()?;
+    let mut env = BTreeMap::new();
+
+    for Pair { key, value } in data.env {
+        if !allowed.contains_key(&key) {
+            warn!("Skipping unauthorized environment variable: {key}");
+            continue;
+        }
+        limits.add(&key, &value)?;
         env.insert(key, value);
+    }
+    for (name, value) in &env {
+        if !allowed[name].iter().all(|spec| spec.matches(value)) {
+            bail!("value of env {name} does not match its spec");
+        }
     }
     Ok(env)
 }
@@ -113,6 +195,113 @@ mod tests {
         assert_eq!(escape_value("command=`date`"), r#""command=\`date\`""#);
         assert_eq!(escape_value(r"trail\"), r#""trail\\""#);
         assert_eq!(escape_value("cr\r"), "\"cr\r\"");
+    }
+
+    fn parse(allowed: &[&str], env: &[(&str, &str)]) -> Result<BTreeMap<String, String>> {
+        let allowed = allowed.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let env: Vec<_> = env
+            .iter()
+            .map(|(key, value)| serde_json::json!({ "key": key, "value": value }))
+            .collect();
+        let json = serde_json::to_vec(&serde_json::json!({ "env": env }))?;
+        parse_env(&json, &parse_allowed_envs(&allowed)?)
+    }
+
+    #[test]
+    fn values_are_checked_against_specs() {
+        let allowed = [
+            "PORT:int(1..=65535)",
+            "NET:/main|test/",
+            "URL:/https://.*/",
+            "ANY",
+        ];
+        let env = [
+            ("PORT", "8080"),
+            ("NET", "test"),
+            ("URL", "https://a:1/"),
+            ("ANY", "x y"),
+        ];
+        assert_eq!(parse(&allowed, &env).unwrap().len(), 4);
+        for bad in [
+            ("PORT", "0"),
+            ("PORT", "80 "),
+            ("NET", "mainnet"),
+            ("URL", "http://a"),
+        ] {
+            let env = env.map(|kv| if kv.0 == bad.0 { bad } else { kv });
+            let err = parse(&allowed, &env).unwrap_err().to_string();
+            assert!(err.contains(bad.0) && !err.contains(bad.1), "{err}");
+        }
+    }
+
+    #[test]
+    fn absent_variables_are_left_to_check_env() {
+        let allowed = ["PORT: int(1..=65535)", "NET: /main|test/", "ANY"];
+        assert!(parse(&allowed, &[("OTHER", "1")]).unwrap().is_empty());
+        assert!(parse(&allowed, &[("PORT", "")]).is_err());
+        assert!(parse(&["PORT: int(1..=65535)?"], &[("PORT", "")]).is_ok());
+    }
+
+    #[test]
+    fn limits_apply_outside_parse_env() {
+        let env = |key: &str, value: String| BTreeMap::from([(key.to_string(), value)]);
+        assert!(check_limits(&env("A", "x".repeat(128 * 1024))).is_ok());
+        assert!(check_limits(&env("A", "x".repeat(128 * 1024 + 1))).is_err());
+        assert!(check_limits(&env("A B", String::new())).is_err());
+    }
+
+    #[test]
+    fn the_last_duplicate_is_the_one_checked() {
+        let allowed = ["N: int(0..=9)"];
+        assert_eq!(
+            parse(&allowed, &[("N", "x"), ("N", "5")]).unwrap()["N"],
+            "5"
+        );
+        assert!(parse(&allowed, &[("N", "5"), ("N", "x")]).is_err());
+    }
+
+    #[test]
+    fn repeated_names_must_match_every_spec() {
+        for allowed in [["N:int(0..=9)", "N"], ["N", "N:int(0..=9)"]] {
+            assert!(parse(&allowed, &[("N", "9")]).is_ok());
+            assert!(parse(&allowed, &[("N", "10")]).is_err());
+        }
+        let allowed = ["N: int(0..=9)", "N:  int(5..)"];
+        assert!(parse(&allowed, &[("N", "5")]).is_ok());
+        assert!(parse(&allowed, &[("N", "4")]).is_err());
+    }
+
+    #[test]
+    fn invalid_specs_are_rejected() {
+        for entry in ["A:", "A: ", "A:int(", "A:string", "A:int:int", "A: int "] {
+            assert!(parse(&[entry], &[]).is_err(), "{entry}");
+        }
+    }
+
+    #[test]
+    fn check_env_looks_up_every_allowed_name() {
+        let get = |name: &str| (name == "PORT").then(|| "8080".to_string());
+        let check = |entries: &[&str]| {
+            let entries = entries.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            check_env(&parse_allowed_envs(&entries)?, get)
+        };
+        assert!(check(&["PORT: int(1..=65535)", "PORT", "HOST", "N: int?"]).is_ok());
+        assert!(check(&["PORT: int(1..=1024)"]).is_err());
+        assert!(check(&["PORT: int", "HOST: /.+/"]).is_err());
+        assert!(check(&["PORT: int(8080)", "PORT: int(1..=1024)"]).is_err());
+        assert!(check(&["PORT: string"]).is_err());
+    }
+
+    #[test]
+    fn unlisted_names_are_rejected() {
+        let allowed = parse_allowed_envs(&["PORT: int".to_string(), "HOST".to_string()]).unwrap();
+        let check = |names: &[&str]| {
+            let names = names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            check_names(&allowed, &names)
+        };
+        assert!(check(&[]).is_ok());
+        assert!(check(&["HOST", "PORT"]).is_ok());
+        assert!(check(&["HOST", "LD_PRELOAD"]).is_err());
     }
 
     /// Round-trip through systemd's own parser; skipped without a user manager.

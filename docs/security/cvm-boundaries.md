@@ -37,7 +37,7 @@ This is the main configuration file for the application in JSON format:
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
 | public_sysinfo | 0.3.3 | boolean | Whether system info is public. Covers the guest dashboard and `/metrics`, including the `dstack_gpu_*` series (since 0.6.0), which expose each GPU's UUID and PCI bus address alongside utilization, memory, temperature and power. |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
-| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names |
+| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names. An entry may be `NAME: spec` to also constrain the value, see [Environment value specs](#environment-value-specs). |
 | no_instance_id | 0.4.2 | boolean | Disable instance ID generation |
 | secure_time | 0.5.0 | boolean | Whether secure time is enabled |
 | pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before `docker compose up`. It runs *after* dockerd, so containers restored by a Docker restart policy can already be running when it executes. Do not build security gates on it — see [security-best-practices.md](./security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first). |
@@ -126,10 +126,45 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM derives the shared secret using the ephemeral public key via X25519 key exchange
    - CVM decrypts the ciphertext using AESGCM with the derived shared secret
    - CVM parses the JSON and only stores variables listed in allowed_envs from app-compose.json
-   - CVM performs basic regex validation on values
-   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`
+   - CVM validates variable names and checks each value against the specs given in allowed_envs
+   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`, which rejects variables outside allowed_envs and checks the values against the specs again
 
 This file is not measured to RTMRs, and the envelope is not bound to an instance or compose hash: the KMS derives `env_crypt_key` from the app ID alone, so the host can withhold the file or replay any earlier ciphertext for the same app. It is highly recommended to add application-specific integrity checks, such as a version or expiry inside the plaintext, at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
+
+#### Environment value specs
+
+Since 0.6.7, an `allowed_envs` entry may be `NAME: spec`, such as `PORT: int(1..=65535)`; the space after the colon is optional, and `NAME` must be `[A-Za-z_][A-Za-z0-9_]*`, at most 255 bytes, with nothing between it and the colon. The CVM refuses to boot when the encrypted environment gives `NAME` a value that does not match the spec. Before the application starts, after every `init_script` has run, a variable that is still not set counts as empty, so `NAME` is required unless its spec accepts the empty string, as one ending in `?` does. This last check is made by `app-compose.service`; a program that reads `.decrypted-env` on its own does not get it. A spec is one of:
+
+| Spec | Accepts |
+|------|---------|
+| `int` | any integer within `i128` |
+| `int(1..=65535)` | integers from 1 to 65535 |
+| `int(0\|1024..<65536)` | 0, or integers from 1024 up to but excluding 65536 |
+| `float` | any decimal number, compared exactly |
+| `float(0<..=1)` | decimals above 0 and up to 1 |
+| `/mainnet\|testnet/` | values the regex matches in full |
+| `int(1..=65535)?` | the empty string, or integers from 1 to 65535 |
+
+A range is `start..=end` or `start..<end`; a `<` after `start` excludes it, and either side may be omitted. Numbers must be canonical (no `+`, leading zeros, exponent or whitespace) and at most 64 bytes. Regexes use the Rust `regex` syntax. A trailing `?` makes any spec accept the empty string as well. A spec is at most 4096 bytes. In a regex, `\d` and `\w` also match non-ASCII digits and letters; write `[0-9]` and `[A-Za-z0-9_]` for ASCII only. A name listed more than once must match every spec given for it.
+
+`dstack-util validate-env` applies specs to values an `init_script` takes from unmeasured sources such as `.user-config`. It checks `NAME: spec` arguments, plus the `allowed_envs` specs of an app compose file given with `--compose`, the same way the boot does. Values come from the command's environment, or from a JSON object of names to string values given with `--env-file`; names without a spec are not checked. The arguments and `allowed_envs` together are also the list of permitted names: any other variable in the environment or the `--env-file` is an error unless `--allow-unlisted` is given. A bare `NAME` argument permits a variable without constraining it, and must itself be a valid variable name, so a mistyped `:` is an error. Only take specs from measured input: the arguments in `init_script` or `/dstack/app-compose.json`.
+
+```bash
+PORT=$(jq -r .port /dstack/.host-shared/.user-config)
+PORT=$PORT dstack-util validate-env --allow-unlisted 'PORT: int(1024..=65535)' || exit 1
+
+dstack-util validate-env --compose /dstack/app-compose.json --env-file env.json || exit 1
+```
+
+`dstack-util import-env` is the shorthand for the common case: it copies variables from the `env` object of `.user-config` into `.decrypted-env.json` and `.decrypted-env`, so the app receives them like encrypted environment variables. Name the variables, or pass `--all` for every variable under `env`. Each one must be in `allowed_envs` and match its specs there; a named variable that `env` lacks counts as empty. A variable the encrypted environment already set to a different value is an error, and the size limits of the encrypted environment apply.
+
+```bash
+dstack-util import-env RPC_API_KEY
+```
+
+`app-compose.service` passes `--compose /dstack/app-compose.json` to `dstack-util exec-with-env`, so an `init_script` that rewrites `.decrypted-env.json` cannot hand the application a variable that is not in `allowed_envs` or a value that breaks a spec there.
+
+Guests older than 0.6.7 treat `NAME: spec` as a name that no variable can have, so they drop the variable rather than deliver it unchecked.
 
 ### .user-config
 This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/.host-shared/.user-config without any measurement or additional processing, unless `requirements.launch_token_hash` is set in app-compose.json — in that case the guest reads the launch token from JSON path `dstack.launch_token` in this file and fails closed at boot, before key provisioning, unless its SHA-256 matches the pinned hash.

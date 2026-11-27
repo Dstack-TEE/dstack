@@ -21,15 +21,19 @@ Proven:
 * `validKey_safe`: keys passing `KEY_REGEX` are nonempty and contain no `=`,
   whitespace, `#` or quote, so `KEY=value` lines split at the first `=`.
 * `parseEnv_spec`: every accepted entry is allowed, has a valid key and
-  respects the length limits; unauthorized keys are dropped, not rejected.
+  respects the length limits; unauthorized keys are dropped, not rejected;
+  and the value of every variable that is set matches its value specs. The
+  later `check_env`, which treats an unset variable as empty, is not modeled.
 
 Assumptions: Rust's `char::is_whitespace` is a parameter `rustWs` required to
-hold for systemd's `WHITESPACE` (` `, `\t`, `\n`, `\r`).
+hold for systemd's `WHITESPACE` (` `, `\t`, `\n`, `\r`). Whether a value matches
+every spec of its name is a parameter `matchesSpecs`; `Guest.ValueSpec` models
+the specs themselves.
 Modeling gaps: the systemd parser model is limited to one value line, is
 written from the upstream state machine rather than extracted from it, and
 the Rust `systemd_round_trip` test is its only executable cross-check; JSON
-decoding, `MAX_ITEMS`, and the `BTreeMap` (later duplicates override) are not
-modeled; lengths are counted in chars, not UTF-8 bytes.
+decoding, `parse_allowed_envs`, `MAX_ITEMS`, and the `BTreeMap` are not
+modeled beyond `valueOf` taking the last duplicate; lengths are counted in chars, not UTF-8 bytes.
 -/
 
 namespace DstackFormal.Guest.EnvFile
@@ -273,8 +277,18 @@ def parseEnvGo (allowed : List Char → Bool) :
     else if total + k.length + v.length > 1024 * 1024 then none
     else ((k, v) :: ·) <$> parseEnvGo allowed (total + k.length + v.length) rest
 
-def parseEnv (allowed : List Char → Bool) (pairs : List (List Char × List Char)) :
-    Option (List (List Char × List Char)) := parseEnvGo allowed 0 pairs
+/-- The value `check_env` sees for `name`: the last accepted pair, empty when
+unset. -/
+def valueOf (name : List Char) (env : List (List Char × List Char)) : List Char :=
+  (env.reverse.lookup name).getD []
+
+/-- `parse_env`: the loop, then the spec check of every variable that is set.
+A variable that is absent is left to `check_env`, which runs before the app. -/
+def parseEnv (allowed : List Char → Bool)
+    (matchesSpecs : List Char → List Char → Bool) (pairs : List (List Char × List Char)) :
+    Option (List (List Char × List Char)) :=
+  (parseEnvGo allowed 0 pairs).bind fun env =>
+    if env.all (fun kv => matchesSpecs kv.1 (valueOf kv.1 env)) then some env else none
 
 theorem parseEnvGo_spec (allowed : List Char → Bool) :
     ∀ (total : Nat) (pairs out : List (List Char × List Char)), parseEnvGo allowed total pairs = some out →
@@ -310,15 +324,41 @@ theorem parseEnvGo_spec (allowed : List Char → Bool) :
       obtain ⟨hs, hp⟩ := parseEnvGo_spec allowed total rest out h
       exact ⟨hs.cons _, hp⟩
 
-/-- Every accepted entry is allowed, has a valid key and respects the limits. -/
-theorem parseEnv_spec (allowed : List Char → Bool) (pairs out : List (List Char × List Char))
-    (h : parseEnv allowed pairs = some out) :
-    out.Sublist pairs ∧ ∀ kv ∈ out, allowed kv.1 = true ∧ validKey kv.1 = true ∧
-      kv.1.length ≤ 255 ∧ kv.2.length ≤ 128 * 1024 :=
-  parseEnvGo_spec allowed 0 pairs out h
+/-- Every accepted entry is allowed, has a valid key and respects the limits,
+and the value of every variable that is set matches its specs. -/
+theorem parseEnv_spec (allowed : List Char → Bool)
+    (matchesSpecs : List Char → List Char → Bool) (pairs out : List (List Char × List Char))
+    (h : parseEnv allowed matchesSpecs pairs = some out) :
+    out.Sublist pairs ∧
+      (∀ kv ∈ out, allowed kv.1 = true ∧ validKey kv.1 = true ∧
+        kv.1.length ≤ 255 ∧ kv.2.length ≤ 128 * 1024) ∧
+      ∀ kv ∈ out, matchesSpecs kv.1 (valueOf kv.1 out) = true := by
+  unfold parseEnv at h
+  cases hg : parseEnvGo allowed 0 pairs with
+  | none => simp [hg] at h
+  | some env =>
+    simp only [hg, Option.bind_some] at h
+    by_cases hc : env.all (fun kv => matchesSpecs kv.1 (valueOf kv.1 env)) = true
+    · simp only [hc, ite_true, Option.some.injEq] at h
+      subst h
+      obtain ⟨hs, hp⟩ := parseEnvGo_spec allowed 0 pairs env hg
+      exact ⟨hs, hp, fun kv hkv => List.all_eq_true.mp hc kv hkv⟩
+    · simp [hc] at h
 
 /-- Unauthorized keys are skipped, not rejected. -/
-example : parseEnv (fun k => k == "A".toList) [("B".toList, []), ("A".toList, "1".toList)] =
-    some [("A".toList, "1".toList)] := by decide
+example : parseEnv (fun k => k == "A".toList) (fun _ _ => true)
+    [("B".toList, []), ("A".toList, "1".toList)] = some [("A".toList, "1".toList)] := by decide
+
+/-- A value failing its specs is an error, not a skip. -/
+example : parseEnv (fun _ => true) (fun k v => k != "B".toList || v == "1".toList)
+    [("A".toList, "1".toList), ("B".toList, "2".toList)] = none := by decide
+
+/-- An absent variable is not checked here. -/
+example : (parseEnv (fun _ => true) (fun k v => k != "B".toList || !v.isEmpty)
+    [("A".toList, "1".toList)]).isSome = true := by decide
+
+/-- The last duplicate is the one checked. -/
+example : (parseEnv (fun _ => true) (fun _ v => v == "2".toList)
+    [("A".toList, "1".toList), ("A".toList, "2".toList)]).isSome = true := by decide
 
 end DstackFormal.Guest.EnvFile

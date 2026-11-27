@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 // SPDX-License-Identifier: Apache-2.0
 
+const { replaceEnvs } = require('../lib/envEncryption');
+
 declare const FileReader: any;
 
-type EnvVar = { key: string; value: string };
+type EnvVar = { key: string; value: string; spec?: string };
 
 type ComponentInstance = {
   envVars: EnvVar[];
@@ -13,6 +15,7 @@ type ComponentInstance = {
     textContent: string;
   };
   parseTextContent(): void;
+  replaceFromText(content: string): void;
 };
 
 const EncryptedEnvEditorComponent = {
@@ -57,7 +60,8 @@ const EncryptedEnvEditorComponent = {
         </div>
         <div v-for="(env, index) in envVars" :key="index" class="encrypted-env-row">
           <input type="text" v-model="env.key" placeholder="Variable name" required>
-          <input type="password" v-model="env.value" placeholder="Value" required>
+          <input type="password" v-model="env.value" placeholder="Value" :required="!env.spec">
+          <input type="text" v-model="env.spec" placeholder="Value spec (optional), e.g. int(1..=65535)">
           <button type="button" class="action-btn danger" @click="removeEnv(index)">
             Remove
           </button>
@@ -105,24 +109,10 @@ const EncryptedEnvEditorComponent = {
       if (!content.trim()) {
         return;
       }
-      const lines = content.split('\n');
-      this.envVars.splice(0, this.envVars.length);
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) {
-          continue;
-        }
-        const equalIndex = trimmed.indexOf('=');
-        if (equalIndex === -1) {
-          continue;
-        }
-        const key = trimmed.substring(0, equalIndex).trim();
-        const value = trimmed.substring(equalIndex + 1).trim();
-        if (!key) {
-          continue;
-        }
-        this.envVars.push({ key, value });
-      }
+      this.replaceFromText(content);
+    },
+    replaceFromText(this: ComponentInstance, content: string) {
+      this.envVars.splice(0, this.envVars.length, ...replaceEnvs(this.envVars, content));
     },
     loadEnvFromFile(this: ComponentInstance, event: Event) {
       const input = event.target as HTMLInputElement | null;
@@ -132,25 +122,7 @@ const EncryptedEnvEditorComponent = {
       }
       const reader = new FileReader();
       reader.onload = (e: { target: { result: string } }) => {
-        const content = e.target.result || '';
-        const lines = content.split('\n');
-        this.envVars.splice(0, this.envVars.length);
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) {
-            continue;
-          }
-          const equalIndex = trimmed.indexOf('=');
-          if (equalIndex === -1) {
-            continue;
-          }
-          const key = trimmed.substring(0, equalIndex).trim();
-          const value = trimmed.substring(equalIndex + 1).trim();
-          if (!key) {
-            continue;
-          }
-          this.envVars.push({ key, value });
-        }
+        this.replaceFromText(e.target.result || '');
       };
       reader.readAsText(file);
       if (input) {

@@ -1596,7 +1596,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .encrypted-env-row {
-  grid-template-columns: 200px 1fr auto;
+  grid-template-columns: 200px 1fr 1fr auto;
 }
 
 .encrypted-env-actions {

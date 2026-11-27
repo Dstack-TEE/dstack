@@ -161,8 +161,8 @@ class UpdateVmTests(unittest.TestCase):
 class ComposeTests(unittest.TestCase):
     """Verify the app compose written by `compose`."""
 
-    def compose(self, *scripts: str, env: str = "") -> dict:
-        """Run `compose` with these init scripts and env file, return the result."""
+    def compose(self, *scripts: str, env: str = "", specs: tuple = ()) -> dict:
+        """Run `compose` with these init scripts, env file and env specs."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "docker-compose.yaml").write_text("services: {}")
@@ -175,6 +175,7 @@ class ComposeTests(unittest.TestCase):
                 name="app",
                 docker_compose=tmp / "docker-compose.yaml",
                 env_file=tmp / ".env",
+                env_spec=list(specs),
                 kms=bool(env),
                 gateway=False,
                 local_key_provider=False,
@@ -213,6 +214,24 @@ class ComposeTests(unittest.TestCase):
             list(compose.items())[-1],
             ("launch_token_hash", hashlib.sha256(b"token").hexdigest()),
         )
+
+    def test_env_specs_come_first(self) -> None:
+        """List `--env-spec` entries in order, then names they do not cover."""
+        specs = ("PORT: int(1..=65535)", "TOKEN", "PORT: /8.*/")
+        compose = self.compose(env="A=1\nPORT=8080\nTOKEN=t\n", specs=specs)
+        self.assertEqual(compose["allowed_envs"], [*specs, "A"])
+
+
+class EnvSpecTests(unittest.TestCase):
+    """Verify `--env-spec` arguments."""
+
+    def test_env_spec_arguments_are_checked(self) -> None:
+        """Accept a bare name or a name with a spec, and nothing else."""
+        for entry in ["TOKEN", "_A1", "PORT: int(1..=65535)", "NET:/a|b/"]:
+            self.assertEqual(VMM_CLI.env_spec(entry), entry)
+        for entry in ["", "PORT int", "PORT : int", "1A", "A-B", "PORT:", "PORT: "]:
+            with self.assertRaises(argparse.ArgumentTypeError):
+                VMM_CLI.env_spec(entry)
 
 
 class LaunchTicketTests(unittest.TestCase):

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dstack_attest::emit_runtime_event;
 use dstack_types::{KeyProvider, KeyProviderKind};
@@ -106,6 +106,26 @@ enum Commands {
     GpuInfo,
     /// Exec a command with extra environment variables from a JSON object file
     ExecWithEnv(ExecWithEnvArgs),
+    /// Check environment variables of this process against value specs
+    ValidateEnv(ValidateEnvArgs),
+    /// Copy environment variables from `env` in the user config into the env file
+    ImportEnv(ImportEnvArgs),
+}
+
+#[derive(Parser)]
+struct ValidateEnvArgs {
+    /// App compose file whose `allowed_envs` specs also apply
+    #[arg(long)]
+    compose: Option<PathBuf>,
+    /// JSON object mapping variable names to values, checked instead of the environment
+    #[arg(long)]
+    env_file: Option<PathBuf>,
+    /// Accept variables that no spec or `allowed_envs` entry names
+    #[arg(long)]
+    allow_unlisted: bool,
+    /// Variables to allow, as `NAME` or `NAME: spec`; an unset variable counts as empty
+    #[arg(required_unless_present = "compose", value_parser = env_spec)]
+    specs: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -113,9 +133,142 @@ struct ExecWithEnvArgs {
     /// JSON object mapping variable names to values
     #[arg(long)]
     env_file: PathBuf,
+    /// App compose file; variables must be in its `allowed_envs` and match the specs there
+    #[arg(long)]
+    compose: Option<PathBuf>,
     /// Command to exec, with its arguments
     #[arg(last = true, required = true)]
     command: Vec<String>,
+}
+
+#[derive(Parser)]
+struct ImportEnvArgs {
+    /// Import every variable under `env` in the user config
+    #[arg(long, conflicts_with = "names")]
+    all: bool,
+    /// User config holding the variables under `env` [default: .user-config in the host-shared dir]
+    #[arg(long)]
+    user_config: Option<PathBuf>,
+    /// JSON object of variables to merge into [default: .decrypted-env.json in the host-shared
+    /// dir, with .decrypted-env beside it rewritten to match]
+    #[arg(long)]
+    env_file: Option<PathBuf>,
+    /// App compose file whose `allowed_envs` permits and constrains the variables
+    /// [default: app-compose.json in the host-shared dir]
+    #[arg(long)]
+    compose: Option<PathBuf>,
+    /// Variables to import
+    #[arg(required_unless_present = "all")]
+    names: Vec<String>,
+}
+
+type Envs = std::collections::BTreeMap<String, String>;
+
+#[derive(serde::Deserialize, Default)]
+struct UserConfig {
+    #[serde(default)]
+    env: Envs,
+}
+
+fn load_envs(path: &Path) -> Result<Envs> {
+    utils::deserialize_json_file(path)
+        .with_context(|| format!("failed to load env from {}", path.display()))
+}
+
+fn load_allowed_envs(path: &Path) -> Result<Vec<String>> {
+    let compose: utils::AppCompose = utils::deserialize_json_file(path)
+        .with_context(|| format!("failed to load app compose from {}", path.display()))?;
+    Ok(compose.allowed_envs)
+}
+
+/// A bare name on the command line must be a variable name too, so that a mistyped
+/// `:` is not taken as a name that no variable has.
+fn env_spec(entry: &str) -> Result<String, value_spec::ParseError> {
+    let (name, _) = value_spec::split_named(entry)?;
+    value_spec::check_name(name)?;
+    Ok(entry.into())
+}
+
+fn cmd_validate_env(args: ValidateEnvArgs) -> Result<()> {
+    let mut not_utf8 = Vec::new();
+    let envs = match &args.env_file {
+        Some(path) => load_envs(path)?,
+        None => std::env::vars_os()
+            .filter_map(
+                |(name, value)| match (name.into_string(), value.into_string()) {
+                    (Ok(name), Ok(value)) => Some((name, value)),
+                    (name, _) => {
+                        not_utf8
+                            .push(name.unwrap_or_else(|name| name.to_string_lossy().into_owned()));
+                        None
+                    }
+                },
+            )
+            .collect(),
+    };
+    let mut entries = args.specs;
+    if let Some(compose) = &args.compose {
+        entries.extend(load_allowed_envs(compose)?);
+    }
+    let allowed = parse_env_file::parse_allowed_envs(&entries)?;
+    let checked = |name: &&String| !args.allow_unlisted || allowed.contains_key(*name);
+    if let Some(name) = not_utf8.iter().find(checked) {
+        bail!("env {name} is not valid UTF-8");
+    }
+    if !args.allow_unlisted {
+        parse_env_file::check_names(&allowed, envs.keys())?;
+    }
+    parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())
+}
+
+fn cmd_import_env(args: ImportEnvArgs) -> Result<()> {
+    use dstack_types::shared_filenames::{
+        host_shared_dir, APP_COMPOSE, DECRYPTED_ENV, DECRYPTED_ENV_JSON, USER_CONFIG,
+    };
+
+    let shared = host_shared_dir();
+    let user_config = args.user_config.unwrap_or_else(|| shared.join(USER_CONFIG));
+    let shell_env_file = args.env_file.is_none().then(|| shared.join(DECRYPTED_ENV));
+    let env_file = args
+        .env_file
+        .unwrap_or_else(|| shared.join(DECRYPTED_ENV_JSON));
+    let compose = args.compose.unwrap_or_else(|| shared.join(APP_COMPOSE));
+
+    // The VMM writes no user config file for an empty user config.
+    let mut source = match fs::read_to_string(&user_config) {
+        Ok(config) => {
+            serde_json::from_str::<UserConfig>(&config)
+                .with_context(|| format!("failed to parse {}", user_config.display()))?
+                .env
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Envs::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let names = match args.all {
+        true => source.keys().cloned().collect(),
+        false => args.names,
+    };
+    let mut allowed = parse_env_file::parse_allowed_envs(&load_allowed_envs(&compose)?)?;
+    parse_env_file::check_names(&allowed, &names)?;
+    allowed.retain(|name, _| names.contains(name));
+
+    let mut envs = load_envs(&env_file)?;
+    for (name, value) in names.iter().filter_map(|name| source.remove_entry(name)) {
+        if envs.get(&name).is_some_and(|existing| *existing != value) {
+            bail!("env {name} is already set to a different value");
+        }
+        envs.insert(name, value);
+    }
+    parse_env_file::check_limits(&envs)?;
+    parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
+    let json = serde_json::to_vec(&envs).context("failed to serialize env")?;
+    safe_write_with_mode(&env_file, json, 0o600)
+        .with_context(|| format!("failed to write {}", env_file.display()))?;
+    if let Some(path) = shell_env_file {
+        safe_write_with_mode(&path, parse_env_file::convert_env_to_str(&envs), 0o600)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[derive(Parser)]
@@ -734,9 +887,12 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
 fn cmd_exec_with_env(args: ExecWithEnvArgs) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    let envs: std::collections::BTreeMap<String, String> =
-        utils::deserialize_json_file(&args.env_file)
-            .with_context(|| format!("failed to load env from {}", args.env_file.display()))?;
+    let envs = load_envs(&args.env_file)?;
+    if let Some(compose) = &args.compose {
+        let allowed = parse_env_file::parse_allowed_envs(&load_allowed_envs(compose)?)?;
+        parse_env_file::check_names(&allowed, envs.keys())?;
+        parse_env_file::check_env(&allowed, |name| envs.get(name).cloned())?;
+    }
     let (program, program_args) = args.command.split_first().context("no command given")?;
     let err = std::process::Command::new(program)
         .args(program_args)
@@ -1700,6 +1856,8 @@ async fn main() -> Result<()> {
             gpu_info::cmd_gpu_info()?;
         }
         Commands::ExecWithEnv(args) => cmd_exec_with_env(args)?,
+        Commands::ValidateEnv(args) => cmd_validate_env(args)?,
+        Commands::ImportEnv(args) => cmd_import_env(args)?,
     }
 
     Ok(())
