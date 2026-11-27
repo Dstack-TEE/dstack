@@ -155,7 +155,7 @@ impl CertRequestClient {
             CertRequestClient::Local { ca } => {
                 let app_info = local_ca_app_info(&csr.attestation);
                 let cert = ca
-                    .sign_csr(csr, app_info.as_ref(), "app:custom")
+                    .sign_csr(csr, app_info.as_ref(), None, "app:custom")
                     .context("Failed to sign certificate")?;
                 Ok(vec![cert.pem(), ca.pem_cert.clone()])
             }
@@ -480,7 +480,7 @@ mod tests {
         let mut csr = csr_with(undecodable_attestation(), key.public_key_der());
         csr.config.subject_alt_names = vec![domain.to_string()];
         let leaf = app_ca
-            .sign_csr(&csr, Some(&app_info_for(app_id)), "app:custom")
+            .sign_csr(&csr, Some(&app_info_for(app_id)), None, "app:custom")
             .expect("sign csr");
         (
             format!("{}\n{}\n{}", leaf.pem(), app_ca.pem_cert, root.pem_cert),

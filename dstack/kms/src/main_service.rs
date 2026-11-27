@@ -25,7 +25,7 @@ use p256::pkcs8::DecodePrivateKey;
 use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use ra_tls::{
     attestation::{resolve_vm_config, AttestationVerifier, TeeVariant, VerifiedAttestation},
-    cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
+    cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr, KeyEpochs},
     kdf,
     rcgen::KeyPair,
 };
@@ -1160,8 +1160,12 @@ impl KmsRpc for RpcHandler {
             let cert_app_info = attestation
                 .decode_app_info_ex(false, &request.vm_config)
                 .context("Failed to decode the verified app info")?;
+            let key_epochs = KeyEpochs {
+                root_epoch: app_info.root_epoch,
+                app_epoch: app_info.app_epoch,
+            };
             let cert = app_ca
-                .sign_csr(&csr, Some(&cert_app_info), "app:custom")
+                .sign_csr(&csr, Some(&cert_app_info), Some(&key_epochs), "app:custom")
                 .context("Failed to sign certificate")?;
             self.audit_key_release(
                 KeyRelease::AppCert,

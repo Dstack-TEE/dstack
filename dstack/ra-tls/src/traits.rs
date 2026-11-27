@@ -7,7 +7,10 @@
 use anyhow::{Context, Result};
 use dstack_attest::attestation::AppInfo;
 
-use crate::oids::{PHALA_RATLS_APP_ID, PHALA_RATLS_APP_INFO, PHALA_RATLS_CERT_USAGE};
+use crate::cert::KeyEpochs;
+use crate::oids::{
+    PHALA_RATLS_APP_ID, PHALA_RATLS_APP_INFO, PHALA_RATLS_CERT_USAGE, PHALA_RATLS_KEY_EPOCHS,
+};
 
 /// Types that can get custom cert extensions from.
 pub trait CertExt {
@@ -46,5 +49,16 @@ pub trait CertExt {
         let app_info = rmp_serde::from_slice(&app_info_bytes)
             .context("failed to decode app info as msgpack")?;
         Ok(app_info)
+    }
+
+    /// Get the KMS key epochs the certificate was issued under. `None` means it was
+    /// issued without them, by a local CA or a KMS predating this extension.
+    fn get_key_epochs(&self) -> Result<Option<KeyEpochs>> {
+        let Some(bytes) = self.get_extension_bytes(PHALA_RATLS_KEY_EPOCHS)? else {
+            return Ok(None);
+        };
+        let key_epochs =
+            rmp_serde::from_slice(&bytes).context("failed to decode key epochs as msgpack")?;
+        Ok(Some(key_epochs))
     }
 }

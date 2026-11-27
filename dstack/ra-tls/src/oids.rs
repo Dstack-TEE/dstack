@@ -16,3 +16,5 @@ pub const PHALA_RATLS_CERT_USAGE: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 4];
 pub const PHALA_RATLS_ATTESTATION: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 8];
 /// OID for app info
 pub const PHALA_RATLS_APP_INFO: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 9];
+/// OID for the KMS key epochs a certificate was issued under
+pub const PHALA_RATLS_KEY_EPOCHS: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 10];
