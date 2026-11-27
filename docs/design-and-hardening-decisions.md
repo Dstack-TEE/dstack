@@ -57,7 +57,7 @@ See [here](https://intel.github.io/ccc-linux-guest-hardening-docs/security-spec.
 
 **Implementation**: dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](../os/yocto/layers/meta-dstack/recipes-core/chrony/files/chrony.conf) to synchronize system time.
 
-On AMD SEV-SNP the hypervisor controls the guest TSC unless the guest is launched with Secure TSC. The VMM enables it for an app whose app-compose.json sets `secure_time`, which needs QEMU >= 11.2, host kernel >= 6.18 and a CPU that supports Secure TSC.
+On AMD SEV-SNP the hypervisor controls the guest TSC unless the guest is launched with Secure TSC. The VMM enables it whenever `secure_time` is on in app-compose.json (the default), which needs QEMU >= 11.2, host kernel >= 6.18 and a CPU that supports Secure TSC.
 
 **Behavior**: When `secure_time` is enabled in the app-compose.json configuration, the system ensures time synchronization is completed before requesting application keys. It first checks that the host cannot move the clock between syncs and refuses to boot otherwise: the clocksource must be `tsc`, an AMD SEV-SNP guest must run with Secure TSC, and AWS is not supported. If `secure_time` is disabled, time synchronization is not enforced before application launch.
 
