@@ -15,6 +15,10 @@ keys_file = "/dstack/.host-shared/.appkeys.json"
 compose_file = "/dstack/.host-shared/app-compose.json"
 sys_config_file = "/dstack/.host-shared/.sys-config.json"
 data_disks = ["/"]
+# Maximum time in seconds to wait for an attestation slot (positive integer).
+# The 15-second default accommodates roughly 15 queued one-second TDX quotes.
+# Requests that exceed this wait receive HTTP 503 and can retry.
+attest_queue_timeout_secs = 15
 
 
 [internal-v0]

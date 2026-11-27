@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashSet, ops::Deref, path::PathBuf};
+use std::{collections::HashSet, num::NonZeroU32, ops::Deref, path::PathBuf};
 
 use dstack_types::AppCompose;
 use figment::Figment;
@@ -49,6 +49,12 @@ pub struct Config {
     pub app_compose: AppComposeWrapper,
     pub sys_config_file: PathBuf,
     pub data_disks: HashSet<PathBuf>,
+    /// Maximum time to wait for the attestation queue, in seconds.
+    /// The 15-second default lets roughly 15 one-second TDX quotes queue while
+    /// leaving time to finish within the 20-second AntSeed prover deadline and
+    /// planned pig-tail RPC deadline. Callers with shorter deadlines should
+    /// avoid relying on queued quotes.
+    pub attest_queue_timeout_secs: NonZeroU32,
 }
 
 fn deserialize_app_compose<'de, D>(deserializer: D) -> Result<AppComposeWrapper, D::Error>
@@ -83,6 +89,7 @@ keys_file = "/embedded/keys.json"
 compose_file = "/embedded/compose.json"
 sys_config_file = "/embedded/sys-config.json"
 data_disks = ["/"]
+attest_queue_timeout_secs = 15
 "#;
 
     fn minimal_compose(extra: &str) -> String {
@@ -128,7 +135,7 @@ data_disks = ["/", "{directory}/data"]
         let temporary = TempDir::new().unwrap();
         let compose = temporary.path().join("compose.json");
         fs::write(&compose, minimal_compose("")).unwrap();
-        let leaf = leaf_config(temporary.path(), &compose, "");
+        let leaf = leaf_config(temporary.path(), &compose, "attest_queue_timeout_secs = 3");
 
         let config = extract(DEFAULTS, &leaf).unwrap();
 
@@ -142,6 +149,7 @@ data_disks = ["/", "{directory}/data"]
         );
         assert!(config.data_disks.contains(&PathBuf::from("/")));
         assert!(config.data_disks.contains(&temporary.path().join("data")));
+        assert_eq!(config.attest_queue_timeout_secs.get(), 3);
     }
 
     #[test]

@@ -153,7 +153,7 @@ pub enum TdxAttestError {
 // Global state
 // ============================================================================
 
-/// Global lock for TDX operations - the driver doesn't support concurrent access
+/// Serializes quote requests that share a configfs report or use the QGS transport.
 static TDX_LOCK: Mutex<()> = Mutex::new(());
 
 /// Track if we've already tried to create the configfs directory
@@ -216,7 +216,7 @@ fn absolute_env_path(var: &str, value: impl AsRef<OsStr>) -> Result<PathBuf> {
 /// Return whether a TDX guest provider is available through either the legacy
 /// misc device or the standard TSM report interface.
 pub fn is_tdx_available() -> bool {
-    if Path::new(TDX_GUEST_DEVICE).exists() {
+    if is_report_available() {
         return true;
     }
 
@@ -239,11 +239,20 @@ pub fn is_tdx_available() -> bool {
         .any(|entry| verify_configfs_provider(&entry.path()).unwrap_or(false))
 }
 
+/// Return whether the guest exposes the local TDREPORT device.
+pub fn is_report_available() -> bool {
+    Path::new(TDX_GUEST_DEVICE).exists()
+}
+
 fn is_vsock_available() -> bool {
     read_vsock_port().map(|p| p > 0).unwrap_or(false)
 }
 
 /// Get a TDX report for the given report data.
+///
+/// The ioctl uses per-call buffers on older kernels and the driver's measurement
+/// lock on newer kernels. Configfs releases that lock before waiting for the quote,
+/// and the vsock path completes this ioctl before contacting QGS.
 pub fn get_report(report_data: &TdxReportData) -> Result<TdxReport> {
     let file = OpenOptions::new()
         .read(true)

@@ -53,3 +53,7 @@ pub fn extend_rtmr(_index: u32, _event_type: u32, _digest: [u8; 48]) -> Result<(
 pub fn is_tdx_available() -> bool {
     false
 }
+
+pub fn is_report_available() -> bool {
+    false
+}

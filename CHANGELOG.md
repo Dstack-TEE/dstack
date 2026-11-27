@@ -67,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requirement in the policy bound by `compose_hash` instead of the
   `gpu-attestation` event. SEV-SNP in public clouds stays unsupported.
 
+### Fixed
+
+- The guest agent reads TDX measurements for legacy `Info` locally on guests
+  with a TDREPORT device. The attestation queue can absorb roughly 15
+  one-second TDX quotes with the default 15-second wait. Requests that exceed
+  `attest_queue_timeout_secs` receive HTTP 503 and can retry.
+
 ## [0.6.6] - 2026-11-20
 
 ### Upgrade notes
