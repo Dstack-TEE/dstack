@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+
+# Weekly, grouped by ecosystem so a week's updates arrive as one PR per area
+# rather than one PR per crate. Security updates are separate and immediate.
+updates:
+  - package-ecosystem: cargo
+    directory: /dstack
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /sdk/rust
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      rust-sdk:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /sdk/go
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      go-sdk:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /sdk/js
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      js-sdk:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /dstack/vmm/ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      vmm-ui:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /dstack/kms/auth-eth
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      auth-eth:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /sdk/python
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
