@@ -311,10 +311,15 @@ fn rtmr_sysfs_base() -> Result<Option<PathBuf>> {
 
 /// Read MRTD and RTMR0-3 from the kernel's TSM measurement sysfs, or `None` on
 /// kernels without it.
+///
+/// Unlike [`extend_rtmr`], this ignores `DCAP_TDX_RTMR_SYSFS_PATH`: the TEE
+/// simulator points it at a directory without `mrtd`, and callers there can
+/// read the measurements from a quote instead.
 pub fn read_measurements() -> Result<Option<TdxMeasurements>> {
-    let Some(base) = rtmr_sysfs_base()? else {
+    let base = Path::new(RTMR_SYSFS_BASE);
+    if !base.is_dir() {
         return Ok(None);
-    };
+    }
     let read = |name: &str| -> Result<[u8; 48]> {
         let path = base.join(format!("{name}:sha384"));
         fs::read(&path)
