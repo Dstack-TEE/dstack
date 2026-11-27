@@ -423,16 +423,18 @@ pub struct GpuPolicy {
     /// array. It must define the boolean rule `data.policy.nv_match`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rego: Option<String>,
-    /// Permit NVIDIA DevTools mode. This defaults to false because DevTools
-    /// disables the GPU memory-confidentiality guarantees expected in
-    /// production.
+    /// Skip the NVML DevTools check. Defaults to false. A DevTools GPU still
+    /// fails attestation because DevTools changes its signed measurements.
     #[serde(default)]
     pub allow_devtools: bool,
     /// Permit claims whose GPU attestation debug status is `enabled`. Defaults
-    /// to false.
+    /// to false. No effect with current nvattest, which reports `disabled`
+    /// whenever `measres` is `success`.
     #[serde(default)]
     pub allow_debug: bool,
     /// Permit claims that do not assert GPU secure boot. Defaults to false.
+    /// No effect with current nvattest, which asserts it whenever `measres`
+    /// is `success`.
     #[serde(default)]
     pub allow_insecure_boot: bool,
 }
