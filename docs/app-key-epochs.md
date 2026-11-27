@@ -171,7 +171,10 @@ keys already delivered. Supplied `trusted_ca` always pins the KMS connection,
 regardless of epoch selection; historical responses cannot replace that pin.
 
 The guest migrates disk headers and environment ciphertext if either dimension
-changes and rejects future epochs in either dimension. LUKS tokens record both
+changes and rejects future epochs in either dimension. Disk migration also
+requires `requirements.unsafe_allow_disk_migration` in the app compose, which is
+strongly discouraged; see
+[the emergency rotation protocol](kms-emergency-key-rotation-protocol.md#5-os-slot-migration-and-luks-header-metadata). LUKS tokens record both
 epochs (missing app epoch means zero). Rekeying replaces the keyslot wrapping key;
 it does not rotate the volume encryption key or erase host snapshots. Once a disk
 header carries an epoch token, older guest images reject that header as malformed;

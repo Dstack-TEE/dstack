@@ -539,6 +539,12 @@ pub struct Requirements {
     /// disk before any app code runs, discarding what earlier boots left on it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ephemeral_data_disk: bool,
+    /// Let the guest re-key a data disk left at older KMS key epochs instead
+    /// of refusing to boot on it. Strongly discouraged: re-keying keeps the
+    /// volume key, which the old root and any copy of the old LUKS header
+    /// reveal, so whoever holds them can read and modify the disk for good.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unsafe_allow_disk_migration: bool,
 }
 
 impl Requirements {
@@ -550,6 +556,7 @@ impl Requirements {
             && !self.health_check
             && self.health_status_file.is_none()
             && !self.ephemeral_data_disk
+            && !self.unsafe_allow_disk_migration
     }
 }
 
@@ -850,6 +857,12 @@ impl AppCompose {
         self.requirements
             .as_ref()
             .is_some_and(|requirements| requirements.ephemeral_data_disk)
+    }
+
+    pub fn unsafe_allow_disk_migration(&self) -> bool {
+        self.requirements
+            .as_ref()
+            .is_some_and(|requirements| requirements.unsafe_allow_disk_migration)
     }
 
     pub fn key_provider(&self) -> KeyProviderKind {

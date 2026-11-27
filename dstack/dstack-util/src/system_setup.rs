@@ -3077,6 +3077,12 @@ impl<'a> Stage0<'a> {
         }
         if let Some(current) = kms_root_epoch(keys) {
             let old_key = async |root, app| {
+                if !self.shared.app_compose.unsafe_allow_disk_migration() {
+                    bail!(
+                        "the data disk is at key epochs (root {root}, app {app}); \
+                         set requirements.unsafe_allow_disk_migration to migrate it"
+                    );
+                }
                 let old = self.shared.request_historical_keys(keys, root, app).await?;
                 Ok(hex::encode(&old.disk_crypt_key))
             };

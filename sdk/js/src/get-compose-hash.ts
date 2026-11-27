@@ -45,6 +45,8 @@ export interface Requirements extends SortableObject {
   health_status_file?: string | null;
   /** Format the data disk on every boot. A false value is omitted when hashing. */
   ephemeral_data_disk?: boolean;
+  /** Allow re-keying a data disk left at older key epochs. A false value is omitted when hashing. */
+  unsafe_allow_disk_migration?: boolean;
   gpu_policy?: GpuPolicy;
 }
 
@@ -140,7 +142,7 @@ function serializeFields(appCompose: AppCompose): AppCompose {
     for (const field of ['platforms', 'tdx_measure_acpi_tables', 'launch_token_hash', 'health_status_file']) {
       if (requirements[field] === null) delete requirements[field];
     }
-    for (const field of ['health_check', 'ephemeral_data_disk']) {
+    for (const field of ['health_check', 'ephemeral_data_disk', 'unsafe_allow_disk_migration']) {
       if (requirements[field] === false) delete requirements[field];
     }
     if (requirements.gpu_policy && typeof requirements.gpu_policy === 'object' && !Array.isArray(requirements.gpu_policy)) {

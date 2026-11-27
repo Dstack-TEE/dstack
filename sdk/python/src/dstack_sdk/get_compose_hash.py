@@ -71,6 +71,7 @@ class Requirements:
         health_status_file: Optional[str] = None,
         gpu_policy: Optional[Dict[str, Any]] = None,
         ephemeral_data_disk: bool = False,
+        unsafe_allow_disk_migration: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
@@ -81,6 +82,7 @@ class Requirements:
         self.health_status_file = health_status_file
         self.gpu_policy = gpu_policy
         self.ephemeral_data_disk = ephemeral_data_disk
+        self.unsafe_allow_disk_migration = unsafe_allow_disk_migration
         self._extra = dict(kwargs)
         self._explicit_nulls: set[str] = set()
 
@@ -104,6 +106,8 @@ class Requirements:
             result["health_status_file"] = self.health_status_file
         if self.ephemeral_data_disk:
             result["ephemeral_data_disk"] = True
+        if self.unsafe_allow_disk_migration:
+            result["unsafe_allow_disk_migration"] = True
         if self.gpu_policy is not None:
             result["gpu_policy"] = {
                 key: value
@@ -186,7 +190,12 @@ class AppCompose:
         if isinstance(requirements, dict) and self.requirements is not None:
             self.requirements._explicit_nulls = {
                 key
-                for key in ("health_check", "ephemeral_data_disk", "gpu_policy")
+                for key in (
+                    "health_check",
+                    "ephemeral_data_disk",
+                    "unsafe_allow_disk_migration",
+                    "gpu_policy",
+                )
                 if key in requirements and requirements[key] is None
             }
         self.bash_script = bash_script

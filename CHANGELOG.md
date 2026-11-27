@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** guest: a data disk left at older KMS key epochs is no longer
+  migrated after a key rotation; boot stops instead. Start such apps from a
+  fresh data disk. Migration keeps the volume key, which the old root and any
+  copy of the old LUKS header reveal, so a migrated disk stays readable and
+  writable by whoever holds them. `requirements.unsafe_allow_disk_migration`
+  restores migration and is strongly discouraged; it has to be set in a new
+  compose approved in the old and the current app epoch rows.
 - **`vmm-cli update --compose` takes an app compose file.** It sends the
   `app-compose.json` written by `vmm-cli compose` unchanged instead of a Docker
   Compose file patched into the stored one, and `--prelaunch-script` and

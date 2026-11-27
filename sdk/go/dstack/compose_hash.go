@@ -77,6 +77,9 @@ type Requirements struct {
 	// EphemeralDataDisk formats the data disk on every boot. Like HealthCheck,
 	// a false value must stay out of the manifest.
 	EphemeralDataDisk bool `json:"ephemeral_data_disk,omitempty"`
+	// UnsafeAllowDiskMigration lets the guest re-key a data disk left at older
+	// key epochs. Like HealthCheck, a false value must stay out of the manifest.
+	UnsafeAllowDiskMigration bool `json:"unsafe_allow_disk_migration,omitempty"`
 
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
 
@@ -615,7 +618,7 @@ func (r *Requirements) UnmarshalJSON(data []byte) error {
 			delete(extra, key)
 		}
 	}
-	for _, key := range []string{"health_check", "ephemeral_data_disk"} {
+	for _, key := range []string{"health_check", "ephemeral_data_disk", "unsafe_allow_disk_migration"} {
 		if value, ok := extra[key]; ok && value == false {
 			delete(extra, key)
 		}

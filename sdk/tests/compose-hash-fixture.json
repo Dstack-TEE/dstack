@@ -56,6 +56,7 @@
         "requirements": {
           "health_check": false,
           "ephemeral_data_disk": false,
+          "unsafe_allow_disk_migration": false,
           "gpu_policy": {
             "rego": null,
             "attest_gpu": true
