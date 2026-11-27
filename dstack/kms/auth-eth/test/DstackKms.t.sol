@@ -765,6 +765,63 @@ contract DstackKmsTest is Test {
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
     }
 
+    function test_CheckKmsAppPolicyKeepsKmsPolicyAndSkipsAppIdentity() public {
+        // The app is never registered and has no code: identity is the delegate's.
+        IAppAuth.AppInfo memory info = authorizationInfo(makeAddr("offchain-app"));
+        AuthorizationRequest memory request = AuthorizationRequest(
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
+        );
+
+        assertEq(kms.checkKmsAppPolicy(request), "Root epoch not registered");
+
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        string[] memory tdx = new string[](1);
+        tdx[0] = "dstack-tdx";
+        kms.setAllowedTeeVariants(tdx);
+        kms.setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+
+        assertEq(kms.checkKmsAppPolicy(request), "", "unregistered, codeless apps pass the KMS policy");
+
+        request.operation = keccak256("kms_serve");
+        assertEq(kms.checkKmsAppPolicy(request), "Invalid authorization operation");
+        request.operation = keccak256("app_get_cert");
+        assertEq(kms.checkKmsAppPolicy(request), "");
+
+        request.requestedRootEpoch = OptionalUint256(true, 1);
+        assertEq(kms.checkKmsAppPolicy(request), "Requested root epoch is not active");
+        request.requestedRootEpoch = OptionalUint256(true, 0);
+        assertEq(kms.checkKmsAppPolicy(request), "");
+
+        // A revoked image denies at the selected epoch...
+        vm.prank(owner);
+        kms.removeOsImageHashAtEpochs(0, 0, info.osImageHash);
+        assertEq(kms.checkKmsAppPolicy(request), "OS image is not allowed");
+        // ...and so does one that was never allowed.
+        request.appInfo.osImageHash = bytes32(uint256(999));
+        assertEq(kms.checkKmsAppPolicy(request), "OS image is not allowed");
+        request.appInfo.osImageHash = info.osImageHash;
+        vm.prank(owner);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        assertEq(kms.checkKmsAppPolicy(request), "");
+
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertEq(kms.checkKmsAppPolicy(request), "TEE variant not allowed");
+        request.teeVariant = "dstack-gcp-tdx";
+        assertEq(kms.checkKmsAppPolicy(request), "TEE variant not allowed");
+
+        // The same request is denied on the chain path at the identity check
+        // first, so the on-chain precedence is unchanged.
+        assertEq(kms.authorizeApp(request).rejectionReason, "App not registered");
+    }
+
     function test_AppEpochCapabilityIsOptionalButGetterFailuresPropagate() public {
         address policy = address(new DstackApp());
         kms.registerApp(policy);

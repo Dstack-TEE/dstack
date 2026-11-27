@@ -41,7 +41,14 @@ its monotonicity. Public encryption-key lookup uses `GET /app/:appId` to read th
 value. With `APP_AUTH_URL` unset, auth-eth reads it at the `latest` block, so a
 new app gets its key at once and an advanced epoch never hands out the retired
 key. When `APP_AUTH_URL` is set, that service answers `GET /app/:appId` and owns
-the epoch's freshness. Key release still reads the policy block, so an
+the epoch's freshness, and key release takes the app epoch from the delegate's
+`currentAppEpoch` — the KMS only range-checks a requested epoch against it —
+not from a value read at the policy block. The monotonicity requirement moves
+with it: auth-eth only range-checks the delegate's epoch, so a delegate that
+goes back an epoch, through a restore or a bug, makes environment public-key
+lookups and default boots use a retired epoch's keys; delegate operators must
+preserve its monotonicity. On the chain path, key release still reads the
+policy block, so an
 environment sealed to a just-advanced epoch boots only once the advance reaches
 that block. Legacy boot authorization and
 legacy environment public-key issuance are rejected once the app epoch is nonzero,

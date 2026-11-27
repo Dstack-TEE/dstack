@@ -86,6 +86,10 @@ else
 # ETH_BLOCK_TAG, as finalized on Ethereum mainnet is about 13 minutes old.
 # ETH_MAX_BLOCK_AGE=
 
+# Delegate app authorization to this service instead of the on-chain app
+# contract (empty: app policy stays on chain).
+# APP_AUTH_URL=
+
 # The Git repository to deploy
 GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 
@@ -164,6 +168,7 @@ ETH_BLOCK_TAG=${ETH_BLOCK_TAG:-finalized}
 ETH_CHAIN_ID=${ETH_CHAIN_ID:-}
 ETH_FINALITY_CONFIRMATIONS=${ETH_FINALITY_CONFIRMATIONS:-0}
 ETH_MAX_BLOCK_AGE=${ETH_MAX_BLOCK_AGE:-}
+APP_AUTH_URL=${APP_AUTH_URL:-}
 # One endpoint per line of the block scalar in compose-dev.yaml.
 # shellcheck disable=SC2034  # consumed via `subvar` into compose-*.yaml
 ETH_RPC_URLS=$(jq -r '.endpoints | join("\\n        ")' rpc.json)
@@ -175,6 +180,7 @@ subvar ETH_BLOCK_TAG
 subvar ETH_CHAIN_ID
 subvar ETH_FINALITY_CONFIRMATIONS
 subvar ETH_MAX_BLOCK_AGE
+subvar APP_AUTH_URL
 subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL

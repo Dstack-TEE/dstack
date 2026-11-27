@@ -613,6 +613,29 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     /// KMS-owned app checks; an empty string forwards the request to the app policy.
     function _checkAppRequest(AuthorizationRequest calldata request) private view returns (string memory) {
+        return _checkAppPolicy(request, true);
+    }
+
+    /// The KMS-owned part of an app authorization, without the app identity
+    /// checks an off-chain delegate owns. Empty means the KMS admits the
+    /// request at the selected root epoch. A delegated auth-eth calls this at
+    /// its pinned block so a revoked OS image or a disallowed TEE variant is
+    /// denied on chain even though registration is judged off chain.
+    function checkKmsAppPolicy(AuthorizationRequest calldata request) external view returns (string memory) {
+        return _checkAppPolicy(request, false);
+    }
+
+    /// The full app-authorization chain when `withAppIdentity` holds; the
+    /// identity checks slot between the epoch and TEE variant checks so the
+    /// on-chain precedence is unchanged.
+    function _checkAppPolicy(
+        AuthorizationRequest calldata request,
+        bool withAppIdentity
+    )
+        private
+        view
+        returns (string memory)
+    {
         if (!AuthorizationOperation.isApp(request.operation)) return "Invalid authorization operation";
         if (_rootEpochs.length == 0) return "Root epoch not registered";
         if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _currentRootEpoch) {
@@ -621,22 +644,26 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
         return _checkAppDeployment(
-            request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), selectedRootEpoch
+            request.appInfo,
+            TeeVariantPolicy.admits(_teeVariants, request.teeVariant),
+            selectedRootEpoch,
+            withAppIdentity
         );
     }
 
     function _checkAppDeployment(
         AppInfo calldata bootInfo,
         bool teeVariantAllowed,
-        uint256 selectedRootEpoch
+        uint256 selectedRootEpoch,
+        bool withAppIdentity
     )
         private
         view
         returns (string memory)
     {
-        if (!registeredApps[bootInfo.appId]) return "App not registered";
+        if (withAppIdentity && !registeredApps[bootInfo.appId]) return "App not registered";
         if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) return "OS image is not allowed";
-        if (!isContract(bootInfo.appId)) return "App not deployed or invalid address";
+        if (withAppIdentity && !isContract(bootInfo.appId)) return "App not deployed or invalid address";
         if (!teeVariantAllowed) return "TEE variant not allowed";
         return "";
     }
@@ -751,7 +778,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return (false, "App epoch requires epoch-aware authorization");
         }
         // Legacy callers report no platform, so only an unrestricted policy admits them.
-        string memory rejection = _checkAppDeployment(bootInfo, allowAnyTeeVariant(), 0);
+        string memory rejection = _checkAppDeployment(bootInfo, allowAnyTeeVariant(), 0, true);
         if (bytes(rejection).length != 0) return (false, rejection);
         // Call the app's isAppAllowed function. The tuple is forwarded as the
         // function's return value; the slither detector trips on the named

@@ -1157,10 +1157,11 @@ describe('delegated app authorization', () => {
   const launchTicketHash = 'ab'.repeat(32);
   const userConfigHash = 'cd'.repeat(32);
   const appId = '0x' + '11'.repeat(20);
-  // Key order and the uninterpreted userConfigHash must survive the forward.
-  // A re-serialized body would drop the unknown field and reorder the rest.
+  // Key order, whitespace, and the uninterpreted userConfigHash must survive
+  // the forward. A re-serialized body would drop the unknown field, reorder
+  // the rest, and drop the space after '{'.
   const rawBody = [
-    '{',
+    '{ ',
     `"userConfigHash":"${userConfigHash}",`,
     `"launchTicketHash":"${launchTicketHash}",`,
     '"operation":"app_get_key",',
@@ -1181,6 +1182,7 @@ describe('delegated app authorization', () => {
     body?: string;
     redirect?: RequestRedirect;
     cache?: RequestCache;
+    signal?: AbortSignal | null;
   };
   let calls: DelegateCall[];
 
@@ -1192,10 +1194,25 @@ describe('delegated app authorization', () => {
     latestRootEpochHash: LATEST_HASH,
   };
 
-  function mockChain({ count = 4n, fail = false }: { count?: bigint; fail?: boolean } = {}) {
+  // Emulates the KMS-owned checks of DstackKms.checkKmsAppPolicy (operation
+  // scope, root epochs) and reports `policyRejection` for the OS image and TEE
+  // variant allowlists it does not model.
+  function mockChain(
+    { count = 4n, fail = false, policyRejection = '' }: { count?: bigint; fail?: boolean; policyRejection?: string } = {},
+  ) {
+    const APP_OPERATIONS = new Set(['app_get_key', 'app_get_cert'].map((op) => keccak256(toBytes(op))));
     mockReadContract.mockImplementation((params) => {
       if (fail) return Promise.reject(new Error('rpc down'));
       switch (params.functionName) {
+        case 'checkKmsAppPolicy': {
+          const [request] = params.args;
+          if (!APP_OPERATIONS.has(request.operation)) return 'Invalid authorization operation';
+          if (count === 0n) return 'Root epoch not registered';
+          if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > 2n) {
+            return 'Requested root epoch is not active';
+          }
+          return policyRejection;
+        }
         case 'gatewayAppId': return GATEWAY;
         case 'rootEpochCount': return count;
         case 'currentRootEpoch': return [2n, CURRENT_HASH];
@@ -1225,6 +1242,7 @@ describe('delegated app authorization', () => {
         body,
         redirect: init.redirect,
         cache: init.cache,
+        signal: init.signal,
       };
       calls.push(call);
       return handler(call);
@@ -1304,6 +1322,7 @@ describe('delegated app authorization', () => {
       body: rawBody,
       redirect: 'error',
       cache: 'no-store',
+      signal: expect.any(AbortSignal),
     }]);
     expect(await response.json()).toEqual({
       authorized: true,
@@ -1406,26 +1425,78 @@ describe('delegated app authorization', () => {
   });
 
   it.each([
-    ['network', () => { throw new TypeError('connect ECONNREFUSED'); }, 'app authorization delegate unavailable'],
+    ['an OS image revoked from the allowlist', rawBody],
+    ['an OS image that was never allowed', rawBody.replace(`"osImageHash":"${'66'.repeat(32)}"`, `"osImageHash":"${'77'.repeat(32)}"`)],
+  ])('denies %s without calling the delegate', async (_label, body) => {
+    mockChain({ policyRejection: 'OS image is not allowed' });
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp, body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      authorized: false,
+      rejectionReason: 'OS image is not allowed',
+      currentAppEpoch: 0,
+      ...chainRoots,
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it.each(['dstack-amd-sev-snp', 'dstack-gcp-tdx'])(
+    'denies the disallowed TEE variant %s without calling the delegate',
+    async (teeVariant) => {
+      mockChain({ policyRejection: 'TEE variant not allowed' });
+      stubDelegate(() => delegateOk());
+      const fetchApp = await load('http://127.0.0.1:9');
+      const response = await postApp(fetchApp, rawBody.replace('"teeVariant":"dstack-tdx"', `"teeVariant":"${teeVariant}"`));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        authorized: false,
+        rejectionReason: 'TEE variant not allowed',
+        currentAppEpoch: 0,
+        ...chainRoots,
+      });
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it('reads the KMS policy at the pinned block and forwards the delegate answer when it passes', async () => {
+    mockChain();
+    stubDelegate(() => delegateOk());
+    const fetchApp = await load('http://127.0.0.1:9');
+    const response = await postApp(fetchApp);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      authorized: true,
+      rejectionReason: '',
+      currentAppEpoch: 7,
+      ...chainRoots,
+    });
+    expect(calls).toHaveLength(1);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: 'checkKmsAppPolicy',
+      blockHash: blockHash(98n),
+      requireCanonical: true,
+    }));
+  });
+
+  it.each([
+    ['network', () => { throw new TypeError('connect ECONNREFUSED'); }, 'app authorization delegate unavailable: connect ECONNREFUSED'],
     ['timeout', () => { throw new DOMException('The operation was timed out', 'TimeoutError'); }, 'app authorization delegate timed out'],
     ['HTTP error', () => new Response('super-secret-policy', { status: 502 }), 'app authorization delegate returned HTTP 502'],
     ['invalid JSON', () => new Response('not-json', { status: 200 }), 'app authorization delegate returned invalid JSON'],
     ['invalid shape', () => new Response('{"authorized":true}', { status: 200 }), 'app authorization delegate returned an invalid response'],
-    ['oversized', () => new Response('{}', { status: 200, headers: { 'content-length': String(128 * 1024) } }), 'app authorization delegate response is too large'],
-  ])('fails closed when the delegate returns %s', async (_label, respond, reason) => {
+  ])('fails closed with 503 when the delegate returns %s', async (_label, respond, message) => {
     mockChain();
     stubDelegate(respond);
     const fetchApp = await load('http://127.0.0.1:9');
     const response = await postApp(fetchApp);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(503);
     const data = await response.json();
-    expect(data).toEqual({
-      authorized: false,
-      rejectionReason: reason,
-      currentAppEpoch: 0,
-      ...chainRoots,
-    });
+    expect(data).toEqual({ status: 'error', message });
     expect(JSON.stringify(data)).not.toContain('super-secret-policy');
+    // The delegate call must carry the timeout signal, whatever the failure.
+    expect(calls[0].signal).toBeInstanceOf(AbortSignal);
   });
 
   it('does not call the delegate when the chain cannot supply root fields', async () => {
@@ -1516,6 +1587,20 @@ describe('delegated app authorization', () => {
     expect(parseAppAuthUrl('   ')).toBeUndefined();
     expect(parseAppAuthUrl('http://127.0.0.1:9/delegate/')).toBe('http://127.0.0.1:9/delegate');
     expect(() => parseAppAuthUrl('http://user:pass@127.0.0.1:9')).toThrow(/credentials/);
+  });
+
+  it('refuses a query or fragment in APP_AUTH_URL, even an empty one', async () => {
+    delete process.env.APP_AUTH_URL;
+    vi.resetModules();
+    const { parseAppAuthUrl } = await import('./index.ts');
+    for (const value of [
+      'http://127.0.0.1:9/delegate?x=1',
+      'http://127.0.0.1:9/delegate#x',
+      'http://127.0.0.1:9/delegate?',
+      'http://127.0.0.1:9/delegate#',
+    ]) {
+      expect(() => parseAppAuthUrl(value)).toThrow(/query or fragment/);
+    }
   });
 
   it('returns a delegate failure before the KMS webhook timeout', async () => {

@@ -251,7 +251,9 @@ this implementation keeps the API of the removed fastify + ethers server that us
 dstack-kms 0.6 posts `dstack_verifier::PolicyBootInfo`: bytes as unprefixed
 hex, plus `teeVariant` and `keyProviderInfo`. the legacy `/bootAuth/*` routes
 drop both; `/authorizeKms` and `/authorizeApp` require `teeVariant` and pass it
-to the contract unchanged, and always drop `keyProviderInfo`. the KMS checks
+to the contract unchanged, and drop `keyProviderInfo` — except that with
+`APP_AUTH_URL` set, `/authorizeApp` forwards the request body unchanged to the
+delegate, `keyProviderInfo` included. the KMS checks
 `appId`, `composeHash` and `instanceId` widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
 tests pin this contract.
 
@@ -298,8 +300,13 @@ unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.
 #### Delegated app authorization
 
 Set `APP_AUTH_URL` to keep KMS policy on `DstackKms` and let another service
-decide app policy. This is for app identities that are not `DstackApp`
-contracts. Leave it unset to keep the chain path; the default is unchanged.
+decide app identity policy (registration, compose hash, app epoch). This is
+for app identities that are not `DstackApp` contracts. The KMS-owned app
+policy — the OS image allowlist at the selected root epoch and the TEE
+variant allowlist — stays on chain: before any delegate call, this server
+reads `DstackKms.checkKmsAppPolicy` at the request's pinned block and denies
+on a non-empty answer. Leave it unset to keep the chain path; the default is
+unchanged.
 
 When it is set:
 
@@ -311,14 +318,18 @@ When it is set:
   `currentRootEpoch`, `currentRootEpochHash`, `latestRootEpoch`, and
   `latestRootEpochHash` with values read from `DstackKms` at the request's
   pinned block, the same block `GET /` uses.
-- A `requestedRootEpoch` newer than the current root epoch is denied without
-  calling the delegate (`Requested root epoch is not active`). So is an app
-  request while no root epoch is registered (`Root epoch not registered`), and
-  a KMS operation posted to `/authorizeApp` (`Invalid authorization operation`).
+- A `checkKmsAppPolicy` rejection is denied without calling the delegate: a
+  KMS operation posted to `/authorizeApp` (`Invalid authorization operation`),
+  no registered root epoch (`Root epoch not registered`), a
+  `requestedRootEpoch` newer than the current one (`Requested root epoch is
+  not active`), an OS image outside the allowlist of the selected epoch
+  (`OS image is not allowed`), or a disallowed TEE variant
+  (`TEE variant not allowed`).
 - A delegate error, timeout (20s, under the KMS webhook timeout of 60s),
-  non-2xx response, or invalid JSON is a denial (`authorized: false`) that
-  still carries the chain root fields. The delegate's body is not copied into
-  `rejectionReason`. If the chain itself cannot be read, the route returns 503
+  non-2xx response, or invalid answer is a 503, as on `GET /app/:appId`; a
+  denial (`authorized: false`) is reserved for chain-side policy, and the KMS
+  never reads the root fields of one. The delegate's body is not copied into
+  the response. If the chain itself cannot be read, the route also returns 503
   and does not call the delegate.
 - `GET /app/:appId` is forwarded to the same path. The app id is checked before
   it is placed in the URL. A delegate failure is 503; this server does not
@@ -331,10 +342,6 @@ in production, and its response has no root-epoch fields to reconcile with a
 delegate. A delegated deployment must be used with a KMS that calls
 `/authorizeApp`. Do not point an older KMS at `APP_AUTH_URL`: its app boots
 would still be judged by `DstackKms`.
-
-Deployments of this mode that accept reorg risk should set
-`ETH_BLOCK_TAG=latest`. The default remains `finalized`. See
-[reorgs and the block tag](#reorgs-and-the-block-tag).
 
 The delegate is not followed across redirects, and its responses are not
 cached.

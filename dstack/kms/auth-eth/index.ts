@@ -65,7 +65,6 @@ type AuthorizationRoots = {
   currentRootEpochHash: Hex;
   latestRootEpoch: number;
   latestRootEpochHash: Hex;
-  registered: boolean;
 };
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
@@ -141,6 +140,9 @@ const DSTACK_KMS_ABI = [
   { name: 'currentAppEpoch', type: 'function', stateMutability: 'view', inputs: [{ name: 'appId', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
   { ...AUTHORIZATION_ABI, name: 'authorizeKms' },
   { ...AUTHORIZATION_ABI, name: 'authorizeApp' },
+  // The KMS-owned app policy without the identity checks a delegate owns;
+  // empty string admits the request at its selected root epoch.
+  { ...AUTHORIZATION_ABI, name: 'checkKmsAppPolicy', outputs: [{ name: '', type: 'string' }] },
   {
     name: 'isKmsAllowed',
     type: 'function',
@@ -425,20 +427,26 @@ export class EthereumBackend {
 
   }
 
+  // The AuthorizationRequest tuple as the contract sees it; shared by every
+  // view that takes one.
+  private contractRequest(request: AuthorizationRequest) {
+    return {
+      appInfo: this.contractAppInfo(request),
+      operation: keccak256(toBytes(request.operation)),
+      requestedAppEpoch: { isSet: request.requestedAppEpoch !== undefined, value: BigInt(request.requestedAppEpoch ?? 0) },
+      requestedRootEpoch: { isSet: request.requestedRootEpoch !== undefined, value: BigInt(request.requestedRootEpoch ?? 0) },
+      teeVariant: request.teeVariant,
+      launchTicketHash: this.decodeHex(request.launchTicketHash ?? '', 32),
+    };
+  }
+
   async checkAuthorization(appInfo: AuthorizationRequest, method: 'authorizeKms' | 'authorizeApp') {
     const block = await this.resolveBlock();
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: method,
-      args: [{
-        appInfo: this.contractAppInfo(appInfo),
-        operation: keccak256(toBytes(appInfo.operation)),
-        requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
-        requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
-        teeVariant: appInfo.teeVariant,
-        launchTicketHash: this.decodeHex(appInfo.launchTicketHash ?? '', 32),
-      }],
+      args: [this.contractRequest(appInfo)],
       ...block.at,
     });
     const currentRootEpoch = Number(result.currentRootEpoch);
@@ -492,22 +500,30 @@ export class EthereumBackend {
     };
   }
 
-  // The current root epoch and its chain hash; empty only when no epoch is registered.
-  async getRootEpoch(block?: Snapshot): Promise<RootEpochInfo> {
-    block ??= await this.resolveBlock();
-    const count = await this.client.readContract({
+  private readRootEpochCount(block: Snapshot) {
+    return this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: 'rootEpochCount',
       ...block.at
     });
-    if (count === 0n) return {};
-    const [epoch, chainHash] = await this.client.readContract({
+  }
+
+  private readCurrentRootEpoch(block: Snapshot) {
+    return this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: 'currentRootEpoch',
       ...block.at
     });
+  }
+
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
+  async getRootEpoch(block?: Snapshot): Promise<RootEpochInfo> {
+    block ??= await this.resolveBlock();
+    // currentRootEpoch reverts while the registry is empty.
+    if (await this.readRootEpochCount(block) === 0n) return {};
+    const [epoch, chainHash] = await this.readCurrentRootEpoch(block);
     return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
@@ -567,17 +583,27 @@ export class EthereumBackend {
     return result as string;
   }
 
-  // Root fields of an AuthorizationResult, from the same pinned block GET / uses.
-  // Empty registry: zero epochs and hashes, and no call to currentRootEpoch, which reverts then.
-  async getAuthorizationRoots(): Promise<AuthorizationRoots> {
-    const block = await this.resolveBlock();
-    const gatewayAppId = await this.getGatewayAppId(block);
-    const count = await this.client.readContract({
+  // KMS-owned app policy (operation scope, selected root epoch, OS image and
+  // TEE variant allowlists) without the app identity checks a delegate owns.
+  // Non-empty denies.
+  async checkKmsAppPolicy(request: AuthorizationRequest, block: Snapshot): Promise<string> {
+    return await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
-      functionName: 'rootEpochCount',
+      functionName: 'checkKmsAppPolicy',
+      args: [this.contractRequest(request)],
       ...block.at,
     });
+  }
+
+  // Root fields of an AuthorizationResult, from the same pinned block GET / uses.
+  async getAuthorizationRoots(block?: Snapshot): Promise<AuthorizationRoots> {
+    block ??= await this.resolveBlock();
+    const [gatewayAppId, count] = await Promise.all([
+      this.getGatewayAppId(block),
+      this.readRootEpochCount(block),
+    ]);
+    // Empty registry: zero epochs and hashes, and no call to currentRootEpoch, which reverts then.
     if (count === 0n) {
       return {
         gatewayAppId,
@@ -585,23 +611,19 @@ export class EthereumBackend {
         currentRootEpochHash: ZERO_ROOT_HASH,
         latestRootEpoch: 0,
         latestRootEpochHash: ZERO_ROOT_HASH,
-        registered: false,
       };
     }
-    const [epoch, chainHash] = await this.client.readContract({
-      address: this.kmsContractAddr,
-      abi: DSTACK_KMS_ABI,
-      functionName: 'currentRootEpoch',
-      ...block.at,
-    });
     const latest = count - 1n;
-    const latestRoot = await this.client.readContract({
-      address: this.kmsContractAddr,
-      abi: DSTACK_KMS_ABI,
-      functionName: 'rootEpoch',
-      args: [latest],
-      ...block.at,
-    });
+    const [[epoch, chainHash], latestRoot] = await Promise.all([
+      this.readCurrentRootEpoch(block),
+      this.client.readContract({
+        address: this.kmsContractAddr,
+        abi: DSTACK_KMS_ABI,
+        functionName: 'rootEpoch',
+        args: [latest],
+        ...block.at,
+      }),
+    ]);
     const currentRootEpoch = Number(epoch);
     const latestRootEpoch = Number(latest);
     if (!Number.isSafeInteger(currentRootEpoch) || !Number.isSafeInteger(latestRootEpoch)) {
@@ -613,7 +635,6 @@ export class EthereumBackend {
       currentRootEpochHash: chainHash,
       latestRootEpoch,
       latestRootEpochHash: latestRoot[3],
-      registered: true,
     };
   }
 }
@@ -656,8 +677,15 @@ const ethRpcUrl = rpc.origins.join(',');
 // Stay under the KMS webhook timeout (60s) so a delegate failure still returns
 // the chain root fields before the KMS gives up on the call.
 export const APP_AUTH_TIMEOUT_MS = 20_000;
-const MAX_DELEGATE_RESPONSE_BYTES = 64 * 1024;
-const APP_OPERATIONS = new Set(['app_get_key', 'app_get_cert']);
+
+// The answer of the app-authorization delegate; the root fields of an
+// AuthorizationResult always come from the chain, never from the delegate.
+const AppEpochSchema = z.number().int().min(0).max(0xffffffff);
+const DelegatedAuthorizationSchema = z.object({
+  authorized: z.boolean(),
+  rejectionReason: z.string(),
+  currentAppEpoch: AppEpochSchema,
+});
 
 export function parseAppAuthUrl(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
@@ -675,10 +703,12 @@ export function parseAppAuthUrl(value: string | undefined): string | undefined {
   if (url.username !== '' || url.password !== '') {
     throw new Error('APP_AUTH_URL must not include credentials');
   }
-  if (url.search !== '' || url.hash !== '') {
+  // A raw '?' or '#' cannot be told apart from an empty query or fragment in
+  // the parsed URL, so reject one in the raw value.
+  if (trimmed.includes('?') || trimmed.includes('#')) {
     throw new Error('APP_AUTH_URL must not include a query or fragment');
   }
-  return url.toString().replace(/\/$/, '');
+  return (url.origin + url.pathname).replace(/\/$/, '');
 }
 
 const appAuthBase = parseAppAuthUrl(process.env.APP_AUTH_URL);
@@ -700,22 +730,13 @@ async function callDelegate(url: string, init: { method: string; body?: string }
       cache: 'no-store',
       signal: AbortSignal.timeout(APP_AUTH_TIMEOUT_MS),
     });
-    const length = response.headers.get('content-length');
-    if (length !== null && /^(?:0|[1-9][0-9]*)$/.test(length) && Number(length) > MAX_DELEGATE_RESPONSE_BYTES) {
-      await response.body?.cancel();
-      return failedDelegate('app authorization delegate response is too large');
-    }
-    const body = await response.text();
-    if (body.length > MAX_DELEGATE_RESPONSE_BYTES) {
-      return failedDelegate('app authorization delegate response is too large');
-    }
     if (!response.ok) {
       return failedDelegate(`app authorization delegate returned HTTP ${response.status}`);
     }
-    return { ok: true, body };
+    return { ok: true, body: await response.text() };
   } catch (err) {
     if (delegateTimedOut(err)) return failedDelegate('app authorization delegate timed out');
-    return failedDelegate('app authorization delegate unavailable');
+    return failedDelegate(`app authorization delegate unavailable: ${errorSummary(err)}`);
   }
 }
 
@@ -724,8 +745,12 @@ function failedDelegate(reason: string): DelegateCall {
   return { ok: false, reason };
 }
 
-function isAppEpoch(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff;
+// A delegate failure is a 503, not a denial: the KMS bails on
+// `!result.authorized` without reading the root fields, so appDenial only
+// serves chain-side denials.
+function failedDelegateResponse(reason: string): { status: 503; body: unknown } {
+  console.error(`app authorization delegate failed: ${reason}`);
+  return { status: 503, body: { status: 'error', message: reason } };
 }
 
 function rootFields(roots: AuthorizationRoots) {
@@ -742,67 +767,39 @@ function appDenial(roots: AuthorizationRoots, rejectionReason: string) {
   return { authorized: false, rejectionReason, currentAppEpoch: 0, ...rootFields(roots) };
 }
 
-function parseDelegatedAuthorization(body: string): {
-  authorized: boolean;
-  rejectionReason: string;
-  currentAppEpoch: number;
-} | 'invalid-json' | 'invalid-shape' {
-  let parsed: unknown;
+// App identity policy comes from the delegate; the KMS-owned policy (OS image
+// and TEE variant allowlists at the selected root epoch) and the root fields
+// always come from the chain at the request's pinned block. Called only when
+// APP_AUTH_URL is set, from the route's try, which turns a chain read failure
+// into a 503.
+async function delegatedAppAuthorization(
+  base: string,
+  request: AuthorizationRequest,
+  rawBody: string,
+): Promise<{ status: 200 | 503; body: unknown }> {
+  const block = await ethereum.resolveBlock();
+  const [roots, kmsRejection] = await Promise.all([
+    ethereum.getAuthorizationRoots(block),
+    ethereum.checkKmsAppPolicy(request, block),
+  ]);
+  if (kmsRejection !== '') {
+    return { status: 200, body: appDenial(roots, kmsRejection) };
+  }
+  const delegated = await callDelegate(`${base}/authorizeApp`, { method: 'POST', body: rawBody });
+  if (!delegated.ok) return { status: 503, body: { status: 'error', message: delegated.reason } };
+  let json: unknown;
   try {
-    parsed = JSON.parse(body);
+    json = JSON.parse(delegated.body);
   } catch {
-    return 'invalid-json';
+    return failedDelegateResponse('app authorization delegate returned invalid JSON');
   }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid-shape';
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.authorized !== 'boolean' || typeof record.rejectionReason !== 'string' || !isAppEpoch(record.currentAppEpoch)) {
-    return 'invalid-shape';
-  }
-  return {
-    authorized: record.authorized,
-    rejectionReason: record.rejectionReason,
-    currentAppEpoch: record.currentAppEpoch,
-  };
-}
-
-async function delegatedAppAuthorization(request: AuthorizationRequest, rawBody: string): Promise<{ status: 200 | 503; body: unknown }> {
-  let roots: AuthorizationRoots;
-  try {
-    roots = await ethereum.getAuthorizationRoots();
-  } catch {
-    console.error('authorization backend failed');
-    return { status: 503, body: { status: 'error', message: backendUnavailable } };
-  }
-  if (!APP_OPERATIONS.has(request.operation)) {
-    return { status: 200, body: appDenial(roots, 'Invalid authorization operation') };
-  }
-  if (!roots.registered) {
-    return { status: 200, body: appDenial(roots, 'Root epoch not registered') };
-  }
-  if (request.requestedRootEpoch !== undefined && request.requestedRootEpoch > roots.currentRootEpoch) {
-    return { status: 200, body: appDenial(roots, 'Requested root epoch is not active') };
-  }
-  if (!appAuthBase) {
-    console.error('app authorization delegate is not configured');
-    return { status: 503, body: { status: 'error', message: backendUnavailable } };
-  }
-  const delegated = await callDelegate(`${appAuthBase}/authorizeApp`, { method: 'POST', body: rawBody });
-  if (!delegated.ok) return { status: 200, body: appDenial(roots, delegated.reason) };
-  const parsed = parseDelegatedAuthorization(delegated.body);
-  if (parsed === 'invalid-json') {
-    return { status: 200, body: appDenial(roots, 'app authorization delegate returned invalid JSON') };
-  }
-  if (parsed === 'invalid-shape') {
-    return { status: 200, body: appDenial(roots, 'app authorization delegate returned an invalid response') };
+  const parsed = DelegatedAuthorizationSchema.safeParse(json);
+  if (!parsed.success) {
+    return failedDelegateResponse('app authorization delegate returned an invalid response');
   }
   return {
     status: 200,
-    body: {
-      authorized: parsed.authorized,
-      rejectionReason: parsed.rejectionReason,
-      currentAppEpoch: parsed.currentAppEpoch,
-      ...rootFields(roots),
-    },
+    body: { ...parsed.data, ...rootFields(roots) },
   };
 }
 
@@ -882,17 +879,19 @@ app.get('/app/:appId', async (c) => {
   if (appAuthBase) {
     const delegated = await callDelegate(`${appAuthBase}/app/${appId}`, { method: 'GET' });
     if (!delegated.ok) return c.json({ error: delegated.reason }, 503);
-    let parsed: unknown;
+    let json: unknown;
     try {
-      parsed = JSON.parse(delegated.body);
+      json = JSON.parse(delegated.body);
     } catch {
+      console.error('app authorization delegate failed: app authorization delegate returned invalid JSON');
       return c.json({ error: 'app authorization delegate returned invalid JSON' }, 503);
     }
-    const epoch = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>).currentAppEpoch
-      : undefined;
-    if (!isAppEpoch(epoch)) return c.json({ error: 'app authorization delegate returned an invalid response' }, 503);
-    return c.json({ currentAppEpoch: epoch });
+    const parsed = DelegatedAuthorizationSchema.pick({ currentAppEpoch: true }).safeParse(json);
+    if (!parsed.success) {
+      console.error('app authorization delegate failed: app authorization delegate returned an invalid response');
+      return c.json({ error: 'app authorization delegate returned an invalid response' }, 503);
+    }
+    return c.json({ currentAppEpoch: parsed.data.currentAppEpoch });
   }
   try {
     return c.json({ currentAppEpoch: await ethereum.getAppEpoch(appId) });
@@ -931,13 +930,13 @@ for (const method of ['authorizeKms', 'authorizeApp'] as const) {
       if (!result.success) return c.json(invalidAuthorization, 400);
     }),
     async (c) => {
-      if (method === 'authorizeApp' && appAuthBase) {
-        // The validator already consumed the body as JSON; text() is that same
-        // cached string, so fields this server does not interpret are unchanged.
-        const result = await delegatedAppAuthorization(c.req.valid('json'), await c.req.text());
-        return c.json(result.body, result.status);
-      }
       try {
+        if (method === 'authorizeApp' && appAuthBase) {
+          // The validator already consumed the body as JSON; text() is that same
+          // cached string, so fields this server does not interpret are unchanged.
+          const result = await delegatedAppAuthorization(appAuthBase, c.req.valid('json'), await c.req.text());
+          return c.json(result.body, result.status);
+        }
         return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));
       } catch (err) {
         logFailure('authorization backend failed', err);
