@@ -22,6 +22,7 @@ import DstackFormal.Kms.KeyDerivation
 import DstackFormal.Kms.KeyRelease
 import DstackFormal.Kms.RaTlsEncoding
 import DstackFormal.Kms.RootEpoch
+import DstackFormal.Kms.RpcQuorum
 import DstackFormal.Vmm.Lifecycle
 import DstackFormal.Vmm.Safety
 import DstackFormal.Vmm.Traces

@@ -18,9 +18,14 @@ vi.mock('viem', async (importOriginal) => ({
     getChainId: mockGetChainId,
     getBlock: mockGetBlock,
   })),
-  http: vi.fn(),
+  http: vi.fn(() => () => ({ request: vi.fn() })),
   getContract: vi.fn(),
 }));
+
+// A chain whose tagged block is `tip` and whose block n has hash blockHash(n).
+const blockHash = (n: bigint) => `0x${n.toString(16).padStart(64, '0')}`;
+const chainAt = (tip: bigint, timestamp = 0n) => ({ blockTag, blockNumber }: { blockTag?: string; blockNumber?: bigint }) =>
+  blockTag ? { number: tip } : { number: blockNumber, hash: blockHash(blockNumber!), timestamp };
 
 // Dynamic import after mocking
 let appFetch: any;
@@ -42,7 +47,7 @@ beforeEach(() => {
   // Reset mocks before each test
   vi.clearAllMocks();
   mockGetChainId.mockResolvedValue(1337);
-  mockGetBlock.mockResolvedValue({ number: 100n });
+  mockGetBlock.mockImplementation(chainAt(100n));
 });
 
 describe('server runtime config', () => {
@@ -117,6 +122,8 @@ describe('API Compatibility Tests', () => {
         chainId: 1337,
         appImplementation: '0x9876543210987654321098765432109876543210',
         ethRpcUrl: 'http://localhost:8545',
+        ethRpcUrls: ['http://localhost:8545'],
+        rpcQuorum: '1/1',
         blockTag: 'finalized',
         finalityConfirmations: 2,
         policyBlockNumber: 98,
@@ -350,8 +357,8 @@ describe('API Compatibility Tests', () => {
       expect(calls.map(({ functionName }) => functionName)).toEqual(endpoint === 'app'
         ? ['rootEpochCount', 'currentRootEpoch']
         : ['rootEpochCount', 'currentRootEpoch', 'rootEpoch']);
-      expect(calls.every(({ blockNumber }) => blockNumber === 98n)).toBe(true);
-      expect(mockGetBlock).toHaveBeenCalledTimes(1);
+      expect(calls.every((call) => call.blockHash === blockHash(98n) && call.requireCanonical)).toBe(true);
+      expect(mockGetBlock).toHaveBeenCalledTimes(2);
     });
 
     describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {
@@ -684,9 +691,8 @@ describe('Ethereum finalized snapshot authorization', () => {
   }));
 
   it('reads the decision and gateway identity from one confirmation-depth snapshot', async () => {
-    mockGetBlock.mockResolvedValue({ number: 100n });
     mockReadContract.mockImplementation((params) => {
-      expect(params.blockNumber).toBe(98n);
+      expect(params.blockHash).toBe(blockHash(98n));
       if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') return [true, 'finalized allow'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
@@ -695,25 +701,38 @@ describe('Ethereum finalized snapshot authorization', () => {
 
     const response = await authorize();
     expect(await response.json()).toMatchObject({ isAllowed: true, reason: 'finalized allow' });
-    expect(mockGetBlock).toHaveBeenCalledTimes(1);
-    expect(mockGetBlock).toHaveBeenCalledWith({ blockTag: 'finalized' });
+    expect(mockGetBlock.mock.calls).toEqual([[{ blockTag: 'finalized' }], [{ blockNumber: 98n }]]);
   });
 
-  it('probes the block tag at startup and names the fix when the RPC cannot serve it', async () => {
+  it('probes the block tag and a pinned read at startup and names what the RPC cannot serve', async () => {
     const { EthereumBackend } = await import('./index.ts');
-    const getBlock = vi.fn().mockResolvedValue({ number: 5n });
-    const client = { getChainId: async () => 1337, getBlock };
+    const getBlock = vi.fn(chainAt(5n));
+    const call = vi.fn(async (_: unknown) => ({}));
+    const client = { getChainId: async () => 1337, getBlock, call };
     const backend = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'safe', 0n);
-    await expect(backend.probeBlockTag()).resolves.toBeUndefined();
+    await expect(backend.probe()).resolves.toBeUndefined();
     expect(getBlock).toHaveBeenCalledWith({ blockTag: 'safe' });
+    expect(call.mock.calls[0][0]).toMatchObject({ blockHash: blockHash(5n), requireCanonical: true });
+    call.mockRejectedValueOnce(new Error('invalid params'));
+    await expect(backend.probe()).rejects.toThrow(/^cannot read at a block hash, .+ \(invalid params\)$/);
     getBlock.mockRejectedValue(new Error('invalid block tag'));
-    await expect(backend.probeBlockTag()).rejects.toThrow(
-      /^ETH_BLOCK_TAG=safe is not supported by the RPC \(.+\); OP-stack via Helios requires latest$/,
+    await expect(backend.probe()).rejects.toThrow(
+      /^cannot resolve ETH_BLOCK_TAG=safe \(invalid block tag\); .+ requires latest$/,
     );
     // Behind the confirmation depth counts as unavailable too.
     getBlock.mockResolvedValue({ number: 1n });
     const deep = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'finalized', 2n);
-    await expect(deep.probeBlockTag()).rejects.toThrow(/ETH_BLOCK_TAG=finalized/);
+    await expect(deep.probe()).rejects.toThrow(/ETH_BLOCK_TAG=finalized/);
+  });
+
+  it('fails closed when the block is older than ETH_MAX_BLOCK_AGE', async () => {
+    const { EthereumBackend } = await import('./index.ts');
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const backend = (timestamp: bigint) => new EthereumBackend(
+      { getChainId: async () => 1337, getBlock: chainAt(5n, timestamp) } as never, '0x' + '11'.repeat(20), 1337, 'latest', 0n, 60,
+    );
+    await expect(backend(now - 30n).resolveBlock()).resolves.toMatchObject({ number: 5n });
+    await expect(backend(now - 90n).resolveBlock()).rejects.toThrow(/ETH_MAX_BLOCK_AGE/);
   });
 
   it('accepts only the supported block tags, defaulting to finalized', async () => {
@@ -726,13 +745,12 @@ describe('Ethereum finalized snapshot authorization', () => {
   });
 
   it('re-evaluates the canonical finalized snapshot after a short reorg', async () => {
-    mockGetBlock.mockResolvedValueOnce({ number: 100n }).mockResolvedValueOnce({ number: 101n });
     let decisions = 0;
-    const observedBlocks: bigint[] = [];
+    const observedBlocks: string[] = [];
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') {
-        observedBlocks.push(params.blockNumber);
+        observedBlocks.push(params.blockHash);
         decisions += 1;
         return decisions === 1 ? [true, 'old canonical allow'] : [false, 'new canonical deny'];
       }
@@ -741,10 +759,11 @@ describe('Ethereum finalized snapshot authorization', () => {
     });
 
     const before = await authorize();
+    mockGetBlock.mockImplementation(chainAt(101n));
     const after = await authorize();
     expect(await before.json()).toMatchObject({ isAllowed: true });
     expect(await after.json()).toMatchObject({ isAllowed: false, reason: 'new canonical deny' });
-    expect(observedBlocks).toEqual([98n, 99n]);
+    expect(observedBlocks).toEqual([blockHash(98n), blockHash(99n)]);
   });
 
   it.each([
@@ -762,7 +781,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     });
 
     mockGetChainId.mockResolvedValue(1337);
-    mockGetBlock.mockResolvedValue({ number: 102n });
+    mockGetBlock.mockImplementation(chainAt(102n));
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
@@ -910,8 +929,13 @@ describe('GET /app/:appId', () => {
     const legacy = await appFetch(new Request(url));
     expect(legacy.status).toBe(200);
     expect(await legacy.json()).toEqual({ currentAppEpoch: 0 });
-    const { blockTag, blockNumber } = mockReadContract.mock.lastCall![0];
-    expect([blockTag, blockNumber]).toEqual(['latest', undefined]);
+    expect(mockGetBlock).toHaveBeenCalledWith({ blockTag: 'latest' });
+    expect(mockReadContract.mock.lastCall![0].blockHash).toBe(blockHash(100n));
+    // Without agreement on the newest block, the read steps back by the confirmation depth.
+    mockGetBlock.mockImplementationOnce(chainAt(100n)).mockRejectedValueOnce(new Error('no quorum'));
+    mockReadContract.mockResolvedValueOnce(3n);
+    expect(await (await appFetch(new Request(url))).json()).toEqual({ currentAppEpoch: 3 });
+    expect(mockReadContract.mock.lastCall![0].blockHash).toBe(blockHash(98n));
   });
 });
 
@@ -922,7 +946,7 @@ describe('GET /sevSnpTcbRequirements', () => {
     const response = await appFetch(new Request(url));
     expect(await response.json()).toEqual({ requirements: '[]' });
     expect(mockReadContract).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: 'sevSnpTcbRequirements', blockNumber: 98n }),
+      expect.objectContaining({ functionName: 'sevSnpTcbRequirements', blockHash: blockHash(98n) }),
     );
     mockReadContract.mockRejectedValueOnce(new Error('execution reverted'));
     expect((await appFetch(new Request(url))).status).toBe(503);
@@ -952,7 +976,7 @@ describe('POST /authorizeApp', () => {
     expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0, latestRootEpoch: 3 });
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
-      functionName: 'authorizeApp', blockNumber: 98n,
+      functionName: 'authorizeApp', blockHash: blockHash(98n),
       args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: false, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n }, teeVariant: appInfo.teeVariant })],
     }));
   });
@@ -1048,5 +1072,79 @@ describe('POST /authorizeApp', () => {
     mockReadContract.mockRejectedValueOnce(new Error('contract unavailable'));
     expect((await authorize()).status).toBe(503);
     expect(mockReadContract).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RPC quorum', () => {
+  const block = (number: number, fork = 'a') => ({ number: `0x${number.toString(16)}`, hash: `0x${fork}${number}`, timestamp: '0x1' });
+  // Each answer is a value to return, or an Error to fail with.
+  const transport = async (threshold: number, answers: unknown[]) => {
+    const { quorumTransport } = await import('./index.ts');
+    const providers = answers.map((answer, i) => ({
+      origin: `https://rpc${i}.example`,
+      request: async () => { if (answer instanceof Error) throw answer; return answer; },
+    }));
+    return quorumTransport(providers, threshold)({});
+  };
+  const call = { method: 'eth_call', params: [{}, 'latest'] };
+
+  it('answers only with what the threshold of providers agree on', async () => {
+    const request = async (threshold: number, answers: unknown[]) => (await transport(threshold, answers)).request(call);
+    await expect(request(2, ['0xAB', '0x01', '0xab'])).resolves.toBe('0xab');
+    await expect(request(2, ['0x01', new Error('down'), '0x01'])).resolves.toBe('0x01');
+    await expect(request(2, ['0x01', '0x02', '0x03'])).rejects.toThrow(/no 2 of 3 RPCs agree on eth_call/);
+    await expect(request(3, ['0x01', '0x01', new Error('execution reverted')])).rejects.toThrow(
+      'https://rpc2.example: execution reverted',
+    );
+  });
+
+  it('resolves a tag to the highest block the threshold has reached', async () => {
+    const tag = { method: 'eth_getBlockByNumber', params: ['finalized', false] };
+    const request = async (answers: unknown[]) => (await transport(2, answers)).request(tag);
+    await expect(request([block(5), block(100), block(99)])).resolves.toEqual(block(99));
+    await expect(request([block(1_000_000), block(100), block(100)])).resolves.toEqual(block(100));
+    await expect(request([block(100), new Error('down'), block(98)])).resolves.toEqual(block(98));
+    await expect(request([block(100), new Error('invalid block tag'), null])).rejects.toThrow(
+      /fewer than 2 RPCs serve block finalized \(https:\/\/rpc1\.example: invalid block tag/,
+    );
+  });
+
+  it('agrees on a numbered block by hash and timestamp', async () => {
+    const numbered = { method: 'eth_getBlockByNumber', params: ['0x62', false] };
+    const request = async (answers: unknown[]) => (await transport(2, answers)).request(numbered);
+    await expect(request([block(98), { ...block(98), extra: 1 }, block(98, 'b')])).resolves.toMatchObject(block(98));
+    await expect(request([block(98), block(98, 'b'), null])).rejects.toThrow(/no 2 of 3 RPCs agree/);
+    await expect(request([block(98), { ...block(98), number: '0x1' }, null])).rejects.toThrow(/no 2 of 3 RPCs agree/);
+  });
+
+  it('refuses methods it has no agreement rule for', async () => {
+    const request = (await transport(1, ['0x1'])).request({ method: 'eth_getBalance', params: [] });
+    await expect(request).rejects.toThrow(/eth_getBalance is not supported/);
+  });
+
+  it('pins the endpoint count and keeps URLs out of errors', async () => {
+    const { parseRpcConfig } = await import('./index.ts');
+    const urls = 'https://a.example/v2/key1\n  https://b.example/v3/key2\nhttps://c.example\n';
+    expect(parseRpcConfig({ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '2/3', ETH_MAX_BLOCK_AGE: '1800' })).toMatchObject({
+      origins: ['https://a.example', 'https://b.example', 'https://c.example'], threshold: 2,
+    });
+    expect(parseRpcConfig({ ETH_RPC_URL: 'http://node:8545' })).toMatchObject({ quorum: '1/1', threshold: 1 });
+    for (const [env, error] of [
+      [{ ETH_RPC_URLS: urls }, /ETH_RPC_QUORUM must be n\/m/],
+      [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '4/3' }, /ETH_RPC_QUORUM must be n\/m/],
+      [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '2' }, /ETH_RPC_QUORUM must be n\/m/],
+      // One provider of three, or either half of four, could answer alone.
+      [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '1/3' }, /ETH_RPC_QUORUM must be n\/m/],
+      [{ ETH_RPC_URLS: urls + ' https://d.example', ETH_RPC_QUORUM: '2/4' }, /ETH_RPC_QUORUM must be n\/m/],
+      // A key that smuggles in an endpoint changes the count.
+      [{ ETH_RPC_URLS: urls + ' https://evil.example', ETH_RPC_QUORUM: '2/3' }, /expects 3 RPC URLs, got 4/],
+      [{ ETH_RPC_URLS: 'https://a.example/1 https://a.example/2', ETH_RPC_QUORUM: '2/2' }, /distinct origins/],
+      [{ ETH_RPC_URLS: 'https://a.example/key1 key2', ETH_RPC_QUORUM: '2/2' }, /^RPC URL 2 is invalid$/],
+      [{ ETH_RPC_URL: 'http://a', ETH_RPC_URLS: 'http://b', ETH_RPC_QUORUM: '1/1' }, /exactly one of/],
+      [{}, /exactly one of/],
+      [{ ETH_RPC_URLS: urls, ETH_RPC_QUORUM: '2/3' }, /ETH_MAX_BLOCK_AGE is required/],
+    ] as const) {
+      expect(() => parseRpcConfig(env)).toThrow(error);
+    }
   });
 });

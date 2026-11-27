@@ -335,7 +335,7 @@ Then regenerate the app-compose.json and redeploy:
 {"error": "error decoding response body: missing field `status` at line 1 column ..."}
 ```
 
-**Root Cause:** auth-eth is reachable (port 9200 is correct), but it cannot read the contract. Without `ETH_RPC_URL` and `KMS_CONTRACT_ADDR`, auth-eth defaults to `http://localhost:8545` (nothing there) and the zero address, and returns `{status: 'error', ...}` instead of the expected `{status: 'ok', ...}` response. If the RPC is unreachable at startup, auth-eth exits instead, and GetMeta reports "Connection refused".
+**Root Cause:** auth-eth is reachable (port 9200 is correct), but it cannot read the contract. Without `KMS_CONTRACT_ADDR`, auth-eth defaults to the zero address and returns `{status: 'error', ...}` instead of the expected `{status: 'ok', ...}` response. If `ETH_RPC_URL` is missing or the RPC is unreachable at startup, auth-eth exits instead, and GetMeta reports "Connection refused".
 
 **Solution:** Ensure your docker-compose.yaml includes both Ethereum configuration variables:
 

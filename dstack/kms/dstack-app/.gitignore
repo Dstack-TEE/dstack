@@ -1,3 +1,4 @@
 .app-compose.json
 .env
 .GIT_REV
+rpc.json

@@ -357,11 +357,13 @@ if ((${#init_scripts[@]} > 5)); then
 fi
 if ((${#init_scripts[@]} > 0)); then
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true
+	trap '[ $? = 0 ] || dstack-util notify-host -e "boot.error" -d "init script [$i] failed" || true' EXIT
 	for i in "${!init_scripts[@]}"; do
 		log "Running init script [$i]"
 		# shellcheck disable=SC1090
 		source <(printf '%s' "${init_scripts[$i]}" | base64 -d)
 	done
+	trap - EXIT
 fi
 
 RUNNER=$(jq -r '.runner' app-compose.json)
