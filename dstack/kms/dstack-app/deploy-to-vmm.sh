@@ -5,6 +5,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+set -e
+
 # Write rpc.json with the given endpoint unless the file exists.
 init_rpc_json() {
   [ -f rpc.json ] || jq -n --arg url "$1" '{quorum: "1/1", endpoints: [$url], keys: {}}' >rpc.json
@@ -106,6 +108,9 @@ fi
 
 # An .env that predates rpc.json names its one endpoint in ETH_RPC_URL.
 init_rpc_json "${ETH_RPC_URL:-https://rpc.phala.network}"
+if [ -n "${ETH_RPC_URL:-}" ] && ! jq -e --arg url "$ETH_RPC_URL" '.endpoints == [$url]' rpc.json >/dev/null; then
+  echo "Warning: ETH_RPC_URL in .env is ignored, as rpc.json names the RPC endpoints."
+fi
 if ! UNDECLARED=$(jq -r '[.endpoints[] | scan("\\$\\{(\\w+)\\}")[]] - (.keys | keys) | join(" ")' rpc.json); then
   echo "Error: rpc.json is invalid."
   exit 1
@@ -211,6 +216,7 @@ rm "$COMPOSE_TMP"
 # one that breaks its allowed_envs spec. mktemp keeps the keys readable by this
 # user only.
 USER_CONFIG=$(mktemp)
+trap 'rm -f "$USER_CONFIG"' EXIT
 jq '{env: .keys | with_entries(.value = env[.key])}' rpc.json >"$USER_CONFIG"
 
 echo "Deploying KMS to dstack-vmm..."
@@ -227,5 +233,3 @@ $CLI deploy \
   --vcpu 8 \
   --memory 8G \
   --disk 50G
-
-rm "$USER_CONFIG"
