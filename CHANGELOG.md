@@ -94,6 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requirement in the policy bound by `compose_hash` instead of the
   `gpu-attestation` event. SEV-SNP in public clouds stays unsupported.
 
+### Fixed
+
+- The guest agent answers legacy `Info` without a quote on TDX guests whose
+  kernel exposes the TSM measurement sysfs, so `Info` no longer queues behind
+  quote callers. Callers that wait more than 10 seconds for the attestation
+  queue receive HTTP 503 and can retry.
+
 ## [0.6.6] - 2026-11-20
 
 ### Upgrade notes

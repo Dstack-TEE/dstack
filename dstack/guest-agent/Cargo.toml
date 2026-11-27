@@ -67,3 +67,4 @@ lspci.workspace = true
 # the synthetic-attestation helpers. Declared here so the production build of
 # this crate does not carry them.
 dstack-attest = { workspace = true, features = ["simulator"] }
+tokio = { workspace = true, features = ["test-util"] }

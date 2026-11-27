@@ -22,3 +22,10 @@ pub type TdxReportData = [u8; 64];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TdxReport(pub [u8; 1024]);
+
+/// MRTD and RTMR0-3 of the running TD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TdxMeasurements {
+    pub mrtd: [u8; 48],
+    pub rtmrs: [[u8; 48]; 4],
+}

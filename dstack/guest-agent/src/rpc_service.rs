@@ -25,12 +25,10 @@ use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Ve
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
-use ra_rpc::{CallContext, RpcCall};
+use ra_rpc::{CallContext, ResultExt as _, RpcCall};
 use ra_tls::{
     api_v1::sign_recoverable_keccak256,
-    attestation::{
-        QuoteContentType, TdxAttestationExt, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
-    },
+    attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
@@ -41,7 +39,7 @@ use serde_json::json;
 use tracing::error;
 
 use crate::{
-    backend::{PlatformBackend, RealPlatform},
+    backend::{PlatformBackend, RealPlatform, TcbInfo},
     config::Config,
 };
 
@@ -61,6 +59,13 @@ const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Same floor as [`IDENTITY_RETRY_INTERVAL`], for the demo-cert request that
 /// every `Info` may start: a quote plus an RA-TLS round trip to the KMS.
 const DEMO_CERT_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long a caller may wait for the attestation queue.
+///
+/// Callers keep running after their client disconnects, so without a bound a
+/// slow platform lets abandoned requests take every quote slot from live ones.
+/// A timeout counts as a failure for the identity and demo-cert throttles.
+const ATTEST_QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Decode the immutable identity fields out of a boot attestation.
 ///
@@ -183,13 +188,18 @@ impl AppStateInner {
     /// running one on the executor stalls every connection the agent serves,
     /// including the systemd watchdog heartbeat. Callers queue here rather than
     /// on `dstack-attest`'s quote lock, so a flood of requests holds no threads.
-    /// The guard moves into the task, so a cancelled caller cannot let the
-    /// next call in while its own is still running.
+    /// The wait is bounded by [`ATTEST_QUEUE_TIMEOUT`]. The guard moves into
+    /// the task, so a cancelled caller cannot let the next call in while its
+    /// own is still running.
     async fn attest<T: Send + 'static>(
         &self,
         work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        let guard = self.attest_lock.clone().lock_owned().await;
+        let guard =
+            tokio::time::timeout(ATTEST_QUEUE_TIMEOUT, self.attest_lock.clone().lock_owned())
+                .await
+                .context("the attestation queue is busy, retry later")
+                .with_code(503)?;
         let platform = self.platform.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
@@ -197,6 +207,23 @@ impl AppStateInner {
         })
         .await
         .context("the attestation task panicked")?
+    }
+
+    /// The TCB info for legacy `Info`, read without a quote where the platform
+    /// allows, so `Info` does not queue behind quote callers.
+    async fn tcb_info(&self) -> Result<TcbInfo> {
+        let platform = self.platform.clone();
+        let local = tokio::task::spawn_blocking(move || platform.local_tcb_info())
+            .await
+            .context("the TCB info task panicked")??;
+        match local {
+            Some(tcb) => Ok(tcb),
+            None => Ok(self
+                .attest(|platform| platform.attestation_for_info())
+                .await?
+                .into_v1()
+                .into()),
+        }
     }
 
     async fn issue_cert(
@@ -667,32 +694,19 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let (tcb_info, vm_config) = if hide_tcb_info {
         Default::default()
     } else {
-        let attestation = state
-            .inner
-            .attest(|platform| platform.attestation_for_info())
-            .await?
-            .into_v1();
-        let td_report = match attestation.td10_report() {
-            Some(report) => json!({
-                "mrtd": hex::encode(report.mr_td),
-                "rtmr0": hex::encode(report.rt_mr0),
-                "rtmr1": hex::encode(report.rt_mr1),
-                "rtmr2": hex::encode(report.rt_mr2),
-                "rtmr3": hex::encode(report.rt_mr3),
-            }),
-            None => json!({}),
-        };
+        let tcb = state.inner.tcb_info().await?;
+        let mr = tcb.measurements.as_ref();
         let tcb_info = serde_json::to_string_pretty(&json!({
-            "mrtd": td_report["mrtd"],
-            "rtmr0": td_report["rtmr0"],
-            "rtmr1": td_report["rtmr1"],
-            "rtmr2": td_report["rtmr2"],
-            "rtmr3": td_report["rtmr3"],
+            "mrtd": mr.map(|m| hex::encode(m.mrtd)),
+            "rtmr0": mr.map(|m| hex::encode(m.rtmrs[0])),
+            "rtmr1": mr.map(|m| hex::encode(m.rtmrs[1])),
+            "rtmr2": mr.map(|m| hex::encode(m.rtmrs[2])),
+            "rtmr3": mr.map(|m| hex::encode(m.rtmrs[3])),
             "mr_aggregated": hex::encode(&identity.mr_aggregated),
             "os_image_hash": hex::encode(&identity.os_image_hash),
             "compose_hash": hex::encode(&identity.compose_hash),
             "device_id": hex::encode(&identity.device_id),
-            "event_log": attestation.tdx_event_log().unwrap_or_default(),
+            "event_log": tcb.event_log,
             "app_compose": state.config().app_compose.raw,
         }))
         .unwrap_or_default();
@@ -1221,7 +1235,9 @@ pub(crate) mod tests {
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
     };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
-    use ra_tls::attestation::{AttestationV1, PlatformEvidence, VersionedAttestation};
+    use ra_tls::attestation::{
+        AttestationV1, PlatformEvidence, TdxAttestationExt, VersionedAttestation,
+    };
     use sha2::{Digest as _, Sha256};
     use std::collections::HashSet;
     use std::convert::TryFrom;
@@ -1527,6 +1543,14 @@ pNs85uhOZE8z2jr8Pg==
         }
 
         impl PlatformBackend for TestSimulatorPlatform {
+            fn local_tcb_info(&self) -> Result<Option<TcbInfo>> {
+                let attestation = self.attestation.clone().into_v1();
+                if !matches!(attestation.platform, PlatformEvidence::Tdx { .. }) {
+                    return Ok(None);
+                }
+                Ok(Some(attestation.into()))
+            }
+
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
                 self.probe.calls.fetch_add(1, Ordering::Relaxed);
                 if self.probe.failing.load(Ordering::Relaxed) {
@@ -2272,6 +2296,84 @@ pNs85uhOZE8z2jr8Pg==
             .unwrap();
         release_tx.send(()).unwrap();
         quote.await.unwrap().unwrap();
+    }
+
+    /// Legacy `Info` reads the TCB info without a quote, so it answers while a
+    /// quote holds the queue, with the same document the quote would give.
+    #[tokio::test]
+    async fn legacy_info_does_not_queue_behind_a_quote() {
+        let probe = Arc::new(InfoAttestationProbe::default());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        let identity = state.identity().await.unwrap();
+        state.inner.demo_cert.set(String::new()).unwrap();
+        let (entered_rx, release_tx) = probe.arm_gate();
+        let quote = tokio::spawn({
+            let state = state.clone();
+            async move { state.quote_response([0; 64]).await }
+        });
+        entered_rx.await.unwrap();
+
+        let info = tokio::time::timeout(Duration::from_secs(2), get_info(&state, false))
+            .await
+            .expect("Info answers while the quote is held")
+            .unwrap();
+        let attestation = state
+            .inner
+            .platform
+            .attestation_for_info()
+            .unwrap()
+            .into_v1();
+        let report = attestation.td10_report().unwrap();
+        let expected = json!({
+            "mrtd": hex::encode(report.mr_td),
+            "rtmr0": hex::encode(report.rt_mr0),
+            "rtmr1": hex::encode(report.rt_mr1),
+            "rtmr2": hex::encode(report.rt_mr2),
+            "rtmr3": hex::encode(report.rt_mr3),
+            "mr_aggregated": hex::encode(&identity.mr_aggregated),
+            "os_image_hash": hex::encode(&identity.os_image_hash),
+            "compose_hash": hex::encode(&identity.compose_hash),
+            "device_id": hex::encode(&identity.device_id),
+            "event_log": attestation.tdx_event_log().unwrap(),
+            "app_compose": state.config().app_compose.raw,
+        });
+        assert_eq!(
+            info.tcb_info,
+            serde_json::to_string_pretty(&expected).unwrap()
+        );
+
+        release_tx.send(()).unwrap();
+        quote.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_platform_call_gives_up_on_a_held_queue_with_503() {
+        let (state, _guard) = setup_test_state_with_probe(Arc::default()).await;
+        let held = state.inner.attest_lock.lock().await;
+
+        let err = state
+            .quote_response([0; 64])
+            .await
+            .expect_err("the queue is held");
+        assert_eq!(ra_rpc::code_of(&err), Some(503));
+
+        drop(held);
+        state.quote_response([0; 64]).await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn identity_callers_wait_at_most_one_queue_timeout() {
+        let probe = Arc::new(InfoAttestationProbe::default());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        let _held = state.inner.attest_lock.lock().await;
+
+        let start = tokio::time::Instant::now();
+        let (first, second) = tokio::join!(state.identity(), state.identity());
+        assert_eq!(start.elapsed(), ATTEST_QUEUE_TIMEOUT);
+        assert_eq!(ra_rpc::code_of(&first.unwrap_err()), Some(503));
+        let throttled = second.unwrap_err().to_string();
+        assert!(throttled.contains("next attempt"), "{throttled}");
+        assert_eq!(probe.calls(), 0);
     }
 
     /// A failed decode must be as cheap to repeat as a cached success is.

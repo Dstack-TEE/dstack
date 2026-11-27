@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use crate::{Result, TdxReport, TdxReportData};
+use crate::{Result, TdxMeasurements, TdxReport, TdxReportData};
 
 // ============================================================================
 // Constants
@@ -307,6 +307,35 @@ fn rtmr_sysfs_base() -> Result<Option<PathBuf>> {
     Ok(Path::new(RTMR_SYSFS_BASE)
         .is_dir()
         .then(|| PathBuf::from(RTMR_SYSFS_BASE)))
+}
+
+/// Read MRTD and RTMR0-3 from the kernel's TSM measurement sysfs, or `None` on
+/// kernels without it.
+///
+/// Unlike [`extend_rtmr`], this ignores `DCAP_TDX_RTMR_SYSFS_PATH`: the TEE
+/// simulator points it at a directory without `mrtd`, and callers there can
+/// read the measurements from a quote instead.
+pub fn read_measurements() -> Result<Option<TdxMeasurements>> {
+    let base = Path::new(RTMR_SYSFS_BASE);
+    if !base.is_dir() {
+        return Ok(None);
+    }
+    let read = |name: &str| -> Result<[u8; 48]> {
+        let path = base.join(format!("{name}:sha384"));
+        fs::read(&path)
+            .map_err(|e| TdxAttestError::DeviceFailure(format!("read {}: {e}", path.display())))?
+            .try_into()
+            .map_err(|_| TdxAttestError::DeviceFailure(format!("{}: not 48 bytes", path.display())))
+    };
+    Ok(Some(TdxMeasurements {
+        mrtd: read("mrtd")?,
+        rtmrs: [
+            read("rtmr0")?,
+            read("rtmr1")?,
+            read("rtmr2")?,
+            read("rtmr3")?,
+        ],
+    }))
 }
 
 fn extend_rtmr_via_sysfs(base: &Path, index: u32, digest: &[u8; 48]) -> Result<()> {
