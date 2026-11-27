@@ -5,15 +5,15 @@ HOMEPAGE = "https://github.com/nestybox/sysbox"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=cf0915b5e4f1337cf5b929ba1e388c42"
 
-SYSBOX_VERSION = "0.7.1"
+SYSBOX_VERSION = "0.7.2"
 
-# Pin all submodule revisions from the v0.7.1 tag for reproducibility.
-SRCREV_sysbox = "82881aaaf2ce22ad0ff81487f458162908cb933f"
-SRCREV_sysbox-runc = "081856cc5d17e7095f066b08d0eca6bb0b515c47"
-SRCREV_sysbox-fs = "c3d2ebc65102e32e74e383675f03b45556326888"
-SRCREV_sysbox-mgr = "2d45af01bcfd8641e6641f76104c6003bf501cd7"
-SRCREV_sysbox-ipc = "f05151f4b4c1df63d7fd241577ca032905c1bd0e"
-SRCREV_sysbox-libs = "cacac19395528afa42b467a980b05d8d1c6d646c"
+# Pin all submodule revisions from the v0.7.2 tag for reproducibility.
+SRCREV_sysbox = "f1c8b73c05ef0a83e062370e0d6331560f7c529c"
+SRCREV_sysbox-runc = "583e8008fcf5018a40201c28505a500292fe2c83"
+SRCREV_sysbox-fs = "201ec1380ba5af0c8a677b718c7c3805af2b280c"
+SRCREV_sysbox-mgr = "a14866548fcbb62aba5052e73c81e7c1b9bfc8b2"
+SRCREV_sysbox-ipc = "2e39ef01a0aace7fb3c599c97a5f82d1e7117773"
+SRCREV_sysbox-libs = "af547406cfca19a8a41f5830e06791d776f9ab7e"
 # bazil/fuse commit 5ce3194 is on nestybox/fuse master. We fetch the same
 # commit from Dstack-TEE/fuse, which mirrors it for a stable BitBake target.
 SRCREV_sysbox-fuse = "5ce319439091b08f33b149cb2482039f1b0a24fe"
@@ -76,9 +76,10 @@ do_configure() {
     rm -rf ${UNPACKDIR}/sysbox-fs/bazil
     ln -sfn ${UNPACKDIR}/sysbox-fuse ${UNPACKDIR}/sysbox-fs/bazil
 
-    # Install pre-generated protobuf Go files. The upstream repo only ships
-    # .proto files and expects protoc + protoc-gen-go at build time. We
-    # pre-generate them to avoid the protoc native toolchain dependency.
+    # Install pre-generated protobuf message files. Upstream ships the
+    # *_grpc.pb.go stubs but expects protoc + protoc-gen-go to generate the
+    # message files at build time. We pre-generate them to avoid the protoc
+    # native toolchain dependency.
     install -m 0644 ${UNPACKDIR}/sysboxFsProtobuf.pb.go \
         ${UNPACKDIR}/sysbox-ipc/sysboxFsGrpc/sysboxFsProtobuf/
     install -m 0644 ${UNPACKDIR}/sysboxMgrProtobuf.pb.go \

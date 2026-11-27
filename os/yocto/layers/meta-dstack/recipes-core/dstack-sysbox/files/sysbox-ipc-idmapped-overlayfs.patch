@@ -15,10 +15,10 @@ Signed-off-by: Kevin Wang <wy721@qq.com>
  4 files changed, 4 insertions(+)
 
 diff --git a/sysboxMgrGrpc/grpcClient.go b/sysboxMgrGrpc/grpcClient.go
-index ec38e82..e860d3c 100644
+index 73bc47a..6cd53e6 100644
 --- a/sysboxMgrGrpc/grpcClient.go
 +++ b/sysboxMgrGrpc/grpcClient.go
-@@ -84,6 +84,7 @@ func Register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.ContainerConfig, error)
+@@ -85,6 +85,7 @@ func Register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.ContainerConfig, error)
  		ShiftfsOnOverlayfsOk:    resp.ContainerConfig.GetShiftfsOnOverlayfsOk(),
  		IDMapMountOk:            resp.ContainerConfig.GetIDMapMountOk(),
  		OverlayfsOnIDMapMountOk: resp.ContainerConfig.GetOverlayfsOnIDMapMountOk(),
@@ -27,10 +27,10 @@ index ec38e82..e860d3c 100644
  		IgnoreSysfsChown:        resp.ContainerConfig.GetIgnoreSysfsChown(),
  		AllowTrustedXattr:       resp.ContainerConfig.GetAllowTrustedXattr(),
 diff --git a/sysboxMgrGrpc/grpcServer.go b/sysboxMgrGrpc/grpcServer.go
-index 009fb6b..177db64 100644
+index 5e74517..53bb58a 100644
 --- a/sysboxMgrGrpc/grpcServer.go
 +++ b/sysboxMgrGrpc/grpcServer.go
-@@ -128,6 +128,7 @@ func (s *ServerStub) Register(ctx context.Context, req *pb.RegisterReq) (*pb.Reg
+@@ -130,6 +130,7 @@ func (s *ServerStub) Register(ctx context.Context, req *pb.RegisterReq) (*pb.Reg
  		ShiftfsOnOverlayfsOk:    config.ShiftfsOnOverlayfsOk,
  		IDMapMountOk:            config.IDMapMountOk,
  		OverlayfsOnIDMapMountOk: config.OverlayfsOnIDMapMountOk,
@@ -39,10 +39,10 @@ index 009fb6b..177db64 100644
  		IgnoreSysfsChown:        config.IgnoreSysfsChown,
  		AllowTrustedXattr:       config.AllowTrustedXattr,
 diff --git a/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto b/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto
-index 392e4fe..7960641 100644
+index fbed771..4b3faa1 100644
 --- a/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto
 +++ b/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto
-@@ -90,6 +90,7 @@ message ContainerConfig {
+@@ -93,6 +93,7 @@ message ContainerConfig {
      uint32 rootfsUidShiftType = 15;
      bool noShiftfsOnFuse = 16;
      bool relaxedReadOnly = 17;
@@ -51,7 +51,7 @@ index 392e4fe..7960641 100644
  
  message RegisterResp {
 diff --git a/sysboxMgrLib/sysboxMgrLib.go b/sysboxMgrLib/sysboxMgrLib.go
-index 9f8272d..d9ed601 100644
+index 0cb8ccf..676056e 100644
 --- a/sysboxMgrLib/sysboxMgrLib.go
 +++ b/sysboxMgrLib/sysboxMgrLib.go
 @@ -51,6 +51,7 @@ type ContainerConfig struct {

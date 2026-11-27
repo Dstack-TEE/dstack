@@ -23,9 +23,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Secure TSC for AMD SEV-SNP guests.** The VMM launches an SNP guest with
   Secure TSC when `secure_time` is on, so the host cannot skew the guest
   clock.
+- `vmm-cli compose --init-script` sets `init_script` in the app compose file.
+
+### Security
+
+- **Sysbox is updated to 0.7.2.** It fixes read-only bind mounts being made
+  writable from inside a Sysbox container, and host files being reachable
+  through symlinks while Sysbox syncs special volumes. See the
+  [upstream release](https://github.com/nestybox/sysbox/releases/tag/v0.7.2)
+  for the advisories.
 
 ### Changed
 
+- **`vmm-cli update --compose` takes an app compose file.** It sends the
+  `app-compose.json` written by `vmm-cli compose` unchanged instead of a Docker
+  Compose file patched into the stored one, and `--prelaunch-script` and
+  `--swap` are gone from `update`: run `compose` again to change them.
+  `update --env-file` no longer rewrites `allowed_envs` or `launch_token_hash`
+  and refuses variables the compose does not allow or an `APP_LAUNCH_TOKEN` it
+  does not pin; render them with `compose --env-file`, which now also writes
+  `launch_token_hash`, changing the compose hash when the env file sets
+  `APP_LAUNCH_TOKEN`. `update-env` and
+  `update-app-compose` are removed in favor of `update --env-file` and
+  `update --compose`.
+  `update --kms-encrypt-url` encrypts `--env-file` without replacing the VM's
+  KMS URLs, which `--kms-url` does.
 - **Go SDK module moves to `github.com/Dstack-TEE/dstack/sdk/go/dstack`.**
   `go get` now targets the module rooted at the `dstack` package, so pkg.go.dev
   lists it under its product name instead of "go". The `dstack` package import

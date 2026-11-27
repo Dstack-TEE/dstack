@@ -8,10 +8,12 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -74,6 +76,142 @@ class UpdateVmTests(unittest.TestCase):
 
         self.assertEqual(
             [params["launch_ticket"] for _, params in calls], ["t" * 32, ""]
+        )
+
+    def test_compose_is_sent_as_is_with_env(self) -> None:
+        """Send the rendered compose unchanged, refusing envs it does not allow."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        cli.rpc_call = Mock(return_value={"found": True, "info": {"app_id": "app"}})
+        cli.encrypt_env_payload = Mock(return_value={"encrypted_env": "00"})
+        cli.image_supports_sealed_env = Mock(return_value=False)
+        compose = '{"allowed_envs": ["A"]}'
+
+        with (
+            patch.object(VMM_CLI, "parse_env_file", return_value={"A": "1"}),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli.update_vm(
+                "vm", app_compose=compose, env_file="env", kms_urls=["https://kms"]
+            )
+            method, payload = cli.rpc_call.call_args.args
+            self.assertEqual(method, "UpgradeApp")
+            self.assertEqual(payload["compose_file"], compose)
+            self.assertEqual(payload["encrypted_env"], "00")
+            with self.assertRaisesRegex(Exception, "A not in allowed_envs"):
+                cli.update_vm("vm", env_file="env", kms_urls=["https://kms"])
+            cli.update_vm(
+                "vm",
+                app_compose='{"allowed_envs": ["A: int"]}',
+                env_file="env",
+                kms_urls=["https://kms"],
+            )
+
+    def test_env_only_update_keeps_compose_and_kms_urls(self) -> None:
+        """Send neither a compose nor KMS URLs when only the env changes."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        info = {
+            "app_id": "app",
+            "configuration": {"compose_file": '{"allowed_envs": ["A"]}'},
+        }
+        cli.rpc_call = Mock(return_value={"found": True, "info": info})
+        cli.encrypt_env_payload = Mock(return_value={"encrypted_env": "00"})
+        cli.image_supports_sealed_env = Mock(return_value=False)
+
+        with (
+            patch.object(VMM_CLI, "parse_env_file", return_value={"A": "1"}),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli.update_vm("vm", env_file="env", kms_encrypt_url="https://kms")
+
+        self.assertEqual(cli.encrypt_env_payload.call_args.args[2], "https://kms")
+        self.assertEqual(
+            cli.rpc_call.call_args.args,
+            ("UpgradeApp", {"id": "vm", "encrypted_env": "00"}),
+        )
+
+    def test_launch_token_must_match_compose(self) -> None:
+        """Refuse an APP_LAUNCH_TOKEN the compose does not pin."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        cli.rpc_call = Mock(return_value={"found": True, "info": {"app_id": "app"}})
+        cli.encrypt_env_payload = Mock(return_value={})
+        cli.image_supports_sealed_env = Mock(return_value=False)
+        token_hash = hashlib.sha256(b"token").hexdigest()
+
+        def update(token: str) -> None:
+            compose = {
+                "allowed_envs": ["APP_LAUNCH_TOKEN"],
+                "launch_token_hash": token_hash,
+            }
+            with patch.object(
+                VMM_CLI, "parse_env_file", return_value={"APP_LAUNCH_TOKEN": token}
+            ):
+                cli.update_vm(
+                    "vm",
+                    app_compose=json.dumps(compose),
+                    env_file="env",
+                    kms_urls=["https://kms"],
+                )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            update("token")
+            with self.assertRaisesRegex(Exception, "launch_token_hash"):
+                update("other")
+
+
+class ComposeTests(unittest.TestCase):
+    """Verify the app compose written by `compose`."""
+
+    def compose(self, *scripts: str, env: str = "") -> dict:
+        """Run `compose` with these init scripts and env file, return the result."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "docker-compose.yaml").write_text("services: {}")
+            (tmp / ".env").write_text(env)
+            paths = []
+            for i, script in enumerate(scripts):
+                paths.append(tmp / f"init{i}.sh")
+                paths[-1].write_text(script)
+            args = argparse.Namespace(
+                name="app",
+                docker_compose=tmp / "docker-compose.yaml",
+                env_file=tmp / ".env",
+                kms=bool(env),
+                gateway=False,
+                local_key_provider=False,
+                key_provider_id=None,
+                key_provider=None,
+                public_logs=False,
+                public_sysinfo=False,
+                no_instance_id=False,
+                secure_time=False,
+                no_storage_discard=False,
+                prelaunch_script=None,
+                init_script=paths,
+                swap=None,
+                event_log_version=None,
+                output=tmp / "app-compose.json",
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                VMM_CLI.VmmCLI("http://127.0.0.1:8080").create_app_compose(args)
+            return json.loads(args.output.read_text())
+
+    def test_init_script_shape_follows_manifest_version(self) -> None:
+        """Write one script as a v2 string and several as a v3 array."""
+        self.assertNotIn("init_script", self.compose())
+        one = self.compose("echo a")
+        self.assertEqual((one["manifest_version"], one["init_script"]), (2, "echo a"))
+        two = self.compose("echo a", "echo b")
+        self.assertEqual(
+            (two["manifest_version"], two["init_script"]), ("3", ["echo a", "echo b"])
+        )
+
+    def test_launch_token_hash_is_written_last(self) -> None:
+        """Pin APP_LAUNCH_TOKEN after every other field, where jq would add it."""
+        compose = self.compose("echo a", env="APP_LAUNCH_TOKEN=token\nA=1\n")
+        self.assertEqual(compose["allowed_envs"], ["APP_LAUNCH_TOKEN", "A"])
+        self.assertEqual(
+            list(compose.items())[-1],
+            ("launch_token_hash", hashlib.sha256(b"token").hexdigest()),
         )
 
 
@@ -361,7 +499,9 @@ class SealedEnvTests(unittest.TestCase):
                         "app_id": self.app_id,
                         "configuration": {
                             "image": "new",
-                            "compose_file": '{"kms_enabled":true}',
+                            "compose_file": json.dumps(
+                                {"allowed_envs": list(self.envs)}
+                            ),
                         },
                     },
                 }
@@ -388,9 +528,9 @@ class SealedEnvTests(unittest.TestCase):
         self.assertNotIn("sealed_env", payload)
         self.cli.client.request.assert_not_called()
 
-    def test_create_update_and_update_env_send_only_the_negotiated_field(self):
+    def test_create_and_update_send_only_the_negotiated_field(self):
         """Use the selected ciphertext field consistently across CLI commands."""
-        compose = json.dumps({"kms_enabled": True})
+        compose = json.dumps({"kms_enabled": True, "allowed_envs": list(self.envs)})
         args = argparse.Namespace(
             compose="compose.json",
             env_file="env",
@@ -449,7 +589,6 @@ class SealedEnvTests(unittest.TestCase):
                     lambda: self.cli.update_vm(
                         "vm", env_file="env", kms_urls=args.kms_url
                     ),
-                    lambda: self.cli.update_vm_env("vm", self.envs, args.kms_url),
                 ]:
                     with self.subTest(capability=capability, action=action):
                         self.cli.rpc_call.reset_mock()
